@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "fetched_at": "2026-04-20T06:35:32Z",
+  "fetched_at": "2026-05-04T03:31:58Z",
   "entries": [
     {
-      "id": "arcee-ai/trinity-large-preview:free",
-      "context_length": 131000,
+      "id": "baidu/qianfan-ocr-fast:free",
+      "context_length": 65536,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
@@ -69,6 +69,12 @@
       "pricing_completion": "0"
     },
     {
+      "id": "inclusionai/ling-2.6-1t:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
       "id": "liquid/lfm-2.5-1.2b-instruct:free",
       "context_length": 32768,
       "pricing_prompt": "0",
@@ -111,6 +117,12 @@
       "pricing_completion": "0"
     },
     {
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "context_length": 256000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
       "id": "nvidia/nemotron-3-super-120b-a12b:free",
       "context_length": 262144,
       "pricing_prompt": "0",
@@ -141,14 +153,26 @@
       "pricing_completion": "0"
     },
     {
-      "id": "openrouter/elephant-alpha",
-      "context_length": 262144,
+      "id": "openrouter/free",
+      "context_length": 200000,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
     {
-      "id": "openrouter/free",
-      "context_length": 200000,
+      "id": "openrouter/owl-alpha",
+      "context_length": 1048756,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "poolside/laguna-m.1:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "poolside/laguna-xs.2:free",
+      "context_length": 131072,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
@@ -160,6 +184,12 @@
     },
     {
       "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "tencent/hy3-preview:free",
       "context_length": 262144,
       "pricing_prompt": "0",
       "pricing_completion": "0"
