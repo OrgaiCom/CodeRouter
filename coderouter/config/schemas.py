@@ -531,6 +531,73 @@ class FallbackChain(BaseModel):
         ),
     )
 
+    # ------------------------------------------------------------------
+    # v2.0-G (L4): Drift detection — response quality degradation guard
+    # ------------------------------------------------------------------
+    #
+    # Long-running sessions on local LLMs can suffer gradual quality
+    # decay (KV cache pressure, thermal throttling, VRAM fragmentation)
+    # where the model "succeeds" but produces empty/short/toolless
+    # responses. This guard observes response quality signals in a
+    # rolling window and detects statistical drift.
+    #
+    # Four actions:
+    #   * ``off``     — no detection (default).
+    #   * ``warn``    — emit structured log + response header.
+    #   * ``promote`` — ``warn`` + demote drifted provider in chain.
+    #   * ``reload``  — ``promote`` + attempt KV cache flush (Ollama).
+    drift_detection_action: Literal["off", "warn", "promote", "reload"] = Field(
+        default="off",
+        description=(
+            "v2.0-G (L4): action on response quality drift detection. "
+            "``off`` (default) disables drift detection. ``warn`` emits "
+            "a log and response header. ``promote`` additionally demotes "
+            "the drifted provider in the chain. ``reload`` attempts to "
+            "flush the provider's KV cache (Ollama only) before promoting."
+        ),
+    )
+    drift_detection_window_size: int = Field(
+        default=20,
+        ge=4,
+        le=200,
+        description=(
+            "v2.0-G (L4): number of recent responses to keep in the "
+            "rolling observation window per provider. Larger windows "
+            "are more robust to noise but slower to detect drift."
+        ),
+    )
+    drift_detection_cooldown_s: int = Field(
+        default=300,
+        ge=10,
+        le=3600,
+        description=(
+            "v2.0-G (L4): seconds after a promote/reload action before "
+            "the drifted provider's rank is reset for recovery check. "
+            "Default 300s (5 min) gives the model time to stabilize."
+        ),
+    )
+    drift_detection_sensitivity: Literal["low", "normal", "high"] = Field(
+        default="normal",
+        description=(
+            "v2.0-G (L4): threshold preset for drift signals. "
+            "``low`` tolerates more degradation before triggering, "
+            "``high`` is stricter (fewer bad responses needed)."
+        ),
+    )
+
+    # --- v2.0-H (L6): Mid-stream partial stitching --------------------------
+    #   * ``off``      — discard partial content on mid-stream failure (legacy).
+    #   * ``surface``  — return partial content as a truncated-but-valid response.
+    partial_stitch_action: Literal["off", "surface"] = Field(
+        default="off",
+        description=(
+            "v2.0-H (L6): action when a streaming response fails mid-stream. "
+            "``off`` discards partial content (legacy error event). "
+            "``surface`` returns accumulated text as a graceful stream "
+            "termination with a ``coderouter_partial`` metadata event."
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # v1.6-A: auto_router — declarative request-body classifier
@@ -765,6 +832,42 @@ class CodeRouterConfig(BaseModel):
             "``default_profile == 'auto'``. None + auto → bundled rules "
             "apply (requires multi/coding/writing profiles to exist). "
             "Set to override bundled behavior."
+        ),
+    )
+
+    # v2.0-I: Continuous probing — background health checks for idle periods.
+    continuous_probe: Literal["off", "active"] = Field(
+        default="off",
+        description=(
+            "v2.0-I: enable background health probes. 'active' starts a "
+            "background task that periodically sends 1-token requests to "
+            "each provider, feeding results into the L5 backend health "
+            "state machine. 'off' = no probing (backward-compatible default)."
+        ),
+    )
+    probe_interval_s: float = Field(
+        default=60.0,
+        ge=5.0,
+        le=3600.0,
+        description=(
+            "v2.0-I: seconds between probe rounds. Lower = faster detection "
+            "but more probe traffic. 60s is a good balance for local models."
+        ),
+    )
+    probe_paid: bool = Field(
+        default=False,
+        description=(
+            "v2.0-I: whether to probe providers marked ``paid: true``. "
+            "Default false protects operators from accidental API charges."
+        ),
+    )
+    probe_timeout_s: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description=(
+            "v2.0-I: per-provider timeout for probe requests. A provider "
+            "that doesn't respond within this window is recorded as failed."
         ),
     )
 

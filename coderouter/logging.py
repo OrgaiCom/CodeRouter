@@ -1101,3 +1101,265 @@ def log_context_budget_trimmed(
         "max_context_tokens": max_context_tokens,
     }
     logger.info("context-budget-trimmed", extra=payload)
+
+
+# ---------------------------------------------------------------------------
+# v2.0-G (L4): Drift detection logging
+# ---------------------------------------------------------------------------
+
+
+def log_drift_detected(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    severity: str,
+    reason: str,
+    action: str,
+    signals: dict[str, float],
+) -> None:
+    """Emit a ``drift-detected`` warning line.
+
+    Fired when the drift detector finds quality degradation in the
+    provider's rolling response window.
+    """
+    logger.warning(
+        "drift-detected",
+        extra={
+            "provider": provider,
+            "profile": profile,
+            "severity": severity,
+            "reason": reason,
+            "action": action,
+            "signals": signals,
+        },
+    )
+
+
+def log_drift_promoted(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    demoted_to_rank: int,
+    cooldown_s: int,
+) -> None:
+    """Emit a ``drift-promoted`` info line.
+
+    Fired when a drifted provider is demoted in the chain and a
+    different provider takes over as primary.
+    """
+    logger.info(
+        "drift-promoted",
+        extra={
+            "provider": provider,
+            "profile": profile,
+            "demoted_to_rank": demoted_to_rank,
+            "cooldown_s": cooldown_s,
+        },
+    )
+
+
+def log_drift_reload_attempted(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    success: bool,
+) -> None:
+    """Emit a ``drift-reload-attempted`` info line.
+
+    Fired after attempting an Ollama KV cache flush (keep_alive=0).
+    """
+    logger.info(
+        "drift-reload-attempted",
+        extra={
+            "provider": provider,
+            "success": success,
+        },
+    )
+
+
+def log_drift_recovered(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    after_s: float,
+) -> None:
+    """Emit a ``drift-recovered`` info line.
+
+    Fired when a previously-drifted provider's cooldown expires and its
+    rank is restored.
+    """
+    logger.info(
+        "drift-recovered",
+        extra={
+            "provider": provider,
+            "profile": profile,
+            "after_s": round(after_s, 1),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# v2.0-H (L6): Partial stitch surfaced logging
+# ---------------------------------------------------------------------------
+
+
+def log_partial_stitch_surfaced(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    text_blocks: int,
+    text_length: int,
+) -> None:
+    """Emit a ``partial-stitch-surfaced`` info line.
+
+    Fired when a mid-stream failure is gracefully terminated with partial
+    content delivered to the client (partial_stitch_action=surface).
+    """
+    logger.info(
+        "partial-stitch-surfaced",
+        extra={
+            "provider": provider,
+            "profile": profile,
+            "text_blocks": text_blocks,
+            "text_length": text_length,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# v2.0-I: Continuous probe log shapes
+#
+# Two event lanes mirror the backend-health triplet:
+#   * ``probe-completed``       — info: a single provider probe finished
+#                                  (success or failure). Quiet in normal
+#                                  operation; operators grep for these to
+#                                  diagnose individual backend issues.
+#   * ``probe-round-completed`` — info: one full sweep across all probed
+#                                  providers finished. Summary counter for
+#                                  dashboards to render "probes/min" and
+#                                  "failure ratio per round".
+# ---------------------------------------------------------------------------
+
+
+class ProbeCompletedPayload(TypedDict):
+    """Structured shape of the ``probe-completed`` log record.
+
+    Fields
+        provider: the provider that was probed.
+        success: whether the 1-token probe request succeeded.
+        latency_ms: round-trip time of the probe in milliseconds.
+        error: short error message (truncated) when success=False;
+            None on success.
+        model_name: model name extracted from the probe response,
+            if available.
+    """
+
+    provider: str
+    success: bool
+    latency_ms: float
+    error: str | None
+    model_name: str | None
+
+
+class ProbeRoundCompletedPayload(TypedDict):
+    """Structured shape of the ``probe-round-completed`` log record.
+
+    Fields
+        providers_probed: number of providers probed in this round.
+        failures: number of probe failures in this round.
+    """
+
+    providers_probed: int
+    failures: int
+
+
+def log_probe_completed(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    success: bool,
+    latency_ms: float,
+    error: str | None = None,
+    model_name: str | None = None,
+) -> None:
+    """Emit a ``probe-completed`` info line for one provider probe.
+
+    Single chokepoint mirroring :func:`log_capability_degraded`. Info
+    level — individual probes are diagnostic noise at normal operation;
+    operators filter on ``success=False`` for alerting.
+    """
+    payload: ProbeCompletedPayload = {
+        "provider": provider,
+        "success": success,
+        "latency_ms": round(latency_ms, 1),
+        "error": error,
+        "model_name": model_name,
+    }
+    logger.info("probe-completed", extra=payload)
+
+
+def log_probe_round_completed(
+    logger: logging.Logger,
+    *,
+    providers_probed: int,
+    failures: int,
+) -> None:
+    """Emit a ``probe-round-completed`` info line summarizing one sweep.
+
+    Info level — fires once per probe interval (default 60s). Dashboards
+    render this as "probes/min" and "failure ratio" without needing to
+    aggregate the individual ``probe-completed`` lines.
+    """
+    payload: ProbeRoundCompletedPayload = {
+        "providers_probed": providers_probed,
+        "failures": failures,
+    }
+    logger.info("probe-round-completed", extra=payload)
+
+
+class ProbeCapabilitiesDriftPayload(TypedDict):
+    """Structured shape of the ``probe-capabilities-drift`` log record.
+
+    Fields
+        provider: the provider whose probe response model mismatched.
+        configured_model: the model string in providers.yaml.
+        observed_model: the model name returned by the probe response.
+        in_registry: whether the observed model has an entry in the
+            capability registry.
+    """
+
+    provider: str
+    configured_model: str
+    observed_model: str
+    in_registry: bool
+
+
+def log_probe_capabilities_drift(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    configured_model: str,
+    observed_model: str,
+    in_registry: bool,
+) -> None:
+    """Emit a ``probe-capabilities-drift`` warning line.
+
+    Fired when the continuous probe detects that the model name returned
+    by the provider differs from the configured model. This can indicate
+    a model swap (Ollama auto-updated), a misconfiguration, or a new
+    model that the capability registry doesn't know about yet.
+
+    Warn level — model drift can cause subtle behavior changes (e.g. a
+    model that supports thinking being replaced by one that doesn't).
+    """
+    payload: ProbeCapabilitiesDriftPayload = {
+        "provider": provider,
+        "configured_model": configured_model,
+        "observed_model": observed_model,
+        "in_registry": in_registry,
+    }
+    logger.warning("probe-capabilities-drift", extra=payload)

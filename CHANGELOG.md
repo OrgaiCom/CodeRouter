@@ -6,6 +6,83 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.1.0] — 2026-05-05 (Long-run Reliability 完成 — v2.0-G/H/I)
+
+**Theme: L4 品質劣化 / L6 mid-stream 失敗 / L5 idle 時障害の 3 系統を同時解決し、Long-run Reliability pillar を完成させる。** v2.0-F (L1 context overflow) と合わせ、6 系統障害のうち 4 系統を CodeRouter が能動的にガードする状態に到達。
+
+### v2.0-G: Drift Detection (L4 品質劣化ガード)
+
+**長時間 agent session でモデル応答品質が徐々に劣化する "drift" を自動検知し、corrective action を実行。** Ollama ローカルモデルが数時間稼働すると KV cache 汚染や VRAM 圧迫で応答が空になる / 短くなる / tool_use を返さなくなる現象 (L4) を 5 つのシグナルで検知。warn → promote (chain 降格) → reload (Ollama KV flush) の 3 段階アクションで品質を自動回復。
+
+| 機能 | 説明 |
+|---|---|
+| 5 Signal Detector | empty_response_rate / length_collapse / tool_silence_rate / stop_anomaly_rate / error_rate を per-provider rolling window で監視 |
+| `detect_drift()` | Pure function — severity none/mild/severe 判定 (severe×1 or mild×2 → severe) |
+| `drift_detection_action: off/warn/promote/reload` | profile 単位で guard 有効化 (default: off) |
+| `drift_detection_sensitivity: low/normal/high` | 閾値プリセット選択 |
+| promote action | AdaptiveAdjuster の rank demotion で traffic を別 provider へ迂回 |
+| reload action | Ollama `keep_alive=0` で KV cache flush → fresh context で再開 |
+| Cooldown & Recovery | 設定秒数後に rank 復帰 + window クリア |
+| `X-CodeRouter-Drift` header | response header で mild/severe ステータスを通知 (streaming 対応) |
+| Prometheus metrics | `coderouter_drift_detected_total`, `coderouter_drift_promoted_total`, `coderouter_drift_reload_total` |
+
+- Tests: ~930 → **~970** (+40, drift_detection 27 + drift_integration 10 + drift_actions 5)
+- Runtime deps: 5 → 5 (**36 sub-release 連続据え置き**)
+- Backward compat: 完全互換、`drift_detection_action` default は `"off"` — opt-in するまで既存挙動完全一致
+
+### 設定例
+
+```yaml
+profiles:
+  - name: long-session
+    providers: [ollama-qwen3]
+    drift_detection_action: reload      # off | warn | promote | reload
+    drift_detection_sensitivity: normal # low | normal | high
+    drift_detection_window_size: 20     # rolling window サイズ
+    drift_detection_cooldown_s: 300     # 復帰までの待機秒数
+```
+
+### 新規ファイル
+
+- `coderouter/guards/drift_detection.py` — 検知ロジック (observation model + detector + window manager)
+- `coderouter/guards/drift_actions.py` — reload action (Ollama KV flush)
+- `tests/test_drift_detection.py` — pure function tests (27 本)
+- `tests/test_drift_detection_integration.py` — engine integration tests (10 本)
+- `tests/test_drift_actions.py` — reload action tests (5 本)
+- `docs/drift-detection.md` — ユーザードキュメント
+
+### v2.0-H: Mid-stream Partial Stitching (L6 拡張)
+
+**streaming 応答が途中で失敗した際、蓄積済み��キストを破棄せずクライアントに返却。**
+
+| 機能 | 説明 |
+|---|---|
+| `_StreamUsageAccumulator` text 蓄積 | content_block_start/delta/stop を追跡し text block を in-memory 蓄積 |
+| `MidStreamError.partial_content` | 例外に蓄積テキストを搬送 (tool_use 部分 JSON は除外) |
+| `partial_stitch_action: off/surface` | profile 単位で有効化 (default: off) |
+| `event: coderouter_partial` | 蓄積テキスト + provider + reason を SSE メタデータとして返却 |
+| Prometheus metric | `coderouter_partial_stitch_surfaced_total` |
+
+### v2.0-I: Continuous Probing (L5 能動ヘルスチェック)
+
+**idle 時間帯のプロバイダ障害を能動的に検知し backend health state machine を更新。**
+
+| 機能 | 説明 |
+|---|---|
+| `probe_one()` | 1-token completion で全 model pipeline の正常性を確認 |
+| `probe_loop()` | asyncio background task — sequential probe + graceful shutdown |
+| `continuous_probe: off/active` | グローバル config で有効化 (default: off) |
+| Model drift detection | probe response の model 名と config を照合 → 不一致で warn |
+| Prometheus metrics | `probe_total`, `probe_outcomes_total`, `probe_rounds_total`, `probe_latency_ms`, `probe_drift_detected_total` |
+
+### 全体サマリ
+
+- Tests: ~930 → **~1005** (+75)
+- Runtime deps: 5 → 5 (**38 sub-release 連続据え置き**)
+- Backward compat: 完全互換、全機能 default off — opt-in するまで既���挙動完全一致
+
+---
+
 ## [v2.0.0] — 2026-05-05 (Context Budget Management — L1 overflow 防止)
 
 **Theme: 長時間 agent session の context overflow を未然に防止する guard を実装。** Claude Code / Cline / OpenClaw 等の agentic session が 8 時間超え loop で動くと messages が context window に漸近し、backend が 400 / truncation を返して session 死亡する問題 (L1) を根本解決。warn (80%) → auto trim (90%) の 2 段階 guard で overflow をゼロに。

@@ -381,6 +381,147 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             samples=ratio_samples,
         )
     )
+
+    # ---- v2.0-G (L4): drift detection metrics ------------------------------
+    lines.extend(
+        _counter(
+            name="drift_detected_total",
+            help_text=(
+                "Drift detection events (quality degradation detected), "
+                "by provider."
+            ),
+            samples=[
+                ((("provider", p),), v)
+                for p, v in sorted(
+                    counters.get("drift_detected_by_provider", {}).items()
+                )
+            ],
+        )
+    )
+    drift_promoted = counters.get("drift_promoted_total", 0)
+    if drift_promoted:
+        lines.extend(
+            _counter(
+                name="drift_promoted_total",
+                help_text=(
+                    "Number of times a drifted provider was demoted "
+                    "(promote/reload action fired)."
+                ),
+                samples=[(((),), drift_promoted)],
+            )
+        )
+    drift_reload = counters.get("drift_reload_total", 0)
+    if drift_reload:
+        lines.extend(
+            _counter(
+                name="drift_reload_total",
+                help_text="Ollama KV cache flush attempts (reload action).",
+                samples=[(((),), drift_reload)],
+            )
+        )
+    drift_reload_ok = counters.get("drift_reload_success_total", 0)
+    if drift_reload_ok:
+        lines.extend(
+            _counter(
+                name="drift_reload_success_total",
+                help_text="Successful Ollama KV cache flush attempts.",
+                samples=[(((),), drift_reload_ok)],
+            )
+        )
+
+    # ---- v2.0-H (L6): partial stitch surfaced metric -----------------------
+    partial_stitch = counters.get("partial_stitch_surfaced_total", 0)
+    if partial_stitch:
+        lines.extend(
+            _counter(
+                name="partial_stitch_surfaced_total",
+                help_text=(
+                    "Mid-stream failures where partial content was delivered "
+                    "to the client (partial_stitch_action=surface)."
+                ),
+                samples=[((), partial_stitch)],
+            )
+        )
+
+    # ---- v2.0-I: continuous probe metrics ------------------------------------
+    probe_total_samples: list[tuple[tuple[tuple[str, str], ...], int]] = []
+    for provider, count in sorted(counters.get("probe_total", {}).items()):
+        probe_total_samples.append(
+            ((("provider", provider),), count)
+        )
+    if probe_total_samples:
+        lines.extend(
+            _counter(
+                name="probe_total",
+                help_text=(
+                    "Continuous health probe attempts, by provider. "
+                    "Each probe sends a 1-token completion to verify "
+                    "the full model pipeline."
+                ),
+                samples=probe_total_samples,
+            )
+        )
+    probe_outcome_samples: list[tuple[tuple[tuple[str, str], ...], int]] = []
+    for provider, count in sorted(counters.get("probe_success", {}).items()):
+        probe_outcome_samples.append(
+            ((("provider", provider), ("outcome", "success")), count)
+        )
+    for provider, count in sorted(counters.get("probe_failure", {}).items()):
+        probe_outcome_samples.append(
+            ((("provider", provider), ("outcome", "failure")), count)
+        )
+    if probe_outcome_samples:
+        lines.extend(
+            _counter(
+                name="probe_outcomes_total",
+                help_text=(
+                    "Continuous probe outcomes by provider and result "
+                    "(success | failure)."
+                ),
+                samples=probe_outcome_samples,
+            )
+        )
+    probe_rounds = counters.get("probe_rounds_total", 0)
+    if probe_rounds:
+        lines.extend(
+            _counter(
+                name="probe_rounds_total",
+                help_text="Completed probe sweep rounds (one round probes all eligible providers).",
+                samples=[((), probe_rounds)],
+            )
+        )
+    probe_drift_samples: list[tuple[tuple[tuple[str, str], ...], int]] = [
+        ((("provider", p),), v)
+        for p, v in sorted(counters.get("probe_drift_detected", {}).items())
+    ]
+    if probe_drift_samples:
+        lines.extend(
+            _counter(
+                name="probe_drift_detected_total",
+                help_text=(
+                    "Model-name mismatches detected by continuous probing "
+                    "(configured model != response model), by provider."
+                ),
+                samples=probe_drift_samples,
+            )
+        )
+    # Gauge: latest probe latency per provider (ms).
+    latency_samples: list[tuple[tuple[tuple[str, str], ...], float]] = [
+        ((("provider", p),), round(v, 1))
+        for p, v in sorted(counters.get("probe_latency_ms", {}).items())
+    ]
+    if latency_samples:
+        lines.extend(
+            _gauge_float(
+                name="probe_latency_ms",
+                help_text=(
+                    "Latest probe round-trip latency in milliseconds, by "
+                    "provider. Gauge (most recent value, not cumulative)."
+                ),
+                samples=latency_samples,
+            )
+        )
+
     return "\n".join(lines) + "\n"
 
 

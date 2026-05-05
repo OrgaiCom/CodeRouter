@@ -234,6 +234,29 @@ class AdaptiveAdjuster:
         while entry.observations and entry.observations[0].ts_monotonic < cutoff:
             entry.observations.popleft()
 
+    def demote(self, provider: str, *, steps: int = 2) -> None:
+        """Force-demote a provider by injecting synthetic failure observations.
+
+        Used by v2.0-G drift detection to push a provider's error rate above
+        the demotion threshold (``ERROR_RATE_DEMOTE_THRESHOLD``). Each step
+        injects one synthetic failure observation, so ``steps=2`` guarantees
+        the provider will be ranked lower on the next ``compute_effective_order``.
+
+        The injected observations carry no latency signal (``latency_ms=None``)
+        and expire naturally after ``ROLLING_WINDOW_S`` seconds.
+        """
+        ts = time.monotonic()
+        with self._lock:
+            entry = self._state.setdefault(provider, _AdjusterState())
+            for _ in range(steps):
+                entry.observations.append(
+                    _ProviderObservation(
+                        ts_monotonic=ts,
+                        latency_ms=None,
+                        success=False,
+                    )
+                )
+
     # ------------------------------------------------------------------
     # Stats
     # ------------------------------------------------------------------

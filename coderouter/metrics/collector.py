@@ -48,6 +48,13 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
                                    + per-profile counter + latest_ratio gauge
     ``context-budget-trimmed`` (v2.0-F)→ ``context_budget_trims_total``
                                    + per-profile counter
+    ``drift-detected`` (v2.0-G)  → ``drift_detected_total`` + per-provider
+    ``drift-promoted`` (v2.0-G)  → ``drift_promoted_total``
+    ``drift-reload-attempted``   → ``drift_reload_total`` / success
+    ``partial-stitch-surfaced``  → ``partial_stitch_surfaced_total`` (v2.0-H)
+    ``probe-completed`` (v2.0-I) → ``probe_total`` / ``probe_success`` / ``probe_failure``
+                                   + per-provider latency gauge
+    ``probe-round-completed``    → ``probe_rounds_total`` (v2.0-I)
     ``coderouter-startup``       → ``startup_info`` (stored for the UI header)
 
     Unrecognized events are ignored (forward-compat: adding a new log
@@ -193,6 +200,29 @@ class MetricsCollector(logging.Handler):
         self._context_budget_warnings_by_profile: Counter[str] = Counter()
         self._context_budget_trims_by_profile: Counter[str] = Counter()
         self._context_budget_latest_ratio: dict[str, float] = {}
+
+        # v2.0-G (L4): drift detection counters. Per-provider counts of
+        # drift events, promotions (rank demotions), and reload attempts.
+        self._drift_detected_total: int = 0
+        self._drift_detected_by_provider: Counter[str] = Counter()
+        self._drift_promoted_total: int = 0
+        self._drift_reload_total: int = 0
+        self._drift_reload_success_total: int = 0
+
+        # v2.0-H (L6): partial stitch surfaced counter. Tracks how often
+        # the mid-stream failure recovery delivered partial content to the
+        # client instead of a generic error event.
+        self._partial_stitch_surfaced_total: int = 0
+
+        # v2.0-I: continuous probe counters. Per-provider probe attempts
+        # and outcomes, plus a round counter for the dashboard's
+        # "probes/min" panel.
+        self._probe_total: Counter[str] = Counter()  # per-provider total probes
+        self._probe_success: Counter[str] = Counter()  # per-provider successes
+        self._probe_failure: Counter[str] = Counter()  # per-provider failures
+        self._probe_rounds_total: int = 0
+        self._probe_latency_ms: dict[str, float] = {}  # per-provider latest
+        self._probe_drift_detected: Counter[str] = Counter()  # per-provider drift
 
         # Last-error snapshot per provider (overwrites previous). Enables the
         # dashboard's "last error" column without scanning the ring.
@@ -372,6 +402,43 @@ class MetricsCollector(logging.Handler):
                 profile = _str(extras.get("profile"))
                 self._context_budget_trims_total += 1
                 self._context_budget_trims_by_profile[profile] += 1
+            elif event == "drift-detected":
+                # v2.0-G (L4): drift detection fired.
+                provider = _str(extras.get("provider"))
+                self._drift_detected_total += 1
+                self._drift_detected_by_provider[provider] += 1
+                self._push_recent(event, extras, record)
+            elif event == "drift-promoted":
+                # v2.0-G (L4): drifted provider was demoted.
+                self._drift_promoted_total += 1
+                self._push_recent(event, extras, record)
+            elif event == "drift-reload-attempted":
+                # v2.0-G (L4): Ollama KV cache flush attempted.
+                self._drift_reload_total += 1
+                if extras.get("success"):
+                    self._drift_reload_success_total += 1
+            elif event == "partial-stitch-surfaced":
+                # v2.0-H (L6): mid-stream failure gracefully surfaced.
+                self._partial_stitch_surfaced_total += 1
+                self._push_recent(event, extras, record)
+            elif event == "probe-completed":
+                # v2.0-I: per-provider probe outcome.
+                provider = _str(extras.get("provider"))
+                self._probe_total[provider] += 1
+                if extras.get("success"):
+                    self._probe_success[provider] += 1
+                else:
+                    self._probe_failure[provider] += 1
+                latency_raw = extras.get("latency_ms")
+                if isinstance(latency_raw, int | float):
+                    self._probe_latency_ms[provider] = float(latency_raw)
+            elif event == "probe-round-completed":
+                # v2.0-I: round counter for the dashboard.
+                self._probe_rounds_total += 1
+            elif event == "probe-capabilities-drift":
+                # v2.0-I: model mismatch detected by probe.
+                provider = _str(extras.get("provider"))
+                self._probe_drift_detected[provider] += 1
             elif event == "coderouter-startup":
                 # Snapshot a subset — startup payload contains lists that are
                 # safe to surface to /metrics.json. Version / providers /
@@ -534,6 +601,23 @@ class MetricsCollector(logging.Handler):
                     "context_budget_latest_ratio": dict(
                         self._context_budget_latest_ratio
                     ),
+                    # v2.0-G (L4): drift detection aggregate counters.
+                    "drift_detected_total": self._drift_detected_total,
+                    "drift_detected_by_provider": dict(
+                        self._drift_detected_by_provider
+                    ),
+                    "drift_promoted_total": self._drift_promoted_total,
+                    "drift_reload_total": self._drift_reload_total,
+                    "drift_reload_success_total": self._drift_reload_success_total,
+                    # v2.0-H (L6): partial stitch surfaced.
+                    "partial_stitch_surfaced_total": self._partial_stitch_surfaced_total,
+                    # v2.0-I: continuous probe counters.
+                    "probe_total": dict(self._probe_total),
+                    "probe_success": dict(self._probe_success),
+                    "probe_failure": dict(self._probe_failure),
+                    "probe_rounds_total": self._probe_rounds_total,
+                    "probe_latency_ms": dict(self._probe_latency_ms),
+                    "probe_drift_detected": dict(self._probe_drift_detected),
                 },
                 "providers": provider_rows,
                 "recent": list(self._recent),
@@ -578,6 +662,15 @@ class MetricsCollector(logging.Handler):
             self._cost_savings_usd.clear()
             self._cost_total_usd_aggregate = 0.0
             self._cost_savings_usd_aggregate = 0.0
+            # v2.0-H (L6)
+            self._partial_stitch_surfaced_total = 0
+            # v2.0-I
+            self._probe_total.clear()
+            self._probe_success.clear()
+            self._probe_failure.clear()
+            self._probe_rounds_total = 0
+            self._probe_latency_ms.clear()
+            self._probe_drift_detected.clear()
             # v2.0-F (L1)
             self._context_budget_warnings_total = 0
             self._context_budget_trims_total = 0

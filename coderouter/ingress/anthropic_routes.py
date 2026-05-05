@@ -49,6 +49,7 @@ _MODE_HEADER = "x-coderouter-mode"
 _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 _ANTHROPIC_BETA_HEADER = "anthropic-beta"
 _CTX_BUDGET_HEADER = "X-CodeRouter-Context-Budget"
+_DRIFT_HEADER = "X-CodeRouter-Drift"
 
 
 @router.post("/messages", response_model=None)
@@ -144,6 +145,12 @@ async def messages(
         }
         if ctx_budget_status:
             stream_headers[_CTX_BUDGET_HEADER] = ctx_budget_status
+        # v2.0-G: drift header is set post-stream via a trailer-like
+        # mechanism — for streaming we cannot know the verdict before
+        # the first chunk ships. Instead, check pre-existing drift state.
+        drift_severity = engine.last_drift_severity
+        if drift_severity:
+            stream_headers[_DRIFT_HEADER] = drift_severity
         return StreamingResponse(
             _anthropic_sse_iterator(engine, anth_req),
             media_type="text/event-stream",
@@ -167,10 +174,18 @@ async def messages(
             detail=_tool_loop_break_detail(exc),
         ) from exc
 
+    # v2.0-G: collect drift header after engine dispatch.
+    drift_severity = engine.last_drift_severity
+    resp_headers: dict[str, str] = {}
     if ctx_budget_status:
+        resp_headers[_CTX_BUDGET_HEADER] = ctx_budget_status
+    if drift_severity:
+        resp_headers[_DRIFT_HEADER] = drift_severity
+
+    if resp_headers:
         return JSONResponse(
             content=anth_resp.model_dump(exclude_none=True),
-            headers={_CTX_BUDGET_HEADER: ctx_budget_status},
+            headers=resp_headers,
         )
     return anth_resp.model_dump(exclude_none=True)
 
@@ -233,17 +248,66 @@ async def _anthropic_sse_iterator(
             "sse-midstream-error",
             extra={"provider": exc.provider, "original": str(exc.original)},
         )
-        err_event = AnthropicStreamEvent(
-            type="error",
-            data={
-                "type": "error",
-                "error": {
-                    "type": "api_error",
-                    "message": str(exc),
+
+        # v2.0-H (L6): partial stitch surface mode — synthesize a graceful
+        # stream termination that delivers accumulated text to the client.
+        profile_name = anth_req.profile or engine.config.default_profile
+        partial_action = "off"
+        try:
+            chain_cfg = engine.config.profile_by_name(profile_name)
+            partial_action = chain_cfg.partial_stitch_action
+        except (KeyError, ValueError):
+            pass
+
+        if partial_action == "surface" and exc.partial_content:
+            # Emit message_delta with accumulated usage (signals stream end).
+            yield _format_anthropic_sse(AnthropicStreamEvent(
+                type="message_delta",
+                data={
+                    "type": "message_delta",
+                    "delta": {"stop_reason": None, "stop_sequence": None},
+                    "usage": {"output_tokens": 0},
                 },
-            },
-        )
-        yield _format_anthropic_sse(err_event)
+            ))
+            # Emit message_stop so the client sees a complete stream.
+            yield _format_anthropic_sse(AnthropicStreamEvent(
+                type="message_stop",
+                data={"type": "message_stop"},
+            ))
+            # Emit coderouter_partial metadata event (client-optional).
+            yield _format_anthropic_sse(AnthropicStreamEvent(
+                type="coderouter_partial",
+                data={
+                    "type": "coderouter_partial",
+                    "partial_content": exc.partial_content,
+                    "provider": exc.provider,
+                    "reason": "mid_stream_failure",
+                    "original_error": str(exc.original)[:200],
+                },
+            ))
+            logger.info(
+                "partial-stitch-surfaced",
+                extra={
+                    "provider": exc.provider,
+                    "profile": profile_name,
+                    "text_blocks": len(exc.partial_content),
+                    "text_length": sum(
+                        len(b.get("text", "")) for b in exc.partial_content
+                    ),
+                },
+            )
+        else:
+            err_event = AnthropicStreamEvent(
+                type="error",
+                data={
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": str(exc),
+                    },
+                },
+            )
+            yield _format_anthropic_sse(err_event)
 
 
 def _format_anthropic_sse(ev: AnthropicStreamEvent) -> str:

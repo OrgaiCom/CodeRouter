@@ -348,9 +348,6 @@ def main(argv: list[str] | None = None) -> int:
     token = args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     dest = resolve_dest(args.dest)
 
-    # --list / パターン展開のためにファイル一覧取得が必要かどうか
-    need_listing = args.list or (not filename) or args.pattern
-
     files_to_get: list[str] = []
 
     if filename and not args.pattern and not args.list:
@@ -375,11 +372,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  {f}")
             return 0
 
-        files_to_get = filter_files(all_files, args.pattern or ([] if filename else []))
-        if filename:
-            # filename もリストに含まれていればそのまま使う
-            if filename not in files_to_get:
-                files_to_get.insert(0, filename)
+        files_to_get = filter_files(all_files, args.pattern or [])
+        if filename and filename not in files_to_get:
+            files_to_get.insert(0, filename)
 
     if not files_to_get:
         sys.stderr.write("対象ファイルが見つかりませんでした (パターンを見直してください)。\n")
@@ -393,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     for f in files_to_get:
         print(f"  - {f}")
 
-    if not confirm("ダウンロードを開始しますか？", args.yes):
+    if not confirm("ダウンロードを開始しますか?", args.yes):
         print("キャンセルしました。")
         return 0
 

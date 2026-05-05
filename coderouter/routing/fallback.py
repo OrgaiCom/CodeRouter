@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator
-from typing import Final
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from coderouter.guards.drift_detection import DriftVerdict
 
 from coderouter.adapters.anthropic_native import AnthropicAdapter
 from coderouter.adapters.base import (
@@ -469,11 +472,16 @@ class _StreamUsageAccumulator:
     """
 
     __slots__ = (
+        "_current_block_text",
+        "_current_block_type",
         "_observed",
+        "_text_blocks",
         "cache_creation_input_tokens",
         "cache_read_input_tokens",
+        "has_tool_use",
         "input_tokens",
         "output_tokens",
+        "stop_reason",
     )
 
     def __init__(self) -> None:
@@ -482,6 +490,32 @@ class _StreamUsageAccumulator:
         self.cache_read_input_tokens = 0
         self.cache_creation_input_tokens = 0
         self._observed = False
+        # v2.0-G: tracked for drift detection observation at stream end.
+        self.has_tool_use: bool = False
+        self.stop_reason: str | None = None
+        # v2.0-H: partial content accumulation for mid-stream recovery.
+        # Completed text blocks are moved to _text_blocks on content_block_stop.
+        # In-progress text is in _current_block_text (list of str fragments).
+        self._text_blocks: list[str] = []
+        self._current_block_type: str | None = None
+        self._current_block_text: list[str] = []
+
+    @property
+    def partial_content(self) -> list[dict[str, Any]]:
+        """Return accumulated text content as Anthropic content blocks.
+
+        Includes both completed blocks and any in-progress text block
+        (useful when the stream is interrupted mid-block). Tool_use blocks
+        are excluded because partial JSON is unusable.
+        """
+        blocks: list[dict[str, Any]] = []
+        for text in self._text_blocks:
+            if text:
+                blocks.append({"type": "text", "text": text})
+        # Include in-progress text block if any
+        if self._current_block_type == "text" and self._current_block_text:
+            blocks.append({"type": "text", "text": "".join(self._current_block_text)})
+        return blocks
 
     def observe(self, event: AnthropicStreamEvent) -> None:
         """Update counters from one stream event (no-op for non-usage events)."""
@@ -494,6 +528,33 @@ class _StreamUsageAccumulator:
             usage = event.data.get("usage") if isinstance(event.data, dict) else None
             if isinstance(usage, dict):
                 self._merge(usage)
+            # v2.0-G: capture stop_reason from the terminal message_delta.
+            delta = event.data.get("delta") if isinstance(event.data, dict) else None
+            if isinstance(delta, dict) and "stop_reason" in delta:
+                self.stop_reason = delta["stop_reason"]
+        elif event.type == "content_block_start":
+            # v2.0-G: detect tool_use content blocks for drift observation.
+            cb = event.data.get("content_block") if isinstance(event.data, dict) else None
+            if isinstance(cb, dict):
+                block_type = cb.get("type", "")
+                if block_type == "tool_use":
+                    self.has_tool_use = True
+                # v2.0-H: start tracking a new content block.
+                self._current_block_type = block_type
+                self._current_block_text = []
+        elif event.type == "content_block_delta":
+            # v2.0-H: accumulate text_delta fragments.
+            delta = event.data.get("delta") if isinstance(event.data, dict) else None
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                text = delta.get("text", "")
+                if text:
+                    self._current_block_text.append(text)
+        elif event.type == "content_block_stop":
+            # v2.0-H: finalize current block.
+            if self._current_block_type == "text" and self._current_block_text:
+                self._text_blocks.append("".join(self._current_block_text))
+            self._current_block_type = None
+            self._current_block_text = []
 
     def _merge(self, usage: dict[str, object]) -> None:
         any_nonzero = False
@@ -613,9 +674,18 @@ class MidStreamError(CodeRouterError):
     one chunk to the client. Fallback is not attempted (the client has
     received partial content, so switching providers would corrupt the
     stream). Callers should surface this as a terminal error event.
+
+    v2.0-H: carries ``partial_content`` — the accumulated text blocks
+    generated before the failure. The ingress uses this to synthesize
+    a graceful stream termination when ``partial_stitch_action: surface``.
     """
 
-    def __init__(self, provider: str, original: AdapterError) -> None:
+    def __init__(
+        self,
+        provider: str,
+        original: AdapterError,
+        partial_content: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Wrap the underlying :class:`AdapterError` with the provider name.
 
         The ingress layer catches this and converts it into an in-stream
@@ -624,6 +694,7 @@ class MidStreamError(CodeRouterError):
         """
         self.provider = provider
         self.original = original
+        self.partial_content: list[dict[str, Any]] = partial_content or []
         super().__init__(f"provider {provider!r} failed mid-stream: {original}")
 
 
@@ -747,6 +818,32 @@ class FallbackEngine:
         # Distinct from v1.9-C ``adaptive`` which handles the
         # gradient case via a rolling window.
         self._backend_health_monitor: BackendHealthMonitor = BackendHealthMonitor()
+        # v2.0-G (L4): per-process drift detection window manager.
+        # Stores per-provider rolling observations; the detector is
+        # invoked after each provider-ok / provider-failed event and
+        # returns a verdict. Action dispatch (promote/reload) reuses
+        # the adaptive rank machinery.
+        from coderouter.guards.drift_detection import DriftWindow
+
+        self._drift_window: DriftWindow = DriftWindow()
+        # Track which providers are currently in drift-demoted state
+        # and when their cooldown expires (monotonic timestamp).
+        self._drift_demoted: dict[str, float] = {}
+        # Last drift verdict (set by _observe_drift_signal for ingress header).
+        self._last_drift_verdict: DriftVerdict | None = None
+
+    @property
+    def last_drift_severity(self) -> str | None:
+        """Return the severity string of the most recent drift verdict, or None.
+
+        The ingress reads this after generate_anthropic / stream_anthropic to
+        set the ``X-CodeRouter-Drift`` response header.  Returns ``"mild"`` or
+        ``"severe"`` when drift was detected, ``None`` otherwise.
+        """
+        v = self._last_drift_verdict
+        if v is None or not v.drifted:
+            return None
+        return v.severity
 
     @property
     def _adaptive(self) -> AdaptiveAdjuster:
@@ -794,18 +891,28 @@ class FallbackEngine:
         return existing
 
     @property
-    def _backend_health(self) -> BackendHealthMonitor:
+    def backend_health(self) -> BackendHealthMonitor:
         """Return the L5 backend-health monitor, lazily building one if absent.
 
         Same legacy-test compatibility pattern as the other guard
         properties — ``__new__``-constructed engines get a fresh
         empty monitor so ``state_for`` is always answerable.
+
+        v2.0-I: promoted from ``_backend_health`` to public ``backend_health``
+        so the continuous probe background task can feed results into the
+        same state machine. Internal callers continue to work (property
+        access is transparent).
         """
         existing = getattr(self, "_backend_health_monitor", None)
         if existing is None:
             self._backend_health_monitor = BackendHealthMonitor()
             existing = self._backend_health_monitor
         return existing
+
+    # Alias for backward compat with internal callers.
+    @property
+    def _backend_health(self) -> BackendHealthMonitor:
+        return self.backend_health
 
     def _observe_provider_failure(
         self,
@@ -924,6 +1031,132 @@ class FallbackEngine:
                 new_state=transition.new_state,
                 consecutive_failures=transition.consecutive_failures,
             )
+
+    def _observe_drift_signal(
+        self,
+        provider: str,
+        *,
+        profile: str | None,
+        output_tokens: int = 0,
+        has_tool_use: bool = False,
+        request_had_tools: bool = False,
+        stop_reason: str | None = None,
+        is_error: bool = False,
+        stream: bool = False,
+    ) -> DriftVerdict | None:
+        """v2.0-G (L4): record an observation and check for drift.
+
+        Called after every provider-ok / provider-failed event on the
+        Anthropic-shaped paths. Returns a :class:`DriftVerdict` when
+        drift is detected (drifted=True), None otherwise.
+
+        Side effects on detection:
+        - Emits ``drift-detected`` log.
+        - If action is ``promote`` or ``reload``, demotes the provider
+          via the adaptive rank machinery.
+        """
+        from coderouter.guards.drift_detection import (
+            SENSITIVITY_PRESETS,
+            ResponseObservation,
+            detect_drift,
+        )
+        from coderouter.logging import log_drift_detected, log_drift_promoted
+
+        chosen = profile or self.config.default_profile
+        try:
+            chain_cfg = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return None
+        if chain_cfg.drift_detection_action == "off":
+            return None
+
+        # Update window size if config differs from default
+        self._drift_window.max_size = chain_cfg.drift_detection_window_size
+
+        # Record observation
+        obs = ResponseObservation(
+            provider=provider,
+            output_tokens=output_tokens,
+            has_tool_use=has_tool_use,
+            request_had_tools=request_had_tools,
+            stop_reason=stop_reason,
+            is_error=is_error,
+            stream=stream,
+        )
+        self._drift_window.record(obs)
+
+        # Check for cooldown recovery
+        import time as _time
+
+        demote_expires = self._drift_demoted.get(provider)
+        if demote_expires is not None and _time.monotonic() >= demote_expires:
+            # Cooldown expired — restore rank and clear drift state
+            from coderouter.logging import log_drift_recovered
+
+            elapsed = chain_cfg.drift_detection_cooldown_s
+            log_drift_recovered(logger, provider=provider, profile=chosen, after_s=elapsed)
+            self._drift_demoted.pop(provider, None)
+            self._drift_window.clear(provider)
+            return None
+
+        # Don't re-detect while in cooldown
+        if provider in self._drift_demoted:
+            return None
+
+        # Run detection
+        window = self._drift_window.get_window(provider)
+        thresholds = SENSITIVITY_PRESETS.get(
+            chain_cfg.drift_detection_sensitivity, SENSITIVITY_PRESETS["normal"]
+        )
+        verdict = detect_drift(window, thresholds)
+
+        if not verdict.drifted:
+            self._last_drift_verdict = None
+            return None
+
+        # Store for ingress response header.
+        self._last_drift_verdict = verdict
+
+        # Emit log
+        log_drift_detected(
+            logger,
+            provider=provider,
+            profile=chosen,
+            severity=verdict.severity,
+            reason=verdict.reason,
+            action=chain_cfg.drift_detection_action,
+            signals=verdict.signals,
+        )
+
+        # Action: promote / reload
+        if chain_cfg.drift_detection_action in ("promote", "reload"):
+            import time as _time_mod
+
+            # Demote via adaptive rank
+            self._adaptive.demote(provider, steps=2)
+            log_drift_promoted(
+                logger,
+                provider=provider,
+                profile=chosen,
+                demoted_to_rank=2,
+                cooldown_s=chain_cfg.drift_detection_cooldown_s,
+            )
+            # Record cooldown expiry
+            self._drift_demoted[provider] = (
+                _time_mod.monotonic() + chain_cfg.drift_detection_cooldown_s
+            )
+
+            # v2.0-G: reload action — attempt Ollama KV cache flush
+            # (best-effort, fire-and-forget background task).
+            if chain_cfg.drift_detection_action == "reload":
+                import asyncio
+
+                from coderouter.guards.drift_actions import attempt_reload
+
+                provider_config = self._adapters[provider].config
+                self._reload_task = asyncio.create_task(attempt_reload(provider_config))
+
+        return verdict
 
     def _resolve_profile_overrides(self, profile_name: str | None) -> ProviderCallOverrides:
         """v0.6-B: build the ProviderCallOverrides for the active profile.
@@ -1455,6 +1688,14 @@ class FallbackEngine:
                 self._observe_provider_failure(
                     adapter.name, exc, profile=request.profile
                 )
+                # v2.0-G (L4): drift detection observation (failure path).
+                self._observe_drift_signal(
+                    adapter.name,
+                    profile=request.profile,
+                    is_error=True,
+                    request_had_tools=bool(request.tools),
+                    stream=False,
+                )
                 errors.append(exc)
                 if not exc.retryable:
                     break
@@ -1481,6 +1722,18 @@ class FallbackEngine:
             # comes back.
             self._observe_provider_success(
                 adapter.name, profile=request.profile
+            )
+            # v2.0-G (L4): drift detection observation (success path).
+            self._observe_drift_signal(
+                adapter.name,
+                profile=request.profile,
+                output_tokens=resp.usage.output_tokens if resp.usage else 0,
+                has_tool_use=any(
+                    getattr(b, "type", None) == "tool_use" for b in (resp.content or [])
+                ),
+                request_had_tools=bool(request.tools),
+                stop_reason=resp.stop_reason,
+                stream=False,
             )
             # v1.9-A: pair every successful Anthropic response with a
             # cache-observed log line. Native Anthropic / LM Studio
@@ -1620,6 +1873,14 @@ class FallbackEngine:
                 self._observe_provider_failure(
                     adapter.name, exc, profile=request.profile
                 )
+                # v2.0-G (L4): drift detection observation (stream failure).
+                self._observe_drift_signal(
+                    adapter.name,
+                    profile=request.profile,
+                    is_error=True,
+                    request_had_tools=bool(request.tools),
+                    stream=True,
+                )
                 errors.append(exc)
                 if not exc.retryable:
                     break
@@ -1662,7 +1923,27 @@ class FallbackEngine:
                 self._observe_provider_failure(
                     adapter.name, exc, profile=request.profile
                 )
-                raise MidStreamError(adapter.name, exc) from exc
+                # v2.0-G (L4): drift detection observation (mid-stream failure).
+                self._observe_drift_signal(
+                    adapter.name,
+                    profile=request.profile,
+                    is_error=True,
+                    request_had_tools=bool(request.tools),
+                    stream=True,
+                )
+                raise MidStreamError(
+                    adapter.name, exc, partial_content=acc.partial_content
+                ) from exc
+            # v2.0-G (L4): drift detection observation (stream success).
+            self._observe_drift_signal(
+                adapter.name,
+                profile=request.profile,
+                output_tokens=acc.output_tokens,
+                has_tool_use=acc.has_tool_use,
+                request_had_tools=bool(request.tools),
+                stop_reason=acc.stop_reason,
+                stream=True,
+            )
             # v1.9-B2: pair the successful stream with a cache-observed
             # log line carrying the aggregated usage counters that the
             # ``_StreamUsageAccumulator`` collected from the

@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-2.0.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-2.1.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -50,7 +50,8 @@
 - **v1.10.0 で Long-run reliability pillar が完成**: `cost.monthly_budget_usd` で provider 月次 USD 予算を強制、**L2 memory pressure detector**（Ollama / LM Studio が VRAM 切れで OOM になった時に自動クールダウン）、**L5 backend health 状態機械**（連続失敗で UNHEALTHY → chain 末尾に降格、1 回成功で即復帰）
 - **v1.10.0 で auto-router が 6 matcher に揃う**: `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex` / `model_pattern`（Opus/Sonnet/Haiku 分岐）/ `content_token_count_min`（長文 → 1M ctx Gemini Flash 等へ自動切替）
 - **v2.0.0 で Context Budget Management (L1 overflow 防止) を搭載**: 長時間 agent session で messages が context window に漸近 → backend 400 エラーで session 死亡する問題を根本解決。warn (80%) → auto trim (90%) の 2 段階 guard で **context overflow ゼロ**を実現。tool_use / tool_result ペアは atomic 保全、`X-CodeRouter-Context-Budget` ヘッダで状態通知、Prometheus メトリクス完備
-- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 930 本緑
+- **v2.1.0 で Long-run Reliability 3 機能を追加搭載**: **Drift Detection** (L4 品質劣化検知 — 5 シグナル rolling window + warn/promote/reload 3 段階アクション)、**Partial Stitching** (L6 mid-stream 失敗時の蓄積テキスト返却)、**Continuous Probing** (P3 idle 時 1-token 定期 probe + model drift 検知 + backend health 自動更新)
+- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 950 本緑
 
 → **Claude Code / gemini-cli / codex + Ollama / llama.cpp / NVIDIA NIM で、破綻しない local-first agent が組める**
 
@@ -157,7 +158,7 @@ CodeRouter / Voice Bridge ともに独立した repo で進化していて、HTT
 
 ## クイックスタート（3 コマンド）
 
-**v2.0.0 で Context Budget Management (L1 overflow 防止) を搭載** — 長時間 agent session が context window を使い切って死ぬ問題を根本解決。`uvx` 一発で動きます (Python 3.12 以上必須):
+**v2.1.0 で Long-run Reliability pillar 完成** — Context Budget (L1) + Drift Detection (L4) + Partial Stitching (L6) + Continuous Probing (P3)。`uvx` 一発で動きます (Python 3.12 以上必須):
 
 ```bash
 # 1. サンプル設定を置く
@@ -225,9 +226,9 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 
 注意点や「ローカル GPU なし」向けレシピを含むフル版マトリクス: [利用ガイド §1](./docs/usage-guide.md#1-os-互換性)
 
-## ステータス — v2.0.0 (2026-05)
+## ステータス — v2.1.0 (2026-05)
 
-**テスト 930 本通過。ランタイム依存 5 個 (36 sub-release 連続据え置き)。macOS / Linux / Windows WSL2 で動作。** v2.0.0 で **Context Budget Management (L1 overflow 防止)** を搭載 — 長時間 agent session が context window を使い切って死ぬ問題を根本解決。v1.10.0 までに **Long-run Reliability** (L2/L3/L5)、**Cost pillar**、**Auto-router 6 matcher** が完成済み。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
+**テスト 950 本通過。ランタイム依存 5 個 (39 sub-release 連続据え置き)。macOS / Linux / Windows WSL2 で動作。** v2.1.0 で **Long-run Reliability pillar が完成** — Context Budget (L1) / Drift Detection (L4) / Partial Stitching (L6) / Continuous Probing (P3) の 4 sub-release を統合出荷。v1.10.0 までに **Long-run Reliability** (L2/L3/L5)、**Cost pillar**、**Auto-router 6 matcher** が完成済み。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
 
 今日の CodeRouter が届ける価値:
 

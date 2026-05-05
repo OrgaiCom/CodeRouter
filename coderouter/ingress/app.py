@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -71,7 +72,45 @@ def create_app(config_path: str | None = None) -> FastAPI:
         # chronological order. Non-fatal — the chain still works, just
         # potentially sub-optimally for the agentic harness.
         check_claude_code_chain_suitability(config, logger=logger)
+
+        # v2.0-I: launch continuous probe background task if configured.
+        probe_task = None
+        shutdown_event = None
+        if config.continuous_probe == "active":
+            import asyncio
+
+            from coderouter.guards.continuous_probe import probe_loop
+            from coderouter.routing.capability import get_default_registry
+
+            shutdown_event = asyncio.Event()
+            probe_task = asyncio.create_task(
+                probe_loop(
+                    config.providers,
+                    record_fn=engine.backend_health.record_attempt,
+                    interval_s=config.probe_interval_s,
+                    timeout_s=config.probe_timeout_s,
+                    probe_paid=config.probe_paid,
+                    shutdown_event=shutdown_event,
+                    registry=get_default_registry(),
+                )
+            )
+            logger.info(
+                "continuous-probe-started",
+                extra={
+                    "interval_s": config.probe_interval_s,
+                    "probe_paid": config.probe_paid,
+                    "providers": len(config.providers),
+                },
+            )
+
         yield
+
+        # Graceful shutdown of probe task
+        if probe_task is not None and shutdown_event is not None:
+            shutdown_event.set()
+            with contextlib.suppress(Exception):
+                await probe_task
+
         logger.info("coderouter-shutdown")
 
     app = FastAPI(

@@ -73,6 +73,7 @@ class _RecordingEngine:
     def __init__(self) -> None:
         self.seen_profiles: list[str | None] = []
         self.seen_requests: list[AnthropicRequest] = []
+        self.last_drift_severity: str | None = None
 
     def apply_context_budget(
         self, request: AnthropicRequest
@@ -153,6 +154,7 @@ class _FailingEngine:
 
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
+        self.last_drift_severity: str | None = None
 
     def apply_context_budget(
         self, request: AnthropicRequest
@@ -177,9 +179,22 @@ class _MidStreamFailingEngine:
     single `event: error` with type `api_error` inside the SSE stream.
     """
 
+    class _StubConfig:
+        """Minimal config stub for v2.0-H partial stitch resolution."""
+
+        default_profile = "default"
+
+        class _ProfileCfg:
+            partial_stitch_action = "off"
+
+        def profile_by_name(self, name: str) -> _MidStreamFailingEngine._StubConfig._ProfileCfg:
+            return self._ProfileCfg()
+
     def __init__(self, provider: str = "local") -> None:
         self.provider = provider
         self.stream_calls = 0
+        self.last_drift_severity: str | None = None
+        self.config = self._StubConfig()
 
     def apply_context_budget(
         self, request: AnthropicRequest
@@ -254,6 +269,7 @@ class _LoopBreakingEngine:
 
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
+        self.last_drift_severity: str | None = None
 
     def apply_context_budget(
         self, request: AnthropicRequest
