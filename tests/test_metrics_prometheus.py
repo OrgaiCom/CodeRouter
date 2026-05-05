@@ -175,3 +175,33 @@ def test_dashes_in_label_values_are_literal() -> None:
     snap["counters"]["provider_attempts"] = {"ollama-local": 7}
     out = format_prometheus(snap)
     assert 'coderouter_provider_attempts_total{provider="ollama-local"} 7' in out
+
+
+# ---------------------------------------------------------------------------
+# v2.0-F (L1): context budget metrics
+# ---------------------------------------------------------------------------
+
+
+def test_context_budget_warnings_counter() -> None:
+    snap = _empty_snapshot()
+    snap["counters"]["context_budget_warnings_by_profile"] = {"default": 3, "heavy": 1}
+    out = format_prometheus(snap)
+    assert "# TYPE coderouter_context_budget_warnings_total counter" in out
+    assert 'coderouter_context_budget_warnings_total{profile="default"} 3' in out
+    assert 'coderouter_context_budget_warnings_total{profile="heavy"} 1' in out
+
+
+def test_context_budget_trims_counter() -> None:
+    snap = _empty_snapshot()
+    snap["counters"]["context_budget_trims_by_profile"] = {"default": 2}
+    out = format_prometheus(snap)
+    assert "# TYPE coderouter_context_budget_trims_total counter" in out
+    assert 'coderouter_context_budget_trims_total{profile="default"} 2' in out
+
+
+def test_context_budget_usage_ratio_gauge() -> None:
+    snap = _empty_snapshot()
+    snap["counters"]["context_budget_latest_ratio"] = {"default": 0.8723}
+    out = format_prometheus(snap)
+    assert "# TYPE coderouter_context_budget_usage_ratio gauge" in out
+    assert 'coderouter_context_budget_usage_ratio{profile="default"} 0.8723' in out

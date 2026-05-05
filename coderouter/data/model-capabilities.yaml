@@ -406,3 +406,82 @@ rules:
     kind: openai_compat
     capabilities:
       tools: true
+
+  # ------------------------------------------------------------------
+  # Context window declarations — max_context_tokens (v2.0-F)
+  #
+  # Used by the context-budget guard (L1) to know when a conversation
+  # is approaching the model's context limit. These fall below the
+  # capability-specific rules above because first-match-per-flag means
+  # a model can declare both `thinking: true` and `max_context_tokens`
+  # from different rules — each flag resolves independently.
+  #
+  # Values are the *effective* context window the model reliably handles.
+  # For models with claimed but untested larger windows, the conservative
+  # value is declared. Operators can override via per-provider
+  # `max_context_tokens` in providers.yaml or user model-capabilities.yaml.
+  # ------------------------------------------------------------------
+
+  # Anthropic Claude — 200K context window (all 4.x families)
+  - match: "claude-*"
+    kind: anthropic
+    capabilities:
+      max_context_tokens: 200000
+
+  # Qwen3 (base, non-coder) — Ollama default: 32K context
+  - match: "qwen3:*"
+    capabilities:
+      max_context_tokens: 32768
+
+  # Qwen3-Coder — 256K declared, conservative 131K for GGUF quantized
+  - match: "qwen3-coder:*"
+    capabilities:
+      max_context_tokens: 131072
+
+  - match: "qwen/qwen3-coder-*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # Qwen3.5 — 131K verified (LM Studio Anthropic endpoint)
+  - match: "qwen3.5*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # Qwen3.6 — 256K declared, conservative 131K
+  - match: "qwen3.6*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # Gemma 4 — 128K context (all variants)
+  - match: "gemma4:*"
+    capabilities:
+      max_context_tokens: 131072
+
+  - match: "google/gemma-4*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # DeepSeek V3 — 128K context
+  - match: "deepseek*v3*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # DeepSeek R1 — 128K context
+  - match: "deepseek*r1*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # GPT-OSS — 131K context
+  - match: "*gpt-oss*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # Devstral — 128K context (Mistral coding)
+  - match: "*devstral*"
+    capabilities:
+      max_context_tokens: 131072
+
+  # Kimi K2 — 128K context
+  - match: "*kimi-k2*"
+    capabilities:
+      max_context_tokens: 131072

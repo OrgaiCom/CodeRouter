@@ -278,3 +278,69 @@ def test_reset_clears_state(collector: MetricsCollector) -> None:
     collector.reset()
     assert collector.snapshot()["counters"]["requests_total"] == 0
     assert collector.snapshot()["recent"] == []
+
+
+# ---------------------------------------------------------------------------
+# v2.0-F (L1): context budget guard metrics
+# ---------------------------------------------------------------------------
+
+
+def test_context_budget_warning_counted(collector: MetricsCollector) -> None:
+    _fire_warn(
+        "context-budget-warning",
+        provider="local",
+        profile="default",
+        estimated_tokens=850,
+        max_context_tokens=1000,
+        usage_ratio=0.85,
+        action="warn",
+    )
+    snap = collector.snapshot()["counters"]
+    assert snap["context_budget_warnings_total"] == 1
+    assert snap["context_budget_warnings_by_profile"]["default"] == 1
+    assert snap["context_budget_latest_ratio"]["default"] == 0.85
+
+
+def test_context_budget_trimmed_counted(collector: MetricsCollector) -> None:
+    _fire(
+        "context-budget-trimmed",
+        provider="local",
+        profile="default",
+        messages_removed=5,
+        messages_before=20,
+        messages_after=15,
+        estimated_tokens_before=950,
+        estimated_tokens_after=700,
+        max_context_tokens=1000,
+    )
+    snap = collector.snapshot()["counters"]
+    assert snap["context_budget_trims_total"] == 1
+    assert snap["context_budget_trims_by_profile"]["default"] == 1
+
+
+def test_context_budget_multiple_profiles(collector: MetricsCollector) -> None:
+    _fire_warn(
+        "context-budget-warning",
+        provider="local",
+        profile="heavy",
+        usage_ratio=0.92,
+    )
+    _fire_warn(
+        "context-budget-warning",
+        provider="local",
+        profile="heavy",
+        usage_ratio=0.95,
+    )
+    _fire_warn(
+        "context-budget-warning",
+        provider="remote",
+        profile="light",
+        usage_ratio=0.81,
+    )
+    snap = collector.snapshot()["counters"]
+    assert snap["context_budget_warnings_total"] == 3
+    assert snap["context_budget_warnings_by_profile"]["heavy"] == 2
+    assert snap["context_budget_warnings_by_profile"]["light"] == 1
+    # Latest ratio is the LAST seen per profile
+    assert snap["context_budget_latest_ratio"]["heavy"] == 0.95
+    assert snap["context_budget_latest_ratio"]["light"] == 0.81

@@ -44,6 +44,10 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
     ``cache-observed`` (v1.9-A)  → ``cache_*`` per-provider counters
                                    (read tokens, creation tokens,
                                     outcome 4-class breakdown)
+    ``context-budget-warning`` (v2.0-F)→ ``context_budget_warnings_total``
+                                   + per-profile counter + latest_ratio gauge
+    ``context-budget-trimmed`` (v2.0-F)→ ``context_budget_trims_total``
+                                   + per-profile counter
     ``coderouter-startup``       → ``startup_info`` (stored for the UI header)
 
     Unrecognized events are ignored (forward-compat: adding a new log
@@ -178,6 +182,17 @@ class MetricsCollector(logging.Handler):
         self._cost_savings_usd: dict[str, float] = {}
         self._cost_total_usd_aggregate: float = 0.0
         self._cost_savings_usd_aggregate: float = 0.0
+
+        # v2.0-F (L1): context budget guard counters. Per-profile counts
+        # of warnings (over warn threshold) and trims (messages removed).
+        # The ``latest_usage_ratio`` dict records the most recent ratio
+        # seen per profile — the dashboard renders it as a gauge rather
+        # than a monotone counter.
+        self._context_budget_warnings_total: int = 0
+        self._context_budget_trims_total: int = 0
+        self._context_budget_warnings_by_profile: Counter[str] = Counter()
+        self._context_budget_trims_by_profile: Counter[str] = Counter()
+        self._context_budget_latest_ratio: dict[str, float] = {}
 
         # Last-error snapshot per provider (overwrites previous). Enables the
         # dashboard's "last error" column without scanning the ring.
@@ -343,6 +358,20 @@ class MetricsCollector(logging.Handler):
                         self._cost_savings_usd.get(provider, 0.0) + savings_usd
                     )
                     self._cost_savings_usd_aggregate += savings_usd
+            elif event == "context-budget-warning":
+                # v2.0-F (L1): context usage exceeded the warn threshold.
+                # Track per-profile and aggregate, plus latest ratio gauge.
+                profile = _str(extras.get("profile"))
+                self._context_budget_warnings_total += 1
+                self._context_budget_warnings_by_profile[profile] += 1
+                ratio_raw = extras.get("usage_ratio")
+                if isinstance(ratio_raw, (int, float)):
+                    self._context_budget_latest_ratio[profile] = float(ratio_raw)
+            elif event == "context-budget-trimmed":
+                # v2.0-F (L1): messages were removed to fit the budget.
+                profile = _str(extras.get("profile"))
+                self._context_budget_trims_total += 1
+                self._context_budget_trims_by_profile[profile] += 1
             elif event == "coderouter-startup":
                 # Snapshot a subset — startup payload contains lists that are
                 # safe to surface to /metrics.json. Version / providers /
@@ -493,6 +522,18 @@ class MetricsCollector(logging.Handler):
                     "cost_savings_usd_aggregate": round(
                         self._cost_savings_usd_aggregate, 6
                     ),
+                    # v2.0-F (L1): context budget guard aggregate counters.
+                    "context_budget_warnings_total": self._context_budget_warnings_total,
+                    "context_budget_trims_total": self._context_budget_trims_total,
+                    "context_budget_warnings_by_profile": dict(
+                        self._context_budget_warnings_by_profile
+                    ),
+                    "context_budget_trims_by_profile": dict(
+                        self._context_budget_trims_by_profile
+                    ),
+                    "context_budget_latest_ratio": dict(
+                        self._context_budget_latest_ratio
+                    ),
                 },
                 "providers": provider_rows,
                 "recent": list(self._recent),
@@ -537,6 +578,12 @@ class MetricsCollector(logging.Handler):
             self._cost_savings_usd.clear()
             self._cost_total_usd_aggregate = 0.0
             self._cost_savings_usd_aggregate = 0.0
+            # v2.0-F (L1)
+            self._context_budget_warnings_total = 0
+            self._context_budget_trims_total = 0
+            self._context_budget_warnings_by_profile.clear()
+            self._context_budget_trims_by_profile.clear()
+            self._context_budget_latest_ratio.clear()
             self._last_error.clear()
             self._recent.clear()
             self._startup_info.clear()

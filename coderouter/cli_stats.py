@@ -112,6 +112,10 @@ class GatesSummary:
     degraded_breakdown: dict[str, int]  # capability → count
     filters_applied_total: int
     filters_breakdown: dict[str, int]  # filter name → count
+    # v2.0-F (L1): context budget guard summary
+    context_budget_warnings: int = 0
+    context_budget_trims: int = 0
+    context_budget_latest_ratio: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +256,8 @@ def build_gates_summary(snapshot: dict[str, Any]) -> GatesSummary:
     )
     degraded_breakdown = dict(counters.get("capability_degraded", {}) or {})
     filters_breakdown = dict(counters.get("output_filter_applied", {}) or {})
+    # v2.0-F (L1): context budget guard counters
+    ctx_budget_latest = counters.get("context_budget_latest_ratio") or {}
     return GatesSummary(
         total_requests=total_requests,
         total_failed=total_failed,
@@ -261,6 +267,13 @@ def build_gates_summary(snapshot: dict[str, Any]) -> GatesSummary:
         degraded_breakdown=degraded_breakdown,
         filters_applied_total=sum(filters_breakdown.values()),
         filters_breakdown=filters_breakdown,
+        context_budget_warnings=int(
+            counters.get("context_budget_warnings_total", 0)
+        ),
+        context_budget_trims=int(
+            counters.get("context_budget_trims_total", 0)
+        ),
+        context_budget_latest_ratio=ctx_budget_latest if ctx_budget_latest else None,
     )
 
 
@@ -397,6 +410,19 @@ def format_text(snapshot: dict[str, Any], *, width: int = 80) -> str:
             else ""
         )
     )
+    # v2.0-F (L1): context budget guard stats
+    if gates.context_budget_warnings or gates.context_budget_trims:
+        ratio_str = ""
+        if gates.context_budget_latest_ratio:
+            top_profile = max(
+                gates.context_budget_latest_ratio,
+                key=gates.context_budget_latest_ratio.get,  # type: ignore[arg-type]
+            )
+            ratio_str = f"  (latest: {gates.context_budget_latest_ratio[top_profile]:.0%} {top_profile})"
+        lines.append(
+            f"  context-budget warn:   {gates.context_budget_warnings}  "
+            f"trim: {gates.context_budget_trims}{ratio_str}"
+        )
     lines.append("")
     lines.append("Recent")
     if not recent:
@@ -633,7 +659,28 @@ def _draw_frame(  # pragma: no cover - curses-only
         + (f"  ({_fmt_breakdown(gates.filters_breakdown)})" if gates.filters_breakdown else ""),
         width,
     )
-    row += 2
+    row += 1
+    # v2.0-F (L1): context budget guard line
+    if gates.context_budget_warnings or gates.context_budget_trims:
+        ratio_str = ""
+        if gates.context_budget_latest_ratio:
+            top_profile = max(
+                gates.context_budget_latest_ratio,
+                key=gates.context_budget_latest_ratio.get,  # type: ignore[arg-type]
+            )
+            ratio_str = f"  (latest: {gates.context_budget_latest_ratio[top_profile]:.0%} {top_profile})"
+        budget_line = (
+            f"  context-budget warn:   {gates.context_budget_warnings}  "
+            f"trim: {gates.context_budget_trims}{ratio_str}"
+        )
+        budget_color = (
+            _COLOR_YELLOW_PAIR
+            if gates.context_budget_trims == 0
+            else _COLOR_RED_PAIR
+        )
+        stdscr.addnstr(row, 0, budget_line, width, int(curses.color_pair(budget_color)))
+        row += 1
+    row += 1
 
     if row >= height - 2:
         return

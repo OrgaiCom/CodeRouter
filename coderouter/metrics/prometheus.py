@@ -331,6 +331,56 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             ],
         )
     )
+
+    # ---- v2.0-F (L1): context budget guard metrics --------------------------
+    lines.extend(
+        _counter(
+            name="context_budget_warnings_total",
+            help_text=(
+                "Context budget guard warnings (usage ratio exceeded the "
+                "warn threshold), by profile."
+            ),
+            samples=[
+                ((("profile", p),), v)
+                for p, v in sorted(
+                    counters.get("context_budget_warnings_by_profile", {}).items()
+                )
+            ],
+        )
+    )
+    lines.extend(
+        _counter(
+            name="context_budget_trims_total",
+            help_text=(
+                "Context budget guard trims (old messages removed to fit "
+                "the budget), by profile."
+            ),
+            samples=[
+                ((("profile", p),), v)
+                for p, v in sorted(
+                    counters.get("context_budget_trims_by_profile", {}).items()
+                )
+            ],
+        )
+    )
+    # Gauge: latest observed usage ratio per profile. Dashboards can
+    # display a fill-level bar or alerting rule off this.
+    ratio_samples: list[tuple[tuple[tuple[str, str], ...], float]] = [
+        ((("profile", p),), round(v, 4))
+        for p, v in sorted(
+            counters.get("context_budget_latest_ratio", {}).items()
+        )
+    ]
+    lines.extend(
+        _gauge_float(
+            name="context_budget_usage_ratio",
+            help_text=(
+                "Most recent context-window fill ratio (estimated_tokens / "
+                "max_context_tokens), by profile. Range 0.0–∞."
+            ),
+            samples=ratio_samples,
+        )
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -404,6 +454,27 @@ def _gauge(*, name: str, help_text: str, value: float) -> list[str]:
         f"# TYPE {full_name} gauge",
         f"{full_name} {value}",
     ]
+
+
+def _gauge_float(
+    *,
+    name: str,
+    help_text: str,
+    samples: list[tuple[tuple[tuple[str, str], ...], float]],
+) -> list[str]:
+    """HELP + TYPE + labeled float samples for a gauge.
+
+    v2.0-F: labeled gauge variant — mirrors :func:`_counter_float` but
+    emits ``# TYPE ... gauge`` instead of ``counter``.
+    """
+    full_name = f"{_PREFIX}{name}"
+    lines = [
+        f"# HELP {full_name} {help_text}",
+        f"# TYPE {full_name} gauge",
+    ]
+    for labels, value in samples:
+        lines.append(f"{full_name}{_fmt_labels(labels)} {value}")
+    return lines
 
 
 def _fmt_labels(pairs: tuple[tuple[str, str], ...]) -> str:

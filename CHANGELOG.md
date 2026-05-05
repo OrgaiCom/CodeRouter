@@ -6,6 +6,67 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.0-F] — 2026-05-05 (Context Budget Management — L1 overflow 防止)
+
+**Theme: 長時間 agent session の context overflow を未然に防止する guard を実装。** Claude Code / Cline / OpenClaw 等の agentic session が 8 時間超え loop で動くと messages が context window に漸近し、backend が 400 / truncation を返して session 死亡する問題 (L1) を根本解決。warn (80%) → auto trim (90%) の 2 段階 guard で overflow をゼロに。
+
+| 機能 | 説明 |
+|---|---|
+| `estimate_context_usage()` | char/4 heuristic で request の context 充填率を推定 (5-deps 不変) |
+| `trim_to_budget()` | 古い messages を先頭から削除、tool_use/tool_result ペアを tool_use_id ベースで atomic 保全 |
+| `context_budget_action: off/warn/trim` | profile 単位で guard 有効化 (default: off) |
+| `X-CodeRouter-Context-Budget` header | response header で warn/trimmed ステータスを通知 (streaming 対応) |
+| Prometheus metrics | `coderouter_context_budget_warnings_total`, `coderouter_context_budget_trims_total`, `coderouter_context_budget_usage_ratio` |
+| `coderouter stats` TUI | Fallback & Gates パネルに context budget warn/trim count + latest ratio 表示 |
+| model-capabilities.yaml | 主要モデル (Claude 200K, Qwen3/3.5/3.6 32-131K, Gemma4 131K, DeepSeek 131K 等) の max_context_tokens bundled |
+
+- Tests: 878 → **~930** (+50, token_estimation 13 + context_budget 22 + ingress header 5 + metrics 6 + prometheus 3)
+- Runtime deps: 5 → 5 (**35 sub-release 連続据え置き**)
+- Backward compat: 完全互換、`context_budget_action` default は `"off"` — opt-in するまで既存挙動完全一致
+
+### 設定例
+
+```yaml
+profiles:
+  - name: long-session
+    providers: [ollama-qwen3]
+    context_budget_action: trim          # off | warn | trim
+    context_budget_warn_threshold: 0.80  # ratio で警告
+    context_budget_trim_threshold: 0.90  # ratio で自動 trim
+    context_budget_trim_target: 0.75     # trim 後の目標充填率
+    context_budget_preserve_last_n: 4    # 直近 N messages は必ず保持
+
+providers:
+  - name: ollama-qwen3
+    base_url: http://localhost:11434/v1
+    model: qwen3:30b-a3b
+    max_context_tokens: 32768            # 明示 (registry に乗ってない場合)
+```
+
+### Files touched (主要)
+
+```
+A  coderouter/token_estimation.py
+A  coderouter/guards/context_budget.py
+M  coderouter/config/schemas.py
+M  coderouter/routing/fallback.py
+M  coderouter/routing/auto_router.py
+M  coderouter/ingress/anthropic_routes.py
+M  coderouter/logging.py
+M  coderouter/metrics/collector.py
+M  coderouter/metrics/prometheus.py
+M  coderouter/cli_stats.py
+M  coderouter/data/model-capabilities.yaml
+A  tests/test_token_estimation.py
+A  tests/test_context_budget.py
+M  tests/test_ingress_anthropic.py
+M  tests/test_metrics_collector.py
+M  tests/test_metrics_prometheus.py
+A  docs/inside/v2.0-F-context-budget-plan.md
+```
+
+---
+
 ## [v1.10.1] — 2026-05-04 (Patch — tool-aware auto routing + Raspberry Pi starter)
 
 **Theme: 「ローカル小型モデルでは tool calling できないので tool-laden な request だけクラウドに逃がしたい」というユースケース (OpenClaw + Pi 8GB シナリオ) を declarative に解決。** v1.10.0 で feature complete を宣言した auto_router の 6 matcher を 7 matcher に拡張、`has_tools` を追加して「tools[] を宣言したリクエストか否か」で profile を分岐できるように。併せて Raspberry Pi 8GB 向けの starter YAML (`examples/providers.raspberrypi.yaml`) を同梱、SBC 上で OpenClaw / Claude Code 互換 agent を回すユーザーが yaml 1 個 copy するだけで動く状態にした。
