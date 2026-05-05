@@ -179,6 +179,154 @@ def _apply_tool_loop_guard(
     return request
 
 
+# ---------------------------------------------------------------------------
+# v2.0-F (L1): context budget guard
+#
+# Detects when the inbound request's estimated token count approaches
+# the target provider's context window. Runs after tool-loop detection,
+# before chain dispatch. Two action paths:
+#   * ``warn`` — emit a structured log. Does NOT mutate the request.
+#   * ``trim`` — ``warn`` + remove old messages to fit within budget.
+#     Returns a mutated request (the engine sends the shortened version).
+#
+# The guard needs the first provider's max_context_tokens to compute
+# the budget. It receives the resolved chain (post-_resolve_anthropic_chain)
+# and reads the first adapter's config. This is the "most likely to serve"
+# provider; if it fails and the chain falls through to a provider with a
+# different context window, the budget may be slightly off — acceptable
+# because trim is conservative (targets 75%, not 100%).
+# ---------------------------------------------------------------------------
+
+
+def _resolve_max_context_tokens(
+    provider_config: ProviderConfig,
+) -> int:
+    """Resolve the effective max_context_tokens for a provider.
+
+    Precedence:
+      1. ProviderConfig.max_context_tokens (explicit declaration)
+      2. CapabilityRegistry lookup (model-capabilities.yaml)
+      3. DEFAULT_MAX_CONTEXT_TOKENS (128K fallback)
+    """
+    from coderouter.token_estimation import DEFAULT_MAX_CONTEXT_TOKENS
+
+    # 1. Explicit provider-level declaration
+    if provider_config.max_context_tokens is not None:
+        return provider_config.max_context_tokens
+
+    # 2. Registry lookup
+    from coderouter.routing.capability import get_default_registry
+
+    registry = get_default_registry()
+    resolved = registry.lookup(kind=provider_config.kind, model=provider_config.model or "")
+    if resolved.max_context_tokens is not None:
+        return resolved.max_context_tokens
+
+    # 3. Fallback
+    return DEFAULT_MAX_CONTEXT_TOKENS
+
+
+def _apply_context_budget_guard(
+    request: AnthropicRequest,
+    *,
+    config: CodeRouterConfig,
+    first_provider_config: ProviderConfig | None,
+) -> tuple[AnthropicRequest, bool]:
+    """Run the L1 context-budget guard and apply the configured action.
+
+    Returns ``(request, warned)`` — the (possibly trimmed) request and
+    a boolean indicating whether a warning was emitted (so the ingress
+    can attach the response header).
+
+    Parameters
+    ----------
+    request
+        Inbound Anthropic request (post-tool-loop-guard).
+    config
+        Full CodeRouter config (for profile resolution).
+    first_provider_config
+        The ProviderConfig of the first adapter in the resolved chain.
+        Used to determine max_context_tokens. None → guard is a no-op.
+    """
+    from coderouter.guards.context_budget import (
+        estimate_context_usage,
+        trim_to_budget,
+    )
+    from coderouter.logging import (
+        log_context_budget_trimmed,
+        log_context_budget_warning,
+    )
+
+    if first_provider_config is None:
+        return request, False
+
+    # Resolve profile
+    chosen = request.profile or config.default_profile
+    try:
+        profile = config.profile_by_name(chosen)
+    except (KeyError, ValueError):
+        return request, False
+
+    # Check if guard is enabled
+    if profile.context_budget_action == "off":
+        return request, False
+
+    # Resolve context window
+    max_ctx = _resolve_max_context_tokens(first_provider_config)
+
+    # Estimate usage
+    estimate = estimate_context_usage(
+        request,
+        max_context_tokens=max_ctx,
+        warn_threshold=profile.context_budget_warn_threshold,
+        trim_threshold=profile.context_budget_trim_threshold,
+    )
+
+    # Not over any threshold → pass through
+    if not estimate.over_warn_threshold:
+        return request, False
+
+    # Over warn threshold → emit warning
+    log_context_budget_warning(
+        logger,
+        provider=first_provider_config.name,
+        profile=profile.name,
+        estimated_tokens=estimate.estimated_tokens,
+        max_context_tokens=estimate.max_context_tokens,
+        usage_ratio=estimate.usage_ratio,
+        action=profile.context_budget_action,
+    )
+
+    # If action is warn-only, or not over trim threshold → done
+    if profile.context_budget_action == "warn" or not estimate.over_trim_threshold:
+        return request, True
+
+    # Over trim threshold + action is trim → trim messages
+    trimmed_request, trim_result = trim_to_budget(
+        request,
+        max_context_tokens=max_ctx,
+        trim_target=profile.context_budget_trim_target,
+        preserve_last_n=profile.context_budget_preserve_last_n,
+    )
+
+    if trim_result.messages_removed > 0:
+        log_context_budget_trimmed(
+            logger,
+            provider=first_provider_config.name,
+            profile=profile.name,
+            messages_removed=trim_result.messages_removed,
+            messages_before=trim_result.messages_before,
+            messages_after=trim_result.messages_after,
+            estimated_tokens_before=trim_result.estimated_tokens_before,
+            estimated_tokens_after=trim_result.estimated_tokens_after,
+            max_context_tokens=max_ctx,
+        )
+        return trimmed_request, True
+
+    # Trim couldn't remove anything (e.g. only preserve_last_n messages)
+    return request, True
+
+
 def _emit_cache_observed(
     response: AnthropicResponse,
     *,
@@ -1174,6 +1322,15 @@ class FallbackEngine:
         # ingress converts to a 400 response.
         request = _apply_tool_loop_guard(request, config=self.config)
         chain = self._resolve_anthropic_chain(request)
+
+        # v2.0-F (L1): context budget guard runs after chain resolution
+        # (needs the first provider's max_context_tokens). May trim the
+        # request's messages if over the trim threshold.
+        first_provider_config = chain[0][0].config if chain else None
+        request, _ctx_warned = _apply_context_budget_guard(
+            request, config=self.config, first_provider_config=first_provider_config,
+        )
+
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
@@ -1332,6 +1489,13 @@ class FallbackEngine:
         # v1.9-E (L3): tool-loop guard mirrors the non-streaming path.
         request = _apply_tool_loop_guard(request, config=self.config)
         chain = self._resolve_anthropic_chain(request)
+
+        # v2.0-F (L1): context budget guard mirrors the non-streaming path.
+        first_provider_config = chain[0][0].config if chain else None
+        request, _ctx_warned = _apply_context_budget_guard(
+            request, config=self.config, first_provider_config=first_provider_config,
+        )
+
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None

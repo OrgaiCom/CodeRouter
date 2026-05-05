@@ -230,6 +230,18 @@ class ProviderConfig(BaseModel):
             "Anthropic) from normal input — see :class:`CostConfig`."
         ),
     )
+    max_context_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "v2.0-F (L1): explicit declaration of this provider's "
+            "context window size in tokens. When set, takes precedence "
+            "over the ``model-capabilities.yaml`` registry lookup. "
+            "When both are unset, the context budget guard falls back "
+            "to 128000 (128K). Examples: Ollama Qwen3 32K → 32768, "
+            "LM Studio Qwen3.5 128K → 131072, Anthropic Claude → 200000."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_output_filters_known(self) -> ProviderConfig:
@@ -442,6 +454,80 @@ class FallbackChain(BaseModel):
             "(binary HEALTHY/UNHEALTHY backend swap, planned for "
             "v1.9-E phase 3): C handles the gradient case during normal "
             "operation, L5 handles hard crashes."
+        ),
+    )
+    # v2.0-F (L1): context budget guard.
+    #
+    # Long-running agent sessions accumulate messages that eventually
+    # exceed the target model's context window. Without intervention,
+    # the backend returns a 400 (Anthropic) or silently truncates
+    # (Ollama), killing the agent session. The context budget guard
+    # estimates the request's token count (char/4 heuristic, shared
+    # with the auto_router longContext matcher) and compares it against
+    # the target provider's declared max_context_tokens.
+    #
+    # Three actions:
+    #   * ``off``  — no detection, no logging. Backward-compat default.
+    #   * ``warn`` — emit ``context-budget-warning`` log + attach
+    #                ``X-CodeRouter-Context-Budget: warning`` response
+    #                header. No request mutation.
+    #   * ``trim`` — ``warn`` + remove oldest non-system messages until
+    #                the estimated token count drops below
+    #                ``context_budget_trim_target``. Recent messages
+    #                (``context_budget_preserve_last_n``) are always
+    #                kept, and tool_use / tool_result pairs are preserved
+    #                atomically to avoid breaking agent loops.
+    context_budget_action: Literal["off", "warn", "trim"] = Field(
+        default="off",
+        description=(
+            "v2.0-F (L1): action when estimated request tokens approach "
+            "the target provider's context window. ``off`` (default) "
+            "disables the guard entirely. ``warn`` emits a log and "
+            "response header at ``context_budget_warn_threshold``. "
+            "``trim`` additionally removes old messages at "
+            "``context_budget_trim_threshold`` to reclaim context space."
+        ),
+    )
+    context_budget_warn_threshold: float = Field(
+        default=0.80,
+        ge=0.1,
+        le=1.0,
+        description=(
+            "v2.0-F (L1): context usage ratio (estimated_tokens / "
+            "max_context_tokens) at which a warning is emitted. "
+            "Default 0.80 (80%) gives early notice before trim fires."
+        ),
+    )
+    context_budget_trim_threshold: float = Field(
+        default=0.90,
+        ge=0.1,
+        le=1.0,
+        description=(
+            "v2.0-F (L1): context usage ratio at which trim fires "
+            "(only when ``context_budget_action`` is ``trim``). "
+            "Default 0.90 (90%) leaves a 10% margin for the backend's "
+            "own token counting to differ from the char/4 estimate."
+        ),
+    )
+    context_budget_trim_target: float = Field(
+        default=0.75,
+        ge=0.1,
+        le=1.0,
+        description=(
+            "v2.0-F (L1): target context usage ratio after trim. "
+            "Messages are removed from the front until the estimate "
+            "drops below this ratio. Default 0.75 (75%) gives headroom "
+            "for several more turns before trim fires again."
+        ),
+    )
+    context_budget_preserve_last_n: int = Field(
+        default=4,
+        ge=1,
+        le=100,
+        description=(
+            "v2.0-F (L1): minimum number of recent messages to always "
+            "preserve when trimming. Default 4 (2 user-assistant pairs) "
+            "keeps the agent's immediate working context intact."
         ),
     )
 

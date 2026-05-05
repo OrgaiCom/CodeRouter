@@ -1012,3 +1012,92 @@ def classify_cache_outcome(
     if cache_creation_input_tokens > 0:
         return "cache_creation"
     return "no_cache"
+
+
+# ---------------------------------------------------------------------------
+# v2.0-F (L1): context budget guard logging
+# ---------------------------------------------------------------------------
+
+
+class ContextBudgetWarningPayload(TypedDict):
+    """Structured shape of the ``context-budget-warning`` log record."""
+
+    provider: str
+    profile: str
+    estimated_tokens: int
+    max_context_tokens: int
+    usage_ratio: float
+    action: str
+
+
+def log_context_budget_warning(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    estimated_tokens: int,
+    max_context_tokens: int,
+    usage_ratio: float,
+    action: str,
+) -> None:
+    """Emit a ``context-budget-warning`` warning line.
+
+    Warning level because this indicates the request is approaching a
+    failure boundary. Unlike memory-pressure (where the chain can fall
+    through), context overflow affects the entire request regardless of
+    which provider serves it.
+    """
+    payload: ContextBudgetWarningPayload = {
+        "provider": provider,
+        "profile": profile,
+        "estimated_tokens": estimated_tokens,
+        "max_context_tokens": max_context_tokens,
+        "usage_ratio": round(usage_ratio, 3),
+        "action": action,
+    }
+    logger.warning("context-budget-warning", extra=payload)
+
+
+class ContextBudgetTrimmedPayload(TypedDict):
+    """Structured shape of the ``context-budget-trimmed`` log record."""
+
+    provider: str
+    profile: str
+    messages_removed: int
+    messages_before: int
+    messages_after: int
+    estimated_tokens_before: int
+    estimated_tokens_after: int
+    max_context_tokens: int
+
+
+def log_context_budget_trimmed(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    messages_removed: int,
+    messages_before: int,
+    messages_after: int,
+    estimated_tokens_before: int,
+    estimated_tokens_after: int,
+    max_context_tokens: int,
+) -> None:
+    """Emit a ``context-budget-trimmed`` info line.
+
+    Info level (not warn) because the trim action successfully
+    resolved the budget pressure — the request will proceed with
+    reduced context. The warning was already emitted by
+    :func:`log_context_budget_warning`.
+    """
+    payload: ContextBudgetTrimmedPayload = {
+        "provider": provider,
+        "profile": profile,
+        "messages_removed": messages_removed,
+        "messages_before": messages_before,
+        "messages_after": messages_after,
+        "estimated_tokens_before": estimated_tokens_before,
+        "estimated_tokens_after": estimated_tokens_after,
+        "max_context_tokens": max_context_tokens,
+    }
+    logger.info("context-budget-trimmed", extra=payload)

@@ -214,44 +214,10 @@ def _match_rule(
     return False  # pragma: no cover — _exactly_one guards against this
 
 
-# Char-to-token ratio for the longContext heuristic. 4 chars ≈ 1 token
-# is OpenAI's documented rule of thumb for English; CJK runs roughly
-# 1:1 (so the heuristic *under*-counts there, which is conservative —
-# operators won't accidentally route a 100k CJK char prompt to a 200k
-# Anthropic ctx model expecting ~25k tokens). Operators who care can
-# tune the threshold; the alternative (tiktoken / SentencePiece) is
-# blocked by the 5-deps invariant in plan.md §5.4.
-_CHARS_PER_TOKEN_HEURISTIC: int = 4
-
-
-def _estimate_total_tokens(body: dict[str, Any]) -> int:
-    """Estimate the prompt's token count via char/4 across all messages.
-
-    Walks every message's ``content`` (string or list-of-blocks form,
-    same shape :func:`_extract_text` accepts) and sums the character
-    counts, then divides by :data:`_CHARS_PER_TOKEN_HEURISTIC`. Image
-    blocks contribute 0 — they're billed differently and don't fill
-    the text-token side of the context window in any provider.
-
-    System prompts (``body["system"]``) are also counted because they
-    sit in the same context window as the message history.
-    """
-    total_chars = 0
-    system = body.get("system")
-    if isinstance(system, str):
-        total_chars += len(system)
-    elif isinstance(system, list):
-        for block in system:
-            if isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    total_chars += len(text)
-    messages = body.get("messages")
-    if isinstance(messages, list):
-        for msg in messages:
-            if isinstance(msg, dict):
-                total_chars += len(_extract_text(msg))
-    return total_chars // _CHARS_PER_TOKEN_HEURISTIC
+# v2.0-F: token estimation logic moved to coderouter.token_estimation
+# (shared with context_budget guard). Import with local alias for
+# backwards compat with internal call sites in this module.
+from coderouter.token_estimation import estimate_tokens_from_body as _estimate_total_tokens
 
 
 def _extract_model(body: dict[str, Any]) -> str | None:
