@@ -298,3 +298,112 @@ class TestConfigSchema:
                 providers=["p1"],
                 context_budget_action="compress",  # not valid
             )
+
+
+# ---------------------------------------------------------------------------
+# Group 4: Engine integration (apply_context_budget public method)
+# ---------------------------------------------------------------------------
+
+
+class TestEngineApplyContextBudget:
+    """Integration tests for FallbackEngine.apply_context_budget().
+
+    Exercises the full path: profile resolution → chain lookup →
+    guard dispatch → status string, without network calls.
+    """
+
+    def _make_config(
+        self,
+        action: str = "off",
+        max_context_tokens: int = 100,
+        warn_threshold: float = 0.80,
+        trim_threshold: float = 0.90,
+        trim_target: float = 0.75,
+    ) -> "CodeRouterConfig":
+        from coderouter.config.schemas import CodeRouterConfig
+
+        return CodeRouterConfig(
+            allow_paid=False,
+            default_profile="default",
+            providers=[
+                ProviderConfig(
+                    name="local",
+                    base_url="http://localhost:8080/v1",
+                    model="qwen3",
+                    max_context_tokens=max_context_tokens,
+                ),
+            ],
+            profiles=[
+                FallbackChain(
+                    name="default",
+                    providers=["local"],
+                    context_budget_action=action,
+                    context_budget_warn_threshold=warn_threshold,
+                    context_budget_trim_threshold=trim_threshold,
+                    context_budget_trim_target=trim_target,
+                ),
+            ],
+        )
+
+    def _make_engine(self, config: "CodeRouterConfig"):
+        from coderouter.routing import FallbackEngine
+
+        return FallbackEngine(config)
+
+    def test_off_returns_none(self):
+        """action=off → guard is no-op, status is None."""
+        config = self._make_config(action="off")
+        engine = self._make_engine(config)
+        request = _make_request([("user", "x" * 400)])  # 100 tokens = 100% of 100
+        result_req, status = engine.apply_context_budget(request)
+        assert status is None
+        assert len(result_req.messages) == 1  # unchanged
+
+    def test_warn_below_threshold_returns_none(self):
+        """action=warn but below warn threshold → None."""
+        config = self._make_config(action="warn", max_context_tokens=1000)
+        engine = self._make_engine(config)
+        request = _make_request([("user", "x" * 100)])  # 25 tokens / 1000 = 2.5%
+        _, status = engine.apply_context_budget(request)
+        assert status is None
+
+    def test_warn_over_threshold_returns_warning(self):
+        """action=warn and over warn threshold → 'warning'."""
+        config = self._make_config(action="warn", max_context_tokens=100)
+        engine = self._make_engine(config)
+        # 85 tokens * 4 = 340 chars → 85% > 80% warn threshold
+        request = _make_request([("user", "x" * 340)])
+        result_req, status = engine.apply_context_budget(request)
+        assert status == "warning"
+        assert len(result_req.messages) == 1  # not trimmed (warn only)
+
+    def test_trim_over_trim_threshold_returns_trimmed(self):
+        """action=trim and over trim threshold → 'trimmed'."""
+        config = self._make_config(
+            action="trim",
+            max_context_tokens=100,
+            warn_threshold=0.80,
+            trim_threshold=0.90,
+            trim_target=0.50,
+        )
+        engine = self._make_engine(config)
+        # 10 messages of ~25 tokens each = ~250 tokens, well over 90%
+        request = _make_long_request(10, chars_per_msg=96)
+        result_req, status = engine.apply_context_budget(request)
+        assert status == "trimmed"
+        assert len(result_req.messages) < 10  # messages were removed
+
+    def test_trim_over_warn_but_below_trim_returns_warning(self):
+        """action=trim, over warn but below trim → 'warning' (no trim)."""
+        config = self._make_config(
+            action="trim",
+            max_context_tokens=100,
+            warn_threshold=0.80,
+            trim_threshold=0.95,
+        )
+        engine = self._make_engine(config)
+        # 85% usage → over warn (80%) but under trim (95%)
+        request = _make_request([("user", "x" * 340)])
+        result_req, status = engine.apply_context_budget(request)
+        assert status == "warning"
+        assert len(result_req.messages) == 1  # not trimmed

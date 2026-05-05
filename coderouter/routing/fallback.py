@@ -231,12 +231,14 @@ def _apply_context_budget_guard(
     *,
     config: CodeRouterConfig,
     first_provider_config: ProviderConfig | None,
-) -> tuple[AnthropicRequest, bool]:
+) -> tuple[AnthropicRequest, str | None]:
     """Run the L1 context-budget guard and apply the configured action.
 
-    Returns ``(request, warned)`` — the (possibly trimmed) request and
-    a boolean indicating whether a warning was emitted (so the ingress
-    can attach the response header).
+    Returns ``(request, status)`` — the (possibly trimmed) request and
+    a status string for the response header:
+      * ``None``       — guard inactive or below all thresholds.
+      * ``"warning"``  — over warn threshold but not trimmed.
+      * ``"trimmed"``  — messages were removed to fit the budget.
 
     Parameters
     ----------
@@ -258,18 +260,18 @@ def _apply_context_budget_guard(
     )
 
     if first_provider_config is None:
-        return request, False
+        return request, None
 
     # Resolve profile
     chosen = request.profile or config.default_profile
     try:
         profile = config.profile_by_name(chosen)
     except (KeyError, ValueError):
-        return request, False
+        return request, None
 
     # Check if guard is enabled
     if profile.context_budget_action == "off":
-        return request, False
+        return request, None
 
     # Resolve context window
     max_ctx = _resolve_max_context_tokens(first_provider_config)
@@ -284,7 +286,7 @@ def _apply_context_budget_guard(
 
     # Not over any threshold → pass through
     if not estimate.over_warn_threshold:
-        return request, False
+        return request, None
 
     # Over warn threshold → emit warning
     log_context_budget_warning(
@@ -299,7 +301,7 @@ def _apply_context_budget_guard(
 
     # If action is warn-only, or not over trim threshold → done
     if profile.context_budget_action == "warn" or not estimate.over_trim_threshold:
-        return request, True
+        return request, "warning"
 
     # Over trim threshold + action is trim → trim messages
     trimmed_request, trim_result = trim_to_budget(
@@ -321,10 +323,10 @@ def _apply_context_budget_guard(
             estimated_tokens_after=trim_result.estimated_tokens_after,
             max_context_tokens=max_ctx,
         )
-        return trimmed_request, True
+        return trimmed_request, "trimmed"
 
     # Trim couldn't remove anything (e.g. only preserve_last_n messages)
-    return request, True
+    return request, "warning"
 
 
 def _emit_cache_observed(
@@ -1314,6 +1316,32 @@ class FallbackEngine:
     #       call the OpenAI-shaped methods, translate the result back.
     #       Tool-call repair + v0.3-D downgrade happen on this path.
 
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        """Run the L1 context-budget guard pre-emptively.
+
+        Returns ``(request, header_value)`` where ``header_value`` is:
+          * ``None``       — guard inactive or below all thresholds.
+          * ``"warning"``  — over warn threshold (logged, not trimmed).
+          * ``"trimmed"``  — messages were removed to fit the budget.
+
+        The ingress calls this **before** ``generate_anthropic`` /
+        ``stream_anthropic`` so the response header
+        ``X-CodeRouter-Context-Budget`` can be set even for streaming
+        responses (whose HTTP headers commit before the async generator
+        starts iterating).
+
+        The returned request (possibly trimmed) should be passed to the
+        engine method; the engine will skip the guard on the second pass
+        since the request is already under threshold.
+        """
+        chain = self._resolve_anthropic_chain(request)
+        first_provider_config = chain[0][0].config if chain else None
+        return _apply_context_budget_guard(
+            request, config=self.config, first_provider_config=first_provider_config,
+        )
+
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
         # v1.9-E (L3): tool-loop guard runs before chain dispatch so the
@@ -1326,8 +1354,11 @@ class FallbackEngine:
         # v2.0-F (L1): context budget guard runs after chain resolution
         # (needs the first provider's max_context_tokens). May trim the
         # request's messages if over the trim threshold.
+        # NOTE: When called from the ingress via apply_context_budget()
+        # first, the request is already under threshold — this is a
+        # cheap no-op re-check (estimate < threshold → returns None).
         first_provider_config = chain[0][0].config if chain else None
-        request, _ctx_warned = _apply_context_budget_guard(
+        request, _ctx_status = _apply_context_budget_guard(
             request, config=self.config, first_provider_config=first_provider_config,
         )
 
@@ -1491,8 +1522,9 @@ class FallbackEngine:
         chain = self._resolve_anthropic_chain(request)
 
         # v2.0-F (L1): context budget guard mirrors the non-streaming path.
+        # See apply_context_budget() note — usually a no-op re-check here.
         first_provider_config = chain[0][0].config if chain else None
-        request, _ctx_warned = _apply_context_budget_guard(
+        request, _ctx_status = _apply_context_budget_guard(
             request, config=self.config, first_provider_config=first_provider_config,
         )
 

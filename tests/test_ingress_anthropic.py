@@ -74,6 +74,11 @@ class _RecordingEngine:
         self.seen_profiles: list[str | None] = []
         self.seen_requests: list[AnthropicRequest] = []
 
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        return request, None
+
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         self.seen_profiles.append(request.profile)
         self.seen_requests.append(request)
@@ -149,6 +154,11 @@ class _FailingEngine:
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
 
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        return request, None
+
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         raise NoProvidersAvailableError(self.profile, [])
 
@@ -170,6 +180,11 @@ class _MidStreamFailingEngine:
     def __init__(self, provider: str = "local") -> None:
         self.provider = provider
         self.stream_calls = 0
+
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        return request, None
 
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         raise AssertionError("generate_anthropic should not be called in stream tests")
@@ -239,6 +254,11 @@ class _LoopBreakingEngine:
 
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
+
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        return request, None
 
     def _make_error(self) -> ToolLoopBreakError:
         return ToolLoopBreakError(
@@ -837,3 +857,116 @@ def test_break_action_streaming_emits_invalid_request_error_event(
     assert tl["window"] == 5
     # Same hygiene as the non-streaming path: no args_canonical leakage.
     assert "args_canonical" not in tl
+
+
+# ----------------------------------------------------------------------
+# v2.0-F (L1): X-CodeRouter-Context-Budget response header
+#
+# The ingress calls engine.apply_context_budget() before dispatching to
+# generate/stream and attaches the header when the guard fires.
+# ----------------------------------------------------------------------
+
+
+class _ContextBudgetEngine(_RecordingEngine):
+    """Engine that reports a context-budget status.
+
+    Simulates the ``apply_context_budget`` call returning "warning" or
+    "trimmed" so the ingress can attach the response header.
+    """
+
+    def __init__(self, budget_status: str | None = None) -> None:
+        super().__init__()
+        self._budget_status = budget_status
+
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        return request, self._budget_status
+
+
+@pytest.fixture
+def client_and_budget_engine_warning(
+    two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _ContextBudgetEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: two_profile_config,
+    )
+    app = create_app()
+    engine = _ContextBudgetEngine(budget_status="warning")
+    app.state.engine = engine
+    app.state.config = two_profile_config
+    return TestClient(app), engine
+
+
+@pytest.fixture
+def client_and_budget_engine_trimmed(
+    two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _ContextBudgetEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: two_profile_config,
+    )
+    app = create_app()
+    engine = _ContextBudgetEngine(budget_status="trimmed")
+    app.state.engine = engine
+    app.state.config = two_profile_config
+    return TestClient(app), engine
+
+
+class TestContextBudgetHeader:
+    """v2.0-F: X-CodeRouter-Context-Budget response header."""
+
+    def test_no_header_when_guard_inactive(
+        self, client_and_engine: tuple[TestClient, _RecordingEngine]
+    ) -> None:
+        """No header when the guard returns None (inactive / below threshold)."""
+        client, _ = client_and_engine
+        resp = client.post("/v1/messages", json=_MINIMAL_BODY)
+        assert resp.status_code == 200
+        assert "x-coderouter-context-budget" not in resp.headers
+
+    def test_warning_header_non_streaming(
+        self,
+        client_and_budget_engine_warning: tuple[TestClient, _ContextBudgetEngine],
+    ) -> None:
+        """Non-streaming: header value is 'warning' when over warn threshold."""
+        client, _ = client_and_budget_engine_warning
+        resp = client.post("/v1/messages", json=_MINIMAL_BODY)
+        assert resp.status_code == 200
+        assert resp.headers.get("x-coderouter-context-budget") == "warning"
+
+    def test_trimmed_header_non_streaming(
+        self,
+        client_and_budget_engine_trimmed: tuple[TestClient, _ContextBudgetEngine],
+    ) -> None:
+        """Non-streaming: header value is 'trimmed' when messages removed."""
+        client, _ = client_and_budget_engine_trimmed
+        resp = client.post("/v1/messages", json=_MINIMAL_BODY)
+        assert resp.status_code == 200
+        assert resp.headers.get("x-coderouter-context-budget") == "trimmed"
+
+    def test_warning_header_streaming(
+        self,
+        client_and_budget_engine_warning: tuple[TestClient, _ContextBudgetEngine],
+    ) -> None:
+        """Streaming: header is present on the SSE response."""
+        client, _ = client_and_budget_engine_warning
+        body = {**_MINIMAL_BODY, "stream": True}
+        with client.stream("POST", "/v1/messages", json=body) as resp:
+            assert resp.status_code == 200
+            assert resp.headers.get("x-coderouter-context-budget") == "warning"
+            # Consume stream to avoid ResourceWarning
+            _ = b"".join(resp.iter_bytes())
+
+    def test_trimmed_header_streaming(
+        self,
+        client_and_budget_engine_trimmed: tuple[TestClient, _ContextBudgetEngine],
+    ) -> None:
+        """Streaming: header value is 'trimmed' when messages removed."""
+        client, _ = client_and_budget_engine_trimmed
+        body = {**_MINIMAL_BODY, "stream": True}
+        with client.stream("POST", "/v1/messages", json=body) as resp:
+            assert resp.status_code == 200
+            assert resp.headers.get("x-coderouter-context-budget") == "trimmed"
+            _ = b"".join(resp.iter_bytes())

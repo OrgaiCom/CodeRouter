@@ -23,7 +23,7 @@ v1.8.1 〜 v1.8.3 の実機検証 + コミュニティ報告 (X / Reddit / r/oll
   - Linux + CUDA でも基本同じ手順、`-DGGML_CUDA=ON` に置き換え
 - 推奨スペック: M3 Max 64GB (Q4_K_M で 22GB GGUF + KV cache + headroom が余裕で乗る)
   - 32GB Mac でも動くが headroom 少なめ
-- 必須ツール: `git`, `cmake`, `huggingface-cli` (`uv tool install huggingface_hub[cli]` で入る)
+- 必須ツール: `git`, `cmake`, `hf` CLI (`uv tool install huggingface_hub` で入る。旧名 `huggingface-cli` は `hf` に統合されました)
 - 所要時間: build 5-10 分 + GGUF download 5-10 分 (回線次第) ≒ 計 15-20 分
 
 ---
@@ -46,11 +46,13 @@ cmake --build build --config Release -j
 ### Step 2. Unsloth の GGUF をダウンロード
 
 ```bash
-# huggingface-cli が無ければ
-uv tool install huggingface_hub[cli]
+# hf CLI が無ければ (huggingface_hub に同梱)
+uv tool install huggingface_hub
+# あるいは standalone installer:
+#   curl -LsSf https://hf.co/cli/install.sh | bash
 
 # Q4_K_M variant (UD = Unsloth Dynamic Quantization、~22GB)
-huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
+hf download unsloth/Qwen3.6-35B-A3B-GGUF \
   --include "*UD-Q4_K_M*" "*tokenizer*" "*chat_template*" \
   --local-dir ~/models/qwen3.6-35b-a3b-unsloth
 
@@ -58,6 +60,8 @@ huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
 ls -lah ~/models/qwen3.6-35b-a3b-unsloth/
 # → Qwen3.6-35B-A3B-UD-Q4_K_M.gguf (~22GB) と tokenizer 関連ファイル
 ```
+
+> **旧 `huggingface-cli` からの移行**: コマンド名が `hf` に変わり、サブコマンド体系も更新されました (`huggingface-cli download` → `hf download`、`huggingface-cli login` → `hf auth login`)。本リポジトリの補助スクリプト [`gguf_dl.py`](../gguf_dl.py) を使えば、HF の URL を貼るだけで `hf download` 相当の処理を実行できます。
 
 > **`UD-Q4_K_M` の意味**: Unsloth Dynamic Quantization。同 GGUF サイズで通常の Q4_K_M より精度が高い variant。コミュニティ報告でも de facto 標準として使われています。
 >

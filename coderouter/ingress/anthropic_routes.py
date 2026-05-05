@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from coderouter.guards.tool_loop import ToolLoopBreakError
 from coderouter.logging import get_logger
@@ -48,6 +48,7 @@ _PROFILE_HEADER = "x-coderouter-profile"
 _MODE_HEADER = "x-coderouter-mode"
 _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 _ANTHROPIC_BETA_HEADER = "anthropic-beta"
+_CTX_BUDGET_HEADER = "X-CodeRouter-Context-Budget"
 
 
 @router.post("/messages", response_model=None)
@@ -131,11 +132,22 @@ async def messages(
                 detail=(f"unknown profile {anth_req.profile!r}. available: {available}"),
             ) from exc
 
+    # v2.0-F (L1): run context budget guard before dispatch so the
+    # response header can be set for both streaming and non-streaming.
+    # The engine's internal guard re-check is a cheap no-op.
+    anth_req, ctx_budget_status = engine.apply_context_budget(anth_req)
+
     if anth_req.stream:
+        stream_headers: dict[str, str] = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+        if ctx_budget_status:
+            stream_headers[_CTX_BUDGET_HEADER] = ctx_budget_status
         return StreamingResponse(
             _anthropic_sse_iterator(engine, anth_req),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=stream_headers,
         )
 
     try:
@@ -155,6 +167,11 @@ async def messages(
             detail=_tool_loop_break_detail(exc),
         ) from exc
 
+    if ctx_budget_status:
+        return JSONResponse(
+            content=anth_resp.model_dump(exclude_none=True),
+            headers={_CTX_BUDGET_HEADER: ctx_budget_status},
+        )
     return anth_resp.model_dump(exclude_none=True)
 
 

@@ -228,24 +228,49 @@ def _msg_to_dict(msg: Any) -> dict[str, Any]:
     return {"role": "user", "content": ""}
 
 
-def _has_tool_use(msg: Any) -> bool:
-    """True if the message contains a tool_use content block."""
-    content = msg.content if hasattr(msg, "content") else msg.get("content") if isinstance(msg, dict) else None
+def _get_content(msg: Any) -> Any:
+    """Extract the content field from a message (Pydantic model or dict)."""
+    if hasattr(msg, "content"):
+        return msg.content
+    if isinstance(msg, dict):
+        return msg.get("content")
+    return None
+
+
+def _extract_tool_use_ids(msg: Any) -> set[str]:
+    """Extract all tool_use IDs from a message's content blocks."""
+    content = _get_content(msg)
+    ids: set[str] = set()
     if isinstance(content, list):
         for block in content:
             if isinstance(block, dict) and block.get("type") == "tool_use":
-                return True
-    return False
+                tid = block.get("id")
+                if isinstance(tid, str):
+                    ids.add(tid)
+    return ids
+
+
+def _extract_tool_result_ids(msg: Any) -> set[str]:
+    """Extract all tool_use_ids referenced by tool_result blocks."""
+    content = _get_content(msg)
+    ids: set[str] = set()
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tid = block.get("tool_use_id")
+                if isinstance(tid, str):
+                    ids.add(tid)
+    return ids
+
+
+def _has_tool_use(msg: Any) -> bool:
+    """True if the message contains a tool_use content block."""
+    return len(_extract_tool_use_ids(msg)) > 0
 
 
 def _has_tool_result(msg: Any) -> bool:
     """True if the message contains a tool_result content block."""
-    content = msg.content if hasattr(msg, "content") else msg.get("content") if isinstance(msg, dict) else None
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                return True
-    return False
+    return len(_extract_tool_result_ids(msg)) > 0
 
 
 def _compute_preserve_set(
@@ -256,33 +281,60 @@ def _compute_preserve_set(
 
     Preserves:
       - The last ``preserve_last_n`` messages.
-      - tool_use/tool_result pair integrity: if a preserved message
-        has tool_result, also preserve the preceding assistant (tool_use).
-        If a preserved message has tool_use, also preserve the following
-        user (tool_result).
+      - tool_use/tool_result pair integrity via ``tool_use_id`` matching:
+        if a preserved message has a tool_result referencing an ID, also
+        preserve the message (anywhere in the conversation) that emitted
+        the matching tool_use. Conversely, if a preserved message has a
+        tool_use, also preserve the message carrying the matching
+        tool_result. This handles multi-tool calls (one assistant message
+        with N tool_use blocks, one user message with N tool_results) and
+        non-adjacent pairs.
+
+    The algorithm iterates until stable (fixpoint), handling chains of
+    dependencies (e.g., preserving a tool_result pulls in its tool_use
+    assistant message, which might have another tool_use whose tool_result
+    also needs preserving).
     """
     n = len(messages)
     if preserve_last_n >= n:
         return set(range(n))
 
+    # Pre-compute tool ID mappings for efficient lookup
+    # tool_use_id → index of the message containing that tool_use
+    tool_use_index: dict[str, int] = {}
+    # tool_use_id → index of the message containing the matching tool_result
+    tool_result_index: dict[str, int] = {}
+
+    for i, msg in enumerate(messages):
+        for tid in _extract_tool_use_ids(msg):
+            tool_use_index[tid] = i
+        for tid in _extract_tool_result_ids(msg):
+            tool_result_index[tid] = i
+
     preserved: set[int] = set(range(n - preserve_last_n, n))
 
-    # Expand to cover tool pairs — iterate until stable
+    # Expand to cover tool pairs via ID matching — iterate until stable
     changed = True
     while changed:
         changed = False
         for idx in list(preserved):
             msg = messages[idx]
-            # If this message has tool_result, preserve the preceding
-            # assistant message (which should have the matching tool_use)
-            if _has_tool_result(msg) and idx > 0 and idx - 1 not in preserved:
-                preserved.add(idx - 1)
-                changed = True
-            # If this message has tool_use, preserve the following
-            # user message (which should have the matching tool_result)
-            if _has_tool_use(msg) and idx < n - 1 and idx + 1 not in preserved:
-                preserved.add(idx + 1)
-                changed = True
+
+            # If this message has tool_results, preserve the messages
+            # that contain the matching tool_use blocks
+            for tid in _extract_tool_result_ids(msg):
+                use_idx = tool_use_index.get(tid)
+                if use_idx is not None and use_idx not in preserved:
+                    preserved.add(use_idx)
+                    changed = True
+
+            # If this message has tool_use blocks, preserve the messages
+            # that contain the matching tool_results
+            for tid in _extract_tool_use_ids(msg):
+                result_idx = tool_result_index.get(tid)
+                if result_idx is not None and result_idx not in preserved:
+                    preserved.add(result_idx)
+                    changed = True
 
     return preserved
 
