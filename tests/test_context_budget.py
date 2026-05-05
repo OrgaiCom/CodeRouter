@@ -12,22 +12,19 @@ Three test groups:
 from __future__ import annotations
 
 import pytest
-
-from coderouter.config.schemas import FallbackChain, ProviderConfig
+from pydantic import ValidationError
 
 # Import adapters/routing first to resolve the circular import between
 # coderouter.translation.convert ↔ coderouter.adapters.anthropic_native.
 # conftest loads schemas first, then test_memory_pressure loads these in
 # this order and it works; replicating the pattern here.
 from coderouter.adapters.base import BaseAdapter  # noqa: F401
+from coderouter.config.schemas import CodeRouterConfig, FallbackChain, ProviderConfig
 from coderouter.guards.context_budget import (
-    ContextBudgetEstimate,
-    TrimResult,
     estimate_context_usage,
     trim_to_budget,
 )
 from coderouter.translation.anthropic import AnthropicMessage, AnthropicRequest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -150,7 +147,7 @@ class TestTrimToBudget:
         # max_context = 1000, target = 0.75 → target_tokens = 750
         # Should keep last 4 and remove the rest
         request = _make_long_request(20, chars_per_msg=96)  # ~25 tokens each
-        trimmed, result = trim_to_budget(
+        trimmed, _result = trim_to_budget(
             request,
             max_context_tokens=1000,
             trim_target=0.75,
@@ -199,7 +196,7 @@ class TestTrimToBudget:
             ("assistant", "All done!"),
         ]
         request = _make_request(messages, system="System " + "z" * 100)
-        trimmed, result = trim_to_budget(
+        trimmed, _result = trim_to_budget(
             request,
             max_context_tokens=100,  # force aggressive trim
             trim_target=0.50,
@@ -230,7 +227,7 @@ class TestTrimToBudget:
     def test_minimum_floor(self):
         """Even with aggressive trim, at least 2 messages are kept."""
         request = _make_long_request(20, chars_per_msg=400)
-        trimmed, result = trim_to_budget(
+        trimmed, _result = trim_to_budget(
             request,
             max_context_tokens=10,  # impossibly small
             trim_target=0.50,
@@ -283,7 +280,7 @@ class TestConfigSchema:
 
     def test_threshold_bounds(self):
         """Thresholds must be between 0.1 and 1.0."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises((ValueError, ValidationError)):
             FallbackChain(
                 name="test",
                 providers=["p1"],
@@ -292,7 +289,7 @@ class TestConfigSchema:
 
     def test_action_literals(self):
         """Only off/warn/trim are accepted."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises((ValueError, ValidationError)):
             FallbackChain(
                 name="test",
                 providers=["p1"],
@@ -319,9 +316,7 @@ class TestEngineApplyContextBudget:
         warn_threshold: float = 0.80,
         trim_threshold: float = 0.90,
         trim_target: float = 0.75,
-    ) -> "CodeRouterConfig":
-        from coderouter.config.schemas import CodeRouterConfig
-
+    ) -> CodeRouterConfig:
         return CodeRouterConfig(
             allow_paid=False,
             default_profile="default",
@@ -345,7 +340,7 @@ class TestEngineApplyContextBudget:
             ],
         )
 
-    def _make_engine(self, config: "CodeRouterConfig"):
+    def _make_engine(self, config: CodeRouterConfig):
         from coderouter.routing import FallbackEngine
 
         return FallbackEngine(config)

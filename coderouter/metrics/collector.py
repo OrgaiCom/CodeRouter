@@ -340,12 +340,12 @@ class MetricsCollector(logging.Handler):
                 savings_usd_raw = extras.get("cost_savings_usd", 0.0)
                 cost_usd = (
                     float(cost_usd_raw)
-                    if isinstance(cost_usd_raw, (int, float))
+                    if isinstance(cost_usd_raw, int | float)
                     else 0.0
                 )
                 savings_usd = (
                     float(savings_usd_raw)
-                    if isinstance(savings_usd_raw, (int, float))
+                    if isinstance(savings_usd_raw, int | float)
                     else 0.0
                 )
                 if cost_usd > 0.0:
@@ -365,7 +365,7 @@ class MetricsCollector(logging.Handler):
                 self._context_budget_warnings_total += 1
                 self._context_budget_warnings_by_profile[profile] += 1
                 ratio_raw = extras.get("usage_ratio")
-                if isinstance(ratio_raw, (int, float)):
+                if isinstance(ratio_raw, int | float):
                     self._context_budget_latest_ratio[profile] = float(ratio_raw)
             elif event == "context-budget-trimmed":
                 # v2.0-F (L1): messages were removed to fit the budget.

@@ -1034,6 +1034,15 @@ profiles:
       Match Claude Sonnet's coding style: terse, structured, tools used precisely.
       Prefer code blocks over prose. Avoid filler explanations unless asked.
       When using tools, batch independent operations in parallel.
+    # v2.0.0: Context Budget Management — 長時間 session の context overflow 防止
+    # 8h+ の agentic session で context window に漸近 → 400 で死ぬ問題を自動防止。
+    # "trim" にすると 90% 超過時に古い messages を自動削除 (tool pair は保全)。
+    # 詳細: docs/context-budget.md
+    context_budget_action: trim            # off | warn | trim
+    context_budget_warn_threshold: 0.80    # 80% で warning (header + log)
+    context_budget_trim_threshold: 0.90    # 90% で自動 trim
+    context_budget_trim_target: 0.75       # trim 後 75% まで削減
+    context_budget_preserve_last_n: 4      # 直近 4 msg は常に保持
     providers:
       # llama-server で Qwen3.6:35b-a3b を直叩きできる人はこれが top-tier。
       # v1.8.3 実機検証で native tool_calls 完璧動作確認、Unsloth UD-Q4_K_M

@@ -376,7 +376,7 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             name="context_budget_usage_ratio",
             help_text=(
                 "Most recent context-window fill ratio (estimated_tokens / "
-                "max_context_tokens), by profile. Range 0.0–∞."
+                "max_context_tokens), by profile. Range 0.0-inf."
             ),
             samples=ratio_samples,
         )

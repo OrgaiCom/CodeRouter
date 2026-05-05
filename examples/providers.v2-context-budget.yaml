@@ -1,0 +1,111 @@
+# ============================================================
+# CodeRouter providers.yaml — v2.0-F Context Budget 検証用
+#
+# 目的:
+#   Context Budget Management (L1) の実機検証を最小構成で行う。
+#   閾値を本番より低く設定し、少量のパディングで warn / trim を
+#   トリガーできるようにしている。
+#
+# 使い方:
+#   1. cp examples/providers.v2-context-budget.yaml ~/.coderouter/providers.yaml
+#   2. Ollama (qwen3:32b) or LM Studio (qwen3.5) を起動
+#   3. coderouter serve --port 8088
+#   4. docs/inside/verification-v2.0-F.md の手順を実施
+#
+# 検証完了後は本番用 providers.yaml に差し戻すこと。
+# ============================================================
+
+allow_paid: false
+default_profile: default
+display_timezone: Asia/Tokyo
+
+providers:
+  # ── Ollama (Qwen3 32B / 32K context) ──────────────────────
+  # Ollama の /v1 パスで OpenAI 互換 API を使用
+  - name: ollama-qwen3
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3:32b
+    paid: false
+    timeout_s: 180
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      thinking: true
+    output_filters:
+      - strip_thinking
+    # max_context_tokens は model-capabilities.yaml から自動解決:
+    #   qwen3* → 32768
+
+  # ── LM Studio (Qwen3.5 9B / 128K context) ────────────────
+  # Ollama の代わりに LM Studio を使う場合はこちらを有効化
+  # - name: lmstudio-qwen35
+  #   kind: openai_compat
+  #   base_url: http://localhost:1234/v1
+  #   model: qwen3.5-9b
+  #   paid: false
+  #   timeout_s: 120
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+  #     thinking: true
+  #   output_filters:
+  #     - strip_thinking
+  #   # max_context_tokens は model-capabilities.yaml から自動解決:
+  #   #   qwen3.5* → 131072
+
+# ============================================================
+# profiles — 検証シナリオ別に切り替え可能
+# ============================================================
+
+profiles:
+  # ── default: trim モード (メインの検証対象) ───────────────
+  # 閾値を下げて少ないトークンで発火させる
+  - name: default
+    providers:
+      - ollama-qwen3
+    context_budget_action: trim
+    context_budget_warn_threshold: 0.50    # 50% (≈ 16K tokens for 32K model)
+    context_budget_trim_threshold: 0.70    # 70% (≈ 22K tokens for 32K model)
+    context_budget_trim_target: 0.40       # trim 後 40% 目標
+    context_budget_preserve_last_n: 4      # 直近 4 msg は常に保全
+
+  # ── warn-only: ヘッダ付与のみ、メッセージ削減なし ─────────
+  - name: warn-only
+    providers:
+      - ollama-qwen3
+    context_budget_action: warn
+    context_budget_warn_threshold: 0.50
+
+  # ── off: ガード完全無効 (ベースライン比較用) ──────────────
+  - name: "off"
+    providers:
+      - ollama-qwen3
+    context_budget_action: "off"
+
+  # ── aggressive: 極低閾値 (edge case テスト用) ─────────────
+  # 20% で warn、30% で trim → 数千文字で発火する
+  - name: aggressive
+    providers:
+      - ollama-qwen3
+    context_budget_action: trim
+    context_budget_warn_threshold: 0.20
+    context_budget_trim_threshold: 0.30
+    context_budget_trim_target: 0.15
+    context_budget_preserve_last_n: 2
+
+# ============================================================
+# mode_aliases — curl の X-CodeRouter-Mode ヘッダで切り替え
+#
+# 例:
+#   curl -H "X-CodeRouter-Mode: warn-only" http://localhost:8088/v1/messages ...
+#   curl -H "X-CodeRouter-Mode: aggressive" http://localhost:8088/v1/messages ...
+# ============================================================
+
+mode_aliases:
+  trim: default
+  warn: warn-only
+  baseline: "off"
+  edge: aggressive

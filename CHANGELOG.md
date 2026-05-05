@@ -6,7 +6,7 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
-## [v2.0-F] — 2026-05-05 (Context Budget Management — L1 overflow 防止)
+## [v2.0.0] — 2026-05-05 (Context Budget Management — L1 overflow 防止)
 
 **Theme: 長時間 agent session の context overflow を未然に防止する guard を実装。** Claude Code / Cline / OpenClaw 等の agentic session が 8 時間超え loop で動くと messages が context window に漸近し、backend が 400 / truncation を返して session 死亡する問題 (L1) を根本解決。warn (80%) → auto trim (90%) の 2 段階 guard で overflow をゼロに。
 

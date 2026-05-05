@@ -6,15 +6,12 @@ and the context budget guard (L1).
 
 from __future__ import annotations
 
-import pytest
-
 from coderouter.token_estimation import (
     CHARS_PER_TOKEN_HEURISTIC,
     DEFAULT_MAX_CONTEXT_TOKENS,
     estimate_tokens_from_anthropic_request,
     estimate_tokens_from_body,
 )
-
 
 # ----------------------------------------------------------------------
 # estimate_tokens_from_body (raw dict, backward-compat with auto_router)

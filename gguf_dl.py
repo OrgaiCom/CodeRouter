@@ -54,8 +54,8 @@ import argparse
 import os
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 
@@ -87,7 +87,7 @@ _HF_URL_RE = re.compile(
 _REPO_ID_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
 
 
-def parse_hf_target(s: str) -> Tuple[str, Optional[str], Optional[str]]:
+def parse_hf_target(s: str) -> tuple[str, str | None, str | None]:
     """
     入力文字列を (repo_id, revision, filename) に分解する。
 
@@ -130,7 +130,7 @@ def parse_hf_target(s: str) -> Tuple[str, Optional[str], Optional[str]]:
 
 # -- 保存先決定 -----------------------------------------------------------
 
-def resolve_dest(cli_dest: Optional[str]) -> Path:
+def resolve_dest(cli_dest: str | None) -> Path:
     """保存先の優先順: CLI > 環境変数 GGUF_DL_DIR > ./models"""
     if cli_dest:
         dest = Path(cli_dest).expanduser()
@@ -144,7 +144,7 @@ def resolve_dest(cli_dest: Optional[str]) -> Path:
 
 # -- HF API 呼び出し ------------------------------------------------------
 
-def list_repo_ggufs(repo_id: str, revision: Optional[str], token: Optional[str]) -> List[str]:
+def list_repo_ggufs(repo_id: str, revision: str | None, token: str | None) -> list[str]:
     from huggingface_hub import HfApi
 
     api = HfApi()
@@ -153,13 +153,13 @@ def list_repo_ggufs(repo_id: str, revision: Optional[str], token: Optional[str])
     return files
 
 
-def filter_files(files: Iterable[str], patterns: Iterable[str]) -> List[str]:
+def filter_files(files: Iterable[str], patterns: Iterable[str]) -> list[str]:
     import fnmatch
 
     pats = list(patterns)
     if not pats:
         return [f for f in files if f.lower().endswith(".gguf")]
-    out: List[str] = []
+    out: list[str] = []
     for f in files:
         if any(fnmatch.fnmatch(f, p) or fnmatch.fnmatch(os.path.basename(f), p) for p in pats):
             out.append(f)
@@ -177,8 +177,8 @@ def download_one(
     repo_id: str,
     filename: str,
     dest: Path,
-    revision: Optional[str],
-    token: Optional[str],
+    revision: str | None,
+    token: str | None,
     flat: bool,
 ) -> Path:
     """1 ファイルを `dest` 配下にダウンロード。
@@ -206,7 +206,7 @@ def download_one(
 
 # -- 対話モード -----------------------------------------------------------
 
-def prompt(msg: str, default: Optional[str] = None) -> str:
+def prompt(msg: str, default: str | None = None) -> str:
     suffix = f" [{default}]" if default else ""
     while True:
         try:
@@ -227,7 +227,7 @@ def interactive_mode() -> argparse.Namespace:
     revision = rev_from_url or prompt("revision (ブランチ/タグ)", "main")
 
     use_pattern = False
-    pattern: Optional[str] = None
+    pattern: str | None = None
     if not filename:
         ans = prompt("ファイル指定方法 [single/pattern/all-gguf]", "all-gguf").lower()
         if ans.startswith("p"):
@@ -304,7 +304,7 @@ def confirm(msg: str, assume_yes: bool) -> bool:
     return ans in ("", "y", "yes")
 
 
-def human_size(n: Optional[int]) -> str:
+def human_size(n: int | None) -> str:
     if n is None:
         return "?"
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -314,7 +314,7 @@ def human_size(n: Optional[int]) -> str:
     return f"{n:.1f}PB"
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     _ensure_hf_hub()
 
     parser = build_parser()
@@ -351,7 +351,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --list / パターン展開のためにファイル一覧取得が必要かどうか
     need_listing = args.list or (not filename) or args.pattern
 
-    files_to_get: List[str] = []
+    files_to_get: list[str] = []
 
     if filename and not args.pattern and not args.list:
         files_to_get = [filename]
@@ -400,7 +400,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 高速転送 (ある場合)
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 
-    failed: List[Tuple[str, str]] = []
+    failed: list[tuple[str, str]] = []
     for i, f in enumerate(files_to_get, 1):
         print(f"\n[{i}/{len(files_to_get)}] {f}")
         try:

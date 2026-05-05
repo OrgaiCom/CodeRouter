@@ -39,6 +39,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from coderouter.config.schemas import AutoRouterConfig, AutoRouteRule, RuleMatcher
+from coderouter.token_estimation import estimate_tokens_from_body as _estimate_total_tokens
 
 if TYPE_CHECKING:
     from coderouter.config.schemas import CodeRouterConfig
@@ -213,11 +214,6 @@ def _match_rule(
         return has_tools
     return False  # pragma: no cover — _exactly_one guards against this
 
-
-# v2.0-F: token estimation logic moved to coderouter.token_estimation
-# (shared with context_budget guard). Import with local alias for
-# backwards compat with internal call sites in this module.
-from coderouter.token_estimation import estimate_tokens_from_body as _estimate_total_tokens
 
 
 def _extract_model(body: dict[str, Any]) -> str | None:
