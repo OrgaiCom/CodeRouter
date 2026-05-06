@@ -196,6 +196,104 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print one snapshot as plain text and exit (scripts / non-tty).",
     )
 
+    # v2.0-K: `coderouter audit` — read structured JSONL audit log.
+    audit = sub.add_parser(
+        "audit",
+        help="Read the structured audit log (v2.0-K).",
+        description=(
+            "Read and filter the JSONL audit log written by `coderouter serve` "
+            "when state_dir and audit_log are configured. Shows guard activations, "
+            "chain fallbacks, budget warnings, self-healing events, and drift "
+            "transitions in chronological order."
+        ),
+    )
+    audit.add_argument(
+        "--state-dir",
+        default=None,
+        help=(
+            "Path to the state directory containing audit.jsonl. "
+            "Defaults to ~/.coderouter/state/."
+        ),
+    )
+    audit.add_argument(
+        "--tail",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Show only the last N entries.",
+    )
+    audit.add_argument(
+        "--filter",
+        default=None,
+        metavar="EVENT",
+        help="Only entries whose event name contains this substring (case-insensitive).",
+    )
+    audit.add_argument(
+        "--since",
+        default=None,
+        metavar="DATETIME",
+        help="Only entries with ts >= this ISO 8601 prefix (e.g. '2026-05-06').",
+    )
+    audit.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print event type → count summary instead of individual entries.",
+    )
+
+    # v2.0-K (Replay): `coderouter replay` — statistical A/B analysis
+    # of request journal metadata across providers.
+    replay = sub.add_parser(
+        "replay",
+        help="Statistical replay analysis of request journal (v2.0-K).",
+        description=(
+            "Read the request metadata journal and display per-provider "
+            "statistics (token counts, cost, cache hit ratios). Optionally "
+            "compare two providers side-by-side. Request/response bodies "
+            "are not recorded, so this is statistical analysis — not "
+            "literal re-execution."
+        ),
+    )
+    replay.add_argument(
+        "--state-dir",
+        default=None,
+        help=(
+            "Path to the state directory containing requests.jsonl. "
+            "Defaults to ~/.coderouter/state/."
+        ),
+    )
+    replay.add_argument(
+        "--log",
+        default=None,
+        metavar="PATH",
+        help="Direct path to the request journal JSONL file (overrides --state-dir).",
+    )
+    replay.add_argument(
+        "--provider",
+        default=None,
+        metavar="NAME",
+        help="Filter entries to this provider only.",
+    )
+    replay.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("A", "B"),
+        default=None,
+        help="Compare two providers side-by-side (e.g. --compare anthropic-api openrouter-free).",
+    )
+    replay.add_argument(
+        "--since",
+        default=None,
+        metavar="DATETIME",
+        help="Only entries with ts >= this ISO 8601 prefix (e.g. '2026-05-06').",
+    )
+    replay.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Use only the last N entries (applied after --since and --provider filters).",
+    )
+
     return parser
 
 
@@ -276,6 +374,12 @@ def main(argv: list[str] | None = None) -> int:
         from coderouter.cli_stats import main as stats_main
 
         return stats_main(args.url, interval=args.interval, once=args.once)
+
+    if args.command == "audit":
+        return _run_audit(args)
+
+    if args.command == "replay":
+        return _run_replay(args)
 
     print(f"unknown command: {args.command}", file=sys.stderr)
     return 2
@@ -474,6 +578,121 @@ def _run_apply_or_dry_run(
     return 0
 
 
+
+
+def _run_audit(args: argparse.Namespace) -> int:
+    """v2.0-K: read and display the structured audit log.
+
+    Resolves the audit log path from --state-dir (or default
+    ~/.coderouter/state/) and renders entries with optional filtering.
+    """
+    import json
+
+    from coderouter.state.audit_log import read_audit_log, summarize_audit_log
+
+    state_dir = Path(args.state_dir).expanduser() if args.state_dir else (
+        Path.home() / ".coderouter" / "state"
+    )
+    log_path = state_dir / "audit.jsonl"
+
+    if not log_path.exists():
+        print(f"audit: no audit log found at {log_path}", file=sys.stderr)
+        print(
+            "  Ensure state_dir and audit_log are configured in providers.yaml.",
+            file=sys.stderr,
+        )
+        return 1
+
+    entries = read_audit_log(
+        log_path,
+        tail=args.tail,
+        event_filter=args.filter,
+        since=args.since,
+    )
+
+    if not entries:
+        print("audit: no matching entries found.")
+        return 0
+
+    if args.summary:
+        summary = summarize_audit_log(entries)
+        print(f"Audit log summary ({len(entries)} entries):\n")
+        for event, count in summary.items():
+            print(f"  {event:<40s} {count:>6d}")
+        return 0
+
+    for entry in entries:
+        ts = entry.get("ts", "")
+        event = entry.get("event", "")
+        level = entry.get("level", "")
+        # Build a compact one-line display.
+        extras = {
+            k: v
+            for k, v in entry.items()
+            if k not in ("ts", "event", "level")
+        }
+        extra_str = ""
+        if extras:
+            extra_str = " " + json.dumps(extras, default=str, ensure_ascii=False)
+        print(f"[{ts}] {level:<7s} {event}{extra_str}")
+
+    return 0
+
+
+def _run_replay(args: argparse.Namespace) -> int:
+    """v2.0-K (Replay): statistical A/B analysis of request journal.
+
+    Reads the request journal (requests.jsonl) and either displays a
+    per-provider summary table or a side-by-side comparison of two
+    providers.
+    """
+    from coderouter.state.replay import (
+        compare_providers,
+        format_comparison_table,
+        format_summary_table,
+        summarize_window,
+    )
+    from coderouter.state.request_log import read_request_log
+
+    # Resolve the journal file path.
+    if args.log:
+        log_path = Path(args.log).expanduser()
+    else:
+        state_dir = Path(args.state_dir).expanduser() if args.state_dir else (
+            Path.home() / ".coderouter" / "state"
+        )
+        log_path = state_dir / "requests.jsonl"
+
+    if not log_path.exists():
+        print(f"replay: no request journal found at {log_path}", file=sys.stderr)
+        print(
+            "  Ensure state_dir and request_log are configured in providers.yaml.",
+            file=sys.stderr,
+        )
+        return 1
+
+    entries = read_request_log(
+        log_path,
+        provider_filter=args.provider,
+        since=args.since,
+    )
+
+    if args.limit is not None and args.limit > 0:
+        entries = entries[-args.limit:]
+
+    if not entries:
+        print("replay: no matching entries found.")
+        return 0
+
+    if args.compare:
+        provider_a, provider_b = args.compare
+        comparison = compare_providers(entries, provider_a, provider_b)
+        print(format_comparison_table(comparison))
+    else:
+        summary = summarize_window(entries)
+        print(format_summary_table(summary))
+
+    return 0
 
 
 def _run_check_env(arg_value: str) -> int:

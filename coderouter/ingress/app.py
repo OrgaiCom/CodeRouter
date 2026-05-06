@@ -73,6 +73,66 @@ def create_app(config_path: str | None = None) -> FastAPI:
         # potentially sub-optimally for the agentic harness.
         check_claude_code_chain_suitability(config, logger=logger)
 
+        # v2.0-K: attach persistent state store + audit/request log if configured.
+        state_store = None
+        audit_handler = None
+        request_log_handler = None
+        if config.state_dir:
+            import logging as _logging
+            from pathlib import Path
+
+            from coderouter.state.audit_log import AuditLogHandler
+            from coderouter.state.store import StateStore
+
+            state_path = Path(config.state_dir).expanduser()
+            state_store = StateStore(state_path / "coderouter.db")
+            engine.attach_state_store(state_store)
+
+            # Restore MetricsCollector state from the store.
+            from coderouter.metrics import get_collector
+
+            collector = get_collector()
+            if collector is not None:
+                metrics_state = state_store.get("metrics", "state")
+                if metrics_state is not None:
+                    with contextlib.suppress(Exception):
+                        collector.load_state(metrics_state)  # type: ignore[arg-type]
+
+            logger.info(
+                "state-store-attached",
+                extra={"state_dir": str(state_path)},
+            )
+
+            if config.audit_log == "active":
+                audit_handler = AuditLogHandler(
+                    state_path / "audit.jsonl",
+                    max_bytes=config.audit_log_max_bytes,
+                )
+                _logging.getLogger().addHandler(audit_handler)
+                logger.info(
+                    "audit-log-started",
+                    extra={
+                        "path": str(state_path / "audit.jsonl"),
+                        "max_bytes": config.audit_log_max_bytes,
+                    },
+                )
+
+            if config.request_log == "active":
+                from coderouter.state.request_log import RequestLogHandler
+
+                request_log_handler = RequestLogHandler(
+                    state_path / "requests.jsonl",
+                    max_bytes=config.request_log_max_bytes,
+                )
+                _logging.getLogger().addHandler(request_log_handler)
+                logger.info(
+                    "request-log-started",
+                    extra={
+                        "path": str(state_path / "requests.jsonl"),
+                        "max_bytes": config.request_log_max_bytes,
+                    },
+                )
+
         # v2.0-I: launch continuous probe background task if configured.
         probe_task = None
         shutdown_event = None
@@ -110,6 +170,36 @@ def create_app(config_path: str | None = None) -> FastAPI:
             shutdown_event.set()
             with contextlib.suppress(Exception):
                 await probe_task
+
+        # v2.0-J: graceful shutdown of recovery probe tasks.
+        with contextlib.suppress(Exception):
+            await engine.shutdown_recovery_probes()
+
+        # v2.0-K: persist state and close audit log on shutdown.
+        if state_store is not None:
+            with contextlib.suppress(Exception):
+                engine.save_all_state()
+            # Save MetricsCollector state.
+            from coderouter.metrics import get_collector
+
+            collector = get_collector()
+            if collector is not None:
+                with contextlib.suppress(Exception):
+                    state_store.put("metrics", "state", collector.save_state())
+            with contextlib.suppress(Exception):
+                state_store.close()
+        if audit_handler is not None:
+            import logging as _logging
+
+            with contextlib.suppress(Exception):
+                _logging.getLogger().removeHandler(audit_handler)
+                audit_handler.close()
+        if request_log_handler is not None:
+            import logging as _logging
+
+            with contextlib.suppress(Exception):
+                _logging.getLogger().removeHandler(request_log_handler)
+                request_log_handler.close()
 
         logger.info("coderouter-shutdown")
 

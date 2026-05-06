@@ -596,6 +596,114 @@ def log_demote_unhealthy_provider(
 
 
 # ---------------------------------------------------------------------------
+# v2.0-J: self-healing log shapes
+# ---------------------------------------------------------------------------
+
+
+class SelfHealingExcludePayload(TypedDict):
+    """Structured shape of the ``self-healing-exclude`` log record."""
+
+    provider: str
+    profile: str
+    consecutive_failures: int
+
+
+class SelfHealingRestorePayload(TypedDict):
+    """Structured shape of the ``self-healing-restore`` log record."""
+
+    provider: str
+    profile: str
+    excluded_duration_s: float
+
+
+class SelfHealingRestartPayload(TypedDict):
+    """Structured shape of the ``self-healing-restart`` log record."""
+
+    provider: str
+    command: str
+    success: bool
+    error: str | None
+
+
+class SelfHealingRecoveryProbePayload(TypedDict):
+    """Structured shape of the ``self-healing-recovery-probe`` log record."""
+
+    provider: str
+    success: bool
+    next_interval_s: float
+    latency_ms: float
+
+
+def log_self_healing_exclude(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    consecutive_failures: int,
+) -> None:
+    """Emit when a provider is excluded from the chain by self-healing."""
+    payload: SelfHealingExcludePayload = {
+        "provider": provider,
+        "profile": profile,
+        "consecutive_failures": consecutive_failures,
+    }
+    logger.warning("self-healing-exclude", extra=payload)
+
+
+def log_self_healing_restore(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    excluded_duration_s: float,
+) -> None:
+    """Emit when a previously excluded provider is restored to the chain."""
+    payload: SelfHealingRestorePayload = {
+        "provider": provider,
+        "profile": profile,
+        "excluded_duration_s": round(excluded_duration_s, 1),
+    }
+    logger.info("self-healing-restore", extra=payload)
+
+
+def log_self_healing_restart(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    command: str,
+    success: bool,
+    error: str | None = None,
+) -> None:
+    """Emit after attempting to restart a provider's backend process."""
+    payload: SelfHealingRestartPayload = {
+        "provider": provider,
+        "command": command,
+        "success": success,
+        "error": error,
+    }
+    level = logging.INFO if success else logging.WARNING
+    logger.log(level, "self-healing-restart", extra=payload)
+
+
+def log_self_healing_recovery_probe(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    success: bool,
+    next_interval_s: float,
+    latency_ms: float,
+) -> None:
+    """Emit after each recovery probe attempt for an excluded provider."""
+    payload: SelfHealingRecoveryProbePayload = {
+        "provider": provider,
+        "success": success,
+        "next_interval_s": round(next_interval_s, 1),
+        "latency_ms": round(latency_ms, 1),
+    }
+    logger.info("self-healing-recovery-probe", extra=payload)
+
+
+# ---------------------------------------------------------------------------
 # v1.0-A: output-filter-applied log shape
 #
 # Motivation (plan.md §10.2 "出力クリーニング" / retrospective v0.7 "transformation

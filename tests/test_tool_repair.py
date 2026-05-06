@@ -159,3 +159,86 @@ def test_braces_inside_string_do_not_break_balance() -> None:
     assert len(calls) == 1
     args = json.loads(calls[0]["function"]["arguments"])
     assert args == {"command": 'echo "{hello}"'}
+
+
+# ----------------------------------------------------------------------
+# v2.2: Deduplication
+# ----------------------------------------------------------------------
+
+
+def test_duplicate_bare_json_calls_are_deduplicated() -> None:
+    """When a model outputs the same tool call 2-3 times in text, only
+    the first occurrence should be kept."""
+    text = (
+        '{"name": "Bash", "arguments": {"command": "pwd"}}\n'
+        '{"name": "Bash", "arguments": {"command": "pwd"}}\n'
+        '{"name": "Bash", "arguments": {"command": "pwd"}}'
+    )
+    _, calls = repair_tool_calls_in_text(text)
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "Bash"
+
+
+def test_different_args_are_not_deduplicated() -> None:
+    """Calls with the same name but different args are distinct."""
+    text = (
+        '{"name": "Read", "arguments": {"path": "/a"}}\n'
+        '{"name": "Read", "arguments": {"path": "/b"}}'
+    )
+    _, calls = repair_tool_calls_in_text(text)
+    assert len(calls) == 2
+    assert json.loads(calls[0]["function"]["arguments"]) == {"path": "/a"}
+    assert json.loads(calls[1]["function"]["arguments"]) == {"path": "/b"}
+
+
+def test_duplicate_fenced_blocks_are_deduplicated() -> None:
+    """Fenced code blocks with identical tool calls are deduplicated."""
+    text = (
+        "```json\n"
+        '{"name": "Bash", "arguments": {"command": "ls"}}\n'
+        "```\n"
+        "```json\n"
+        '{"name": "Bash", "arguments": {"command": "ls"}}\n'
+        "```"
+    )
+    _, calls = repair_tool_calls_in_text(text)
+    assert len(calls) == 1
+
+
+def test_mixed_fenced_and_bare_duplicates_are_deduplicated() -> None:
+    """Duplicates across fenced blocks and bare JSON are caught."""
+    text = (
+        "```json\n"
+        '{"name": "Bash", "arguments": {"command": "pwd"}}\n'
+        "```\n"
+        '{"name": "Bash", "arguments": {"command": "pwd"}}'
+    )
+    _, calls = repair_tool_calls_in_text(text)
+    assert len(calls) == 1
+
+
+def test_deduplicate_tool_calls_standalone() -> None:
+    """Direct test of the deduplicate_tool_calls function."""
+    from coderouter.translation.tool_repair import deduplicate_tool_calls
+
+    calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "Bash", "arguments": '{"cmd": "ls"}'}},
+        {"id": "call_2", "type": "function", "function": {"name": "Bash", "arguments": '{"cmd": "ls"}'}},
+        {"id": "call_3", "type": "function", "function": {"name": "Read", "arguments": '{"path": "/a"}'}},
+    ]
+    result = deduplicate_tool_calls(calls)
+    assert len(result) == 2
+    assert result[0]["id"] == "call_1"  # first occurrence wins
+    assert result[1]["function"]["name"] == "Read"
+
+
+def test_deduplicate_preserves_non_standard_shape() -> None:
+    """Entries without the expected 'function' key are kept unconditionally."""
+    from coderouter.translation.tool_repair import deduplicate_tool_calls
+
+    calls = [
+        {"weird": "entry"},
+        {"weird": "entry"},
+    ]
+    result = deduplicate_tool_calls(calls)
+    assert len(result) == 2  # both kept — can't determine equality

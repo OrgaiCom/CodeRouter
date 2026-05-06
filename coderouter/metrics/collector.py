@@ -624,6 +624,81 @@ class MetricsCollector(logging.Handler):
             }
 
     # ------------------------------------------------------------------
+    # v2.0-K: Persistence
+    # ------------------------------------------------------------------
+
+    def save_state(self) -> dict[str, object]:
+        """Export key counters for cross-restart persistence.
+
+        Returns a JSON-safe dict of the most operationally-important
+        counters.  The ``recent`` ring and per-provider ``last_error``
+        are excluded (ephemeral by nature).
+        """
+        with self._lock:
+            return {
+                "requests_total": self._requests_total,
+                "provider_attempts": dict(self._provider_attempts),
+                "provider_outcomes": {
+                    k: dict(v) for k, v in self._provider_outcomes.items()
+                },
+                "cost_total_usd": dict(self._cost_total_usd),
+                "cost_savings_usd": dict(self._cost_savings_usd),
+                "cost_total_usd_aggregate": self._cost_total_usd_aggregate,
+                "cost_savings_usd_aggregate": self._cost_savings_usd_aggregate,
+                "chain_paid_gate_blocked_total": self._chain_paid_gate_blocked_total,
+                "chain_budget_exceeded_total": self._chain_budget_exceeded_total,
+                "chain_memory_pressure_blocked_total": self._chain_memory_pressure_blocked_total,
+                "chain_uniform_auth_failure_total": self._chain_uniform_auth_failure_total,
+                "probe_rounds_total": self._probe_rounds_total,
+            }
+
+    def load_state(self, state: dict[str, object]) -> None:
+        """Restore counters from a previously saved dict.
+
+        Additive: values from ``state`` are *added* to the current
+        (zeroed) counters, so calling ``load_state`` on a fresh
+        collector restores the prior session's totals.
+        """
+        if not isinstance(state, dict):
+            return
+        with self._lock:
+            self._requests_total += int(state.get("requests_total", 0))
+            for k, v in (state.get("provider_attempts") or {}).items():
+                self._provider_attempts[k] += int(v)
+            for prov, outcomes in (state.get("provider_outcomes") or {}).items():
+                if not isinstance(outcomes, dict):
+                    continue
+                if prov not in self._provider_outcomes:
+                    self._provider_outcomes[prov] = Counter()
+                for k, v in outcomes.items():
+                    self._provider_outcomes[prov][k] += int(v)
+            for k, v in (state.get("cost_total_usd") or {}).items():
+                self._cost_total_usd[k] = self._cost_total_usd.get(k, 0.0) + float(v)
+            for k, v in (state.get("cost_savings_usd") or {}).items():
+                self._cost_savings_usd[k] = self._cost_savings_usd.get(k, 0.0) + float(v)
+            self._cost_total_usd_aggregate += float(
+                state.get("cost_total_usd_aggregate", 0.0)
+            )
+            self._cost_savings_usd_aggregate += float(
+                state.get("cost_savings_usd_aggregate", 0.0)
+            )
+            self._chain_paid_gate_blocked_total += int(
+                state.get("chain_paid_gate_blocked_total", 0)
+            )
+            self._chain_budget_exceeded_total += int(
+                state.get("chain_budget_exceeded_total", 0)
+            )
+            self._chain_memory_pressure_blocked_total += int(
+                state.get("chain_memory_pressure_blocked_total", 0)
+            )
+            self._chain_uniform_auth_failure_total += int(
+                state.get("chain_uniform_auth_failure_total", 0)
+            )
+            self._probe_rounds_total += int(
+                state.get("probe_rounds_total", 0)
+            )
+
+    # ------------------------------------------------------------------
     # Test hook
     # ------------------------------------------------------------------
 

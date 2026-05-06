@@ -187,5 +187,40 @@ class BudgetTracker:
             self._totals.clear()
             self._month = current
 
+    # ------------------------------------------------------------------
+    # v2.0-K: Persistence
+    # ------------------------------------------------------------------
+
+    def save_state(self) -> dict[str, object]:
+        """Export the current state as a JSON-safe dict.
+
+        Called by the engine to persist budget totals across restarts.
+        """
+        with self._lock:
+            return {
+                "month": self._month,
+                "totals": dict(self._totals),
+            }
+
+    def load_state(self, state: dict[str, object]) -> None:
+        """Restore state from a previously saved dict.
+
+        Only restores if the saved month matches the current month
+        (no point restoring last month's totals into a new month).
+        """
+        if not isinstance(state, dict):
+            return
+        saved_month = state.get("month", "")
+        with self._lock:
+            current = _utc_month_key()
+            if saved_month != current:
+                return  # stale month — skip
+            totals = state.get("totals", {})
+            if isinstance(totals, dict):
+                self._totals = {
+                    k: float(v) for k, v in totals.items() if isinstance(v, (int, float))
+                }
+                self._month = current
+
 
 __all__ = ["BudgetTracker"]

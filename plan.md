@@ -3,12 +3,12 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-05-01
+最終更新: 2026-05-06
 作成者: zephel01
-状態: **v1.10.0 — minor release** (2026-05-01、CHANGELOG `[v1.10.0]` 参照)。v1.9.0 GA + v1.9.1 patch で取り切ったほか、本 minor で v1.10 候補の残り 3 件 (#3 provider 月次予算 / #4 v1.9-E phase 2 L2/L5 / #5 longContext auto-switch) を一括出荷。**Vision pillar の達成**: P2 Long-run Reliability の v1.x 担当分 (L2/L3/L5) が完成、6 系統障害体系 (L1〜L6) のうち v1.x で取りに行くと宣言した分が揃った。**Cost pillar**: v1.9-A 観測 → v1.9-D 理解 → v1.10 制約 (`monthly_budget_usd`) で経路が閉じた。**Auto-router**: 6 matcher (has_image / code_fence_ratio_min / content_contains / content_regex / model_pattern / content_token_count_min) で feature complete。Tests: 830 (v1.9.0 GA) → **871** (+41 累積)、Runtime deps: 5 → 5 (33 sub-release 連続据え置き)、完全互換。直前の出荷は v1.9.1 patch (2026-05-01、v1.9-B2 + per-model auto-routing)。
+状態: **v2.2.0 — リリース準備完了** / **PyPI 最新: v2.1.0** (2026-05-05)。v2.2 (Unsloth 吸収) + v2.0-J (Self-healing) + v2.0-K (永続化 + Audit + Replay) を v2.2.0 として 1 リリース。**6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + 統計リプレイまで到達**。Tests: 964+、Runtime deps: 5 (据え置き連続 41 回)、完全互換。
 - **過去の出荷済みリリース**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / 市場分析 / 競合分析)**: 内部メモとして別途整理 (公開リポジトリには含まれない)
-- **本ドキュメント**: 現在進行中の実装スケジュール (v1.9 系) + ローカル backend 別接続マトリクス + 検討中 / やらないこと
+- **本ドキュメント**: 現在進行中の実装スケジュール + ローカル backend 別接続マトリクス + 検討中 / やらないこと
 
 ### 実装スケジュール
 
@@ -30,15 +30,9 @@
 
 順序: **A → B → ★ E → C → D** (B 顧客優先で E を 3 番目に前倒し、2026-04-27 確定)。**全 sub-release は v1.9.0a1〜a6 + GA で出荷済み (2026-04-28〜29)**。詳細は [CHANGELOG `[v1.9.0]`](./CHANGELOG.md) を参照。
 
-#### v1.9 note 記事計画 (4 連作の続き)
+#### note 記事 — v1.8〜v1.9 連作 6 話 (完了)
 
-| 出荷 | 記事タイトル候補 | 訴求軸 |
-|---|---|---|
-| v1.9-A 後 | 「ローカル LLM で Anthropic prompt caching の動作を可視化した話」 | 観測価値 |
-| v1.9-B 後 | 「CodeRouter を Anthropic prompt caching aware にした実装記録」 | 機能拡張 |
-| **v1.9-E 後** | **「Claude Code を 8 時間回したら起きた 6 つの障害と CodeRouter の対処」** | **★ 最大訴求** |
-| v1.9-C 後 | 「Adaptive routing を実装した記録 — 実 latency に基づく動的 priority」 | 差別化軸 |
-| v1.9-D 後 (umbrella) | 「Adaptive caching で実コストが下がった話 — v1.9 まとめ」 | 価値証明 |
+結果的に v1.8.1〜v1.9.0 の通し連作 6 話として完成。詳細は [`docs/articles/v1-saga/INDEX.md`](./docs/articles/v1-saga/INDEX.md)。「8 時間 Claude Code を回したら起きた障害」記事は実機データ収集後に再計画。
 
 #### Reactive 追加 (発火条件 6 種類、運用ルール)
 
@@ -108,17 +102,30 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 - **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
 - **examples の v1.10 機能サンプル追加**: `monthly_budget_usd` / `memory_pressure_action` / `backend_health_action` / `model_pattern` / `content_token_count_min` を組み合わせた典型的 production yaml の `examples/providers.production-grade.yaml` 雛形
 
-#### 次フェーズ (v2.0 候補、中長期)
+#### 出荷済み: v2.0〜v2.2 (Reliability Deepening + Unsloth 吸収)
 
-`docs/inside/future.md §7` で整理。短期 patch (v1.10.x) で取り切れない長期 deepening:
+| Ver | 日付 | 内容 | PyPI |
+|---|---|---|---|
+| **v2.0.0** | 2026-05-05 | L1 Context budget management (warn 80% + auto trim 90%) | ✅ |
+| **v2.1.0** | 2026-05-05 | L4 Drift detection + L6 Mid-stream stitching + P3 Continuous probing | ✅ |
+| **v2.2** | 2026-05-06 (実装済み) | Unsloth 吸収 3 件 (tool_repair dedup / StripToolCallXmlFilter / max_tool_calls) + Ollama smoke test | v2.2.0 |
+| **v2.0-J** | 2026-05-06 (実装済み) | Self-healing routing — backend_health_action="exclude" + restart_command + recovery probe backoff | v2.2.0 |
+| **v2.0-K** | 2026-05-06 (実装済み) | Multi-day operation support — sqlite3 StateStore + JSONL audit log + `coderouter audit` CLI + Replay framework (request journal + 統計 A/B + `coderouter replay` CLI) | v2.2.0 |
 
-- **v2.0-F**: Context budget management (L1 対処、semantic compression)
-- **v2.0-G**: Drift detection (L4 対処、response 品質 rolling window)
-- **v2.0-H**: Mid-stream stitching 強化 (L6 拡張、resumable continuation)
-- **v2.0-I**: Continuous probing (Pillar 3 拡張、毎時/毎日 model ヘルス + Public benchmark)
+**到達点**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 (v2.0-J) + 状態永続化 + 統計リプレイ (v2.0-K)。Vision pillar P1/P2/P3 が v2.x で完成。
+
+#### 次フェーズ (v2.5+ 候補、2026 後半)
+
+`docs/inside/future.md §8` で整理。v2.0-F〜K は全て実装済み、残る候補:
+
+- ~~**v2.0-K Replay framework**: request journal + 統計 A/B 比較 → **実装済み (2026-05-06)**~~
+- **coderouter-plugin-memory** (Plugin 層): 会話 key facts の自動蓄積 + `append_system_prompt` 動的注入。K の persistent store 基盤を再利用。Core は薄いまま、使いたい人だけ opt-in (~1 ヶ月)
+
+#### 残作業 (docs / examples 整備)
+
 - **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
-
-> v2.0 以降の機能 (Pillar 別 deepening / プラグイン / MCP server / Web UI) は内部メモで別途整理
+- **`examples/providers.production-grade.yaml`**: v1.10 機能 (`monthly_budget_usd` / `memory_pressure_action` / `backend_health_action` 等) を組み合わせた典型的 production yaml 雛形
+- **Unsloth Studio プロバイダー検証**: CodeRouter → Unsloth Studio E2E 手動テスト (~2h、Unsloth 側安定版待ち)
 
 #### ❓ 検討中 — 実装方針 / 必要性が未確定
 
@@ -131,7 +138,7 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 | **Anthropic ヒューリスティック表のメンテ signal** | (a) 週次 `/v1/models` diff / (b) 未知モデル検出時に warn ログ。capability registry をモデルファミリ追加に追従させる仕組み | (a) (b) どちらも実装可能、(b) は既存 gate 計算からほぼ無料で取れる。v1.7-B 以降の自然なタイミングで |
 | **依存最小主義の「次の絞り」** | 5 deps 据え置き 17 sub-release の継続 vs `httpx` HTTP/2 / async 安定性のための backport 受容 | 需要なし、現状維持の方針 (§5.4)。BREAKING に踏み込むなら別途 |
 
-#### ❌ やらないこと (Out of Scope, 少なくとも v2.0 まで — §15)
+#### ❌ やらないこと (Out of Scope — §15)
 
 - 音声 (NarrateClaude 領域)
 - ブラウザ操作 (browser-agent 領域)
@@ -147,11 +154,13 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 
 | Ver | 日付 | タグ | 一言 |
 | --- | --- | --- | --- |
-| **v1.10.0** | 2026-05-01 | `v1.10.0` | Umbrella tag — **Cost enforcement + Long-run reliability completion + Auto-router feature complete**。v1.10 候補 5 件全完了 (v1.9.1 で #1 v1.9-B2 + #2 per-model auto-routing、本 minor で #3 monthly budget + #4 v1.9-E phase 2 L2/L5 + #5 longContext auto-switch)。Vision pillar P2 が完成 (L2/L3/L5)、Cost pillar が観測→制約まで閉じる、Auto-router 6 matcher feature complete。tests +41 累積 (830→871)、Runtime deps 据え置き 33 連続、完全互換 |
-| **v1.9.1** | 2026-05-01 | `v1.9.1` | v1.10 候補から quick win 2 件を patch で先行刈取り — (a) v1.9-B2 streaming 経路の usage 集約、(b) per-model auto-routing (`RuleMatcher.model_pattern` 5 番目 matcher、Opus/Sonnet/Haiku で profile 分岐) |
-| **v1.9.0** | 2026-04-29 | `v1.9.0` | Umbrella tag — Cache observability + Adaptive routing + Cost-aware + Long-run reliability (6 sub-release 統合 a1〜a6 + GA、L3 break action ingress fix 含む) |
-| **v1.8.4** | 2026-04-27 | (検証 release、PyPI 未 publish) | LM Studio 0.4.12 で Qwen3.5 9B / Qwen3.6 35B-A3B / Qwopus3.5-9B-v3 全動作確認 + Anthropic prompt caching 成立 (`cache_read_input_tokens: 280`)、`examples/providers.yaml` に lmstudio-* 4 entry + test profile 2 件 |
-| **v1.8.3** | 2026-04-26 | `v1.8.3` | tool_calls probe を thinking 対応 + adapter で `reasoning_content` strip — llama.cpp 直叩きで Qwen3.6 復権、active-harmful 誤診断 (tools=false suggestion) を解消 |
+| **v2.0-K** | 2026-05-06 | v2.2.0 | Multi-day operation support — sqlite3 StateStore + JSONL audit log + `coderouter audit` CLI + Replay framework (request journal + 統計 A/B + `coderouter replay` CLI) |
+| **v2.0-J** | 2026-05-06 | v2.2.0 | Self-healing routing — backend_health_action="exclude" + restart_command + recovery probe backoff |
+| **v2.2** | 2026-05-06 | v2.2.0 | Unsloth Studio 吸収 3 件 (tool_repair dedup / StripToolCallXmlFilter / max_tool_calls) + Ollama スモークテスト全 PASS |
+| **v2.1.0** | 2026-05-05 | `v2.1.0` | **PyPI 最新**。L4 Drift detection + L6 Mid-stream partial stitching + P3 Continuous probing — 6 系統障害対処完成 |
+| **v2.0.0** | 2026-05-05 | `v2.0.0` | L1 Context budget management (warn 80% + auto trim 90%)。char/4 heuristic、tool_use_id pair 保全 |
+| **v1.10.1** | 2026-05-04 | `v1.10.1` | tool-aware auto routing + Raspberry Pi starter |
+| **v1.10.0** | 2026-05-01 | `v1.10.0` | Umbrella — Cost enforcement + Long-run reliability completion + Auto-router 6 matcher feature complete |
 
 過去のリリース (v0.1.0〜v1.7.0) は [`CHANGELOG.md`](./CHANGELOG.md) の各エントリ、各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
 

@@ -23,6 +23,7 @@ from coderouter.output_filters import (
     OutputFilterChain,
     StripStopMarkersFilter,
     StripThinkingFilter,
+    StripToolCallXmlFilter,
     apply_output_filters,
     validate_output_filters,
 )
@@ -60,7 +61,7 @@ def test_validate_rejects_when_mixing_known_and_unknown() -> None:
 
 def test_registry_matches_expected_set() -> None:
     """Regression: if a filter is added, this test reminds us to doc it."""
-    assert set(KNOWN_FILTERS) == {"strip_thinking", "strip_stop_markers"}
+    assert set(KNOWN_FILTERS) == {"strip_thinking", "strip_stop_markers", "strip_tool_call_xml"}
 
 
 # ======================================================================
@@ -211,6 +212,9 @@ def test_default_stop_markers_contents() -> None:
         "<|im_end|>",
         "<|eot_id|>",
         "<|channel>thought",
+        # v2.2: tool-call XML tags
+        "<|tool▁call|>",
+        "<|tool▁sep|>",
     }
 
 
@@ -297,3 +301,76 @@ def test_apply_output_filters_clean_text_no_applied() -> None:
     out, applied = apply_output_filters(["strip_thinking", "strip_stop_markers"], "plain text")
     assert out == "plain text"
     assert applied == []
+
+
+# ======================================================================
+# v2.2: StripToolCallXmlFilter
+# ======================================================================
+
+
+def test_strip_tool_call_xml_removes_block_in_single_feed() -> None:
+    f = StripToolCallXmlFilter()
+    out = f.feed('hello <tool_call>{"name": "Bash"}</tool_call> world', eof=True)
+    assert out == "hello  world"
+    assert f.modified is True
+
+
+def test_strip_tool_call_xml_no_match_passes_through() -> None:
+    f = StripToolCallXmlFilter()
+    out = f.feed("plain reply, no tags", eof=True)
+    assert out == "plain reply, no tags"
+    assert f.modified is False
+
+
+def test_strip_tool_call_xml_handles_multiple_blocks() -> None:
+    f = StripToolCallXmlFilter()
+    out = f.feed(
+        '<tool_call>{"name":"A"}</tool_call>visible<tool_call>{"name":"B"}</tool_call>more',
+        eof=True,
+    )
+    assert out == "visiblemore"
+    assert f.modified is True
+
+
+def test_strip_tool_call_xml_unmatched_open_at_eof_drops_tail() -> None:
+    f = StripToolCallXmlFilter()
+    out = f.feed('ok <tool_call>{"name": "Bash"} never closed', eof=True)
+    assert out == "ok "
+    assert f.modified is True
+
+
+def test_strip_tool_call_xml_streaming_tag_split_across_chunks() -> None:
+    f = StripToolCallXmlFilter()
+    out1 = f.feed("hello <tool")
+    out2 = f.feed('_call>{"name":"X"}</tool_call> world', eof=True)
+    assert (out1 + out2) == "hello  world"
+    assert f.modified is True
+
+
+def test_strip_tool_call_xml_streaming_close_split_across_chunks() -> None:
+    f = StripToolCallXmlFilter()
+    out1 = f.feed('<tool_call>{"name":"X"}</to')
+    out2 = f.feed("ol_call>tail", eof=True)
+    assert (out1 + out2) == "tail"
+    assert f.modified is True
+
+
+def test_strip_tool_call_xml_in_chain() -> None:
+    """The new filter can be used in a chain alongside existing filters."""
+    chain = OutputFilterChain(["strip_tool_call_xml", "strip_stop_markers"])
+    out = chain.feed('a<tool_call>{"x":1}</tool_call>b<|im_end|>c', eof=True)
+    assert out == "abc"
+    assert chain.applied_filters() == ["strip_tool_call_xml", "strip_stop_markers"]
+
+
+# ======================================================================
+# v2.2: New stop markers (tool-call XML tags)
+# ======================================================================
+
+
+def test_strip_stop_markers_removes_tool_call_markers() -> None:
+    """v2.2 added tool-call markers to the default set."""
+    f = StripStopMarkersFilter()
+    out = f.feed("a<|tool▁call|>b<|tool▁sep|>c", eof=True)
+    assert out == "abc"
+    assert f.modified is True

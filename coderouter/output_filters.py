@@ -52,6 +52,7 @@ __all__ = [
     "OutputFilterChain",
     "StripStopMarkersFilter",
     "StripThinkingFilter",
+    "StripToolCallXmlFilter",
     "apply_output_filters",
     "validate_output_filters",
 ]
@@ -63,20 +64,28 @@ __all__ = [
 
 
 DEFAULT_STOP_MARKERS: tuple[str, ...] = (
+    # v1.0-A originals
     "<|turn|>",
     "<|end|>",
     "<|python_tag|>",
     "<|im_end|>",
     "<|eot_id|>",
     "<|channel>thought",
+    # v2.2: tool-call XML tags leaked by Qwen / Hermes / Llama tool-call
+    # formats. These appear when the model writes tool calls as XML
+    # instead of structured JSON, or when the tokenizer's special-token
+    # handling leaks through.
+    "<|tool▁call|>",
+    "<|tool▁sep|>",
 )
 """Default stop/harness markers stripped by ``strip_stop_markers``.
 
 Covers Llama 3.x (``<|python_tag|>``, ``<|eot_id|>``), ChatML / Qwen
-(``<|im_end|>``, ``<|end|>``), Gemma-ish (``<|turn|>``) and OpenAI-
-harmony (``<|channel>thought``). Extending this tuple is an ABI change
-— users who need a bespoke set can add a dedicated filter entry in
-a later minor; for v1.0-A the fixed list covers observed leaks.
+(``<|im_end|>``, ``<|end|>``), Gemma-ish (``<|turn|>``), OpenAI-
+harmony (``<|channel>thought``), and Qwen / Hermes tool-call markers
+(``<|tool▁call|>``, ``<|tool▁sep|>``). Extending this tuple is an ABI
+change — users who need a bespoke set can add a dedicated filter entry
+in a later minor.
 """
 
 
@@ -293,6 +302,87 @@ class StripStopMarkersFilter:
 
 
 # ---------------------------------------------------------------------------
+# strip_tool_call_xml (v2.2)
+# ---------------------------------------------------------------------------
+
+
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
+
+
+class StripToolCallXmlFilter:
+    """Remove ``<tool_call>...</tool_call>`` XML blocks from assistant content.
+
+    Qwen / Hermes / Llama tool-call formats sometimes emit tool calls
+    as ``<tool_call>{"name": "Bash", ...}</tool_call>`` XML in the
+    content stream. When ``tool_repair`` has already extracted the
+    structured JSON from these blocks, the XML wrapper tags are
+    leftover debris that confuse downstream clients.
+
+    Architecture note: this filter should run AFTER ``tool_repair``
+    has had a chance to extract the JSON. The filter chain is applied
+    at the adapter boundary (post-repair), so ordering is naturally
+    correct.
+
+    Implementation mirrors ``StripThinkingFilter`` — the same
+    stateful open/close tag scanning, same chunk-boundary safety.
+    """
+
+    name = "strip_tool_call_xml"
+
+    def __init__(self) -> None:
+        """Initialize the per-request buffer + in-block state to empty."""
+        self.modified: bool = False
+        self._in_block: bool = False
+        self._buffer: str = ""
+
+    def feed(self, text: str, *, eof: bool = False) -> str:
+        """Consume ``text`` and return the portion safe to emit now.
+
+        Mirrors the ``StripThinkingFilter`` algorithm: greedy tag
+        matching with partial-prefix holdback across chunk boundaries.
+        """
+        self._buffer += text
+        out_parts: list[str] = []
+
+        while True:
+            if not self._in_block:
+                idx = self._buffer.find(_TOOL_CALL_OPEN)
+                if idx != -1:
+                    out_parts.append(self._buffer[:idx])
+                    self._buffer = self._buffer[idx + len(_TOOL_CALL_OPEN) :]
+                    self._in_block = True
+                    self.modified = True
+                    continue
+                # No open tag — emit all but a potential partial prefix.
+                overlap = _max_suffix_overlap(self._buffer, _TOOL_CALL_OPEN)
+                if overlap:
+                    out_parts.append(self._buffer[:-overlap])
+                    self._buffer = self._buffer[-overlap:]
+                else:
+                    out_parts.append(self._buffer)
+                    self._buffer = ""
+                break
+            # in_block: suppress until we find the close tag.
+            idx = self._buffer.find(_TOOL_CALL_CLOSE)
+            if idx != -1:
+                self._buffer = self._buffer[idx + len(_TOOL_CALL_CLOSE) :]
+                self._in_block = False
+                continue
+            # No close tag — retain potential partial suffix, drop the rest.
+            overlap = _max_suffix_overlap(self._buffer, _TOOL_CALL_CLOSE)
+            self._buffer = self._buffer[-overlap:] if overlap else ""
+            break
+
+        if eof:
+            if not self._in_block:
+                out_parts.append(self._buffer)
+            # If still in block at eof, silently drop the partial block.
+            self._buffer = ""
+        return "".join(out_parts)
+
+
+# ---------------------------------------------------------------------------
 # Registry + chain
 # ---------------------------------------------------------------------------
 
@@ -300,6 +390,7 @@ class StripStopMarkersFilter:
 KNOWN_FILTERS: dict[str, type[OutputFilter]] = {
     StripThinkingFilter.name: StripThinkingFilter,
     StripStopMarkersFilter.name: StripStopMarkersFilter,
+    StripToolCallXmlFilter.name: StripToolCallXmlFilter,
 }
 """Registry of string-name → filter class.
 

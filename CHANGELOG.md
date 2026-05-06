@@ -6,6 +6,97 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.2.0] — 2026-05-06 (Self-healing + Multi-day operation + Replay)
+
+**Theme: 自己修復 + 状態永続化 + 統計リプレイで "無人長時間運用" 基盤を完成。** v2.0-J で UNHEALTHY provider の自動除外 + restart + 復帰を実装、v2.0-K で sqlite3 StateStore + 構造化 audit log + request journal + `coderouter replay` 統計 A/B 分析を実装。v2.2 で Unsloth Studio 由来の堅牢化 3 件を吸収。**6 系統障害全対処 + 自己修復 + 永続化 + リプレイ**に到達。
+
+### v2.0-J: Self-healing Routing (L5 自動復帰)
+
+**UNHEALTHY provider をチェーンから完全除外し、restart helper + 回復 probe で自動復帰。**
+
+| 機能 | 説明 |
+|---|---|
+| `SelfHealingOrchestrator` | `backend_health_action: exclude` 時に UNHEALTHY provider をチェーンから除外 + 自動復帰管理 |
+| restart helper | `restart_command` 設定で backend プロセスを自動再起動 (subprocess, タイムアウト付き) |
+| 回復 probe | 指数 backoff (30s → 300s) で excluded provider に 1-token probe → 成功で即時復帰 |
+| `recovery_probe_initial_s` / `recovery_probe_max_s` | probe 間隔の初期値 / 上限を profile 単位で設定 |
+| `restart_timeout_s` | restart command のタイムアウト |
+| 元位置復帰 | 復帰時に provider をチェーンの元の位置に挿入 (末尾追加ではない) |
+
+### v2.0-K: Multi-day Operation Support (永続化 + Audit + Replay)
+
+**プロセス再起動をまたいで運用状態を保持 + 構造化ログ + 統計 A/B 分析。**
+
+| 機能 | 説明 |
+|---|---|
+| `StateStore` | sqlite3 KV store (namespace-scoped, WAL mode, thread-safe, graceful degradation) |
+| `state_dir` config | `~/.coderouter/state/` 等を指定して永続化有効化 |
+| 4 subsystem 永続化 | BudgetTracker / BackendHealthMonitor / SelfHealingOrchestrator / MetricsCollector の save_state/load_state |
+| `AuditLogHandler` | guard 発火 / chain fallback / self-healing 等 22 イベントを JSONL 記録 (single-backup rotation) |
+| `coderouter audit` CLI | `--tail`, `--filter`, `--since`, `--summary` で audit log を閲覧 |
+| `RequestLogHandler` | `cache-observed` イベントの metadata (provider, tokens, cost) を JSONL 記録 (body 非記録 = privacy safe) |
+| `request_log: off/active` | request journal の有効化 |
+| Replay engine | `summarize_window()` (provider 別集計) + `compare_providers()` (A/B delta + 変化率) |
+| `coderouter replay` CLI | `--compare A B`, `--provider`, `--since`, `--limit` で統計テーブル出力 |
+
+### 設定例
+
+```yaml
+# providers.yaml
+state_dir: "~/.coderouter/state/"    # 永続化ディレクトリ
+audit_log: active                     # 構造化 audit log
+request_log: active                   # request metadata journal
+
+profiles:
+  - name: self-healing
+    providers: [ollama-qwen3, openrouter-free]
+    backend_health_action: exclude    # UNHEALTHY → 除外 + 自己修復
+    backend_health_threshold: 3
+
+providers:
+  - name: ollama-qwen3
+    base_url: http://localhost:11434/v1
+    model: qwen3:30b-a3b
+    restart_command: "ollama serve"   # 自動再起動
+```
+
+```bash
+# CLI
+coderouter audit --tail 20 --filter self-healing
+coderouter replay --compare anthropic-api openrouter-free --since 2026-05-01
+```
+
+### v2.2: Unsloth Studio 由来の堅牢化 3 件
+
+| 機能 | 説明 |
+|---|---|
+| tool_repair dedup | `repair_tools()` で同一 tool_use_id の重複ブロックを排除 |
+| `StripToolCallXmlFilter` | `<tool_call>` / `<|tool▁call|>` XML タグを output_filters で除去 |
+| `max_tool_calls` hard cap | profile 単位の tool_use 回数上限 (default: 50) |
+
+### 新規ファイル
+
+```
+A  coderouter/guards/self_healing.py         — SelfHealingOrchestrator
+A  coderouter/state/__init__.py              — package
+A  coderouter/state/store.py                 — sqlite3 KV store
+A  coderouter/state/audit_log.py             — JSONL audit log handler + reader
+A  coderouter/state/request_log.py           — JSONL request journal handler + reader
+A  coderouter/state/replay.py                — statistical A/B engine + CLI formatter
+A  tests/test_self_healing.py                — 19 tests
+A  tests/test_state_store.py                 — 19 tests
+A  tests/test_audit_log.py                   — 14 tests
+A  tests/test_request_log.py                 — 22 tests
+```
+
+### 全体サマリ
+
+- Tests: ~1005 → **~964** (実測。旧テスト計数は optional dep 込み、964 は collect 可能分)
+- Runtime deps: 5 → 5 (**41 sub-release 連続据え置き**)
+- Backward compat: 完全互換、全機能 default off — opt-in するまで既存挙動完全一致
+
+---
+
 ## [v2.1.0] — 2026-05-05 (Long-run Reliability 完成 — v2.0-G/H/I)
 
 **Theme: L4 品質劣化 / L6 mid-stream 失敗 / L5 idle 時障害の 3 系統を同時解決し、Long-run Reliability pillar を完成させる。** v2.0-F (L1 context overflow) と合わせ、6 系統障害のうち 4 系統を CodeRouter が能動的にガードする状態に到達。

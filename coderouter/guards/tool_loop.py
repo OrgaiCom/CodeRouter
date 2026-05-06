@@ -148,6 +148,44 @@ class ToolLoopDetection:
     """
 
 
+@dataclass(frozen=True)
+class ToolCountExceeded:
+    """The outcome of a total tool-call count check.
+
+    Returned by :func:`check_total_tool_count` when the conversation's
+    cumulative tool_use count exceeds the configured hard cap. This is
+    a safety valve against runaway agents that call many *different*
+    tools without looping (which L3's identical-streak detector misses).
+    """
+
+    total_count: int
+    """How many tool_use blocks the conversation currently contains."""
+    max_allowed: int
+    """The configured ceiling that was exceeded."""
+
+
+class ToolCountExceededError(CodeRouterError):
+    """Raised when total tool-call count exceeds the hard cap.
+
+    The ingress converts this into a structured ``400`` response with
+    ``error: "tool_count_exceeded"`` so the client sees a programmable
+    failure rather than a 5xx.
+    """
+
+    def __init__(
+        self,
+        exceeded: ToolCountExceeded,
+        profile: str,
+    ) -> None:
+        super().__init__(
+            f"tool count exceeded on profile={profile!r}: "
+            f"{exceeded.total_count} tool calls exceed the limit of "
+            f"{exceeded.max_allowed}."
+        )
+        self.exceeded = exceeded
+        self.profile = profile
+
+
 class ToolLoopBreakError(CodeRouterError):
     """Raised when a loop is detected and the configured action is ``break``.
 
@@ -337,3 +375,36 @@ def inject_loop_break_hint(
         new_system = [*list(system), {"type": "text", "text": hint}]
 
     return request.model_copy(update={"system": new_system})
+
+
+# ---------------------------------------------------------------------------
+# Total tool-call count hard cap (v2.2)
+# ---------------------------------------------------------------------------
+
+
+def check_total_tool_count(
+    request: AnthropicRequest,
+    *,
+    max_calls: int,
+) -> ToolCountExceeded | None:
+    """Return a detection if total tool_use count exceeds ``max_calls``.
+
+    Unlike :func:`detect_tool_loop` which catches *identical*
+    consecutive calls, this is a blunt hard cap on the cumulative
+    number of tool_use blocks across the entire conversation. It
+    catches runaway agents that cycle through many *different* tools
+    without ever repeating the same (name, args) pair — a pattern
+    that the streak-based L3 detector cannot see.
+
+    Default ceiling is 50 (configurable per-profile). This is
+    deliberately more permissive than Unsloth Studio's 25 — Claude
+    Code's long-running agent sessions routinely reach 25+ tool calls
+    in normal operation.
+
+    Returns ``None`` when the count is within limits.
+    """
+    history = _extract_tool_use_history(request)
+    count = len(history)
+    if count > max_calls:
+        return ToolCountExceeded(total_count=count, max_allowed=max_calls)
+    return None

@@ -200,6 +200,40 @@ class BackendHealthMonitor:
         """True iff ``provider``'s current state is ``UNHEALTHY``."""
         return self.state_for(provider) == "UNHEALTHY"
 
+    # ------------------------------------------------------------------
+    # v2.0-K: Persistence
+    # ------------------------------------------------------------------
+
+    def save_state(self) -> dict[str, object]:
+        """Export the current per-provider health state for persistence."""
+        with self._lock:
+            return {
+                name: {
+                    "state": entry.state,
+                    "consecutive_failures": entry.consecutive_failures,
+                }
+                for name, entry in self._state.items()
+            }
+
+    def load_state(self, state: dict[str, object]) -> None:
+        """Restore health state from a previously saved dict."""
+        if not isinstance(state, dict):
+            return
+        with self._lock:
+            for name, data in state.items():
+                if not isinstance(data, dict):
+                    continue
+                saved_state = data.get("state", "HEALTHY")
+                if saved_state not in ("HEALTHY", "DEGRADED", "UNHEALTHY"):
+                    saved_state = "HEALTHY"
+                failures = data.get("consecutive_failures", 0)
+                if not isinstance(failures, int) or failures < 0:
+                    failures = 0
+                self._state[name] = _ProviderHealth(
+                    state=saved_state,  # type: ignore[arg-type]
+                    consecutive_failures=failures,
+                )
+
 
 __all__ = [
     "BackendHealthMonitor",

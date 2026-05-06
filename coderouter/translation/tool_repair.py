@@ -41,7 +41,7 @@ import re
 import uuid
 from typing import Any
 
-__all__ = ["repair_tool_calls_in_text"]
+__all__ = ["deduplicate_tool_calls", "repair_tool_calls_in_text"]
 
 
 # ------------------------------------------------------------------
@@ -233,4 +233,45 @@ def repair_tool_calls_in_text(
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
+    # v2.2: deduplicate tool calls within the same response.
+    # Small models sometimes output the same tool-call JSON 2-3 times
+    # in a single turn. We keep the first occurrence only.
+    extracted = deduplicate_tool_calls(extracted)
+
     return cleaned, extracted
+
+
+# ------------------------------------------------------------------
+# Deduplication (v2.2)
+# ------------------------------------------------------------------
+
+
+def deduplicate_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove duplicate tool calls sharing the same (name, arguments).
+
+    Preserves order — the first occurrence wins. Each entry is expected
+    to be in OpenAI tool_calls shape (``{"function": {"name": ...,
+    "arguments": ...}, ...}``). Entries that lack the expected
+    structure are kept unconditionally (conservative fallback).
+
+    This is separate from L3 tool-loop detection (which operates across
+    turns in the conversation history). Deduplication operates within a
+    single assistant response where the model outputted the same JSON
+    tool-call block multiple times.
+    """
+    if len(tool_calls) <= 1:
+        return tool_calls
+
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        func = tc.get("function")
+        if not isinstance(func, dict):
+            # Not in expected shape — keep unconditionally.
+            deduped.append(tc)
+            continue
+        key = (func.get("name", ""), func.get("arguments", ""))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(tc)
+    return deduped

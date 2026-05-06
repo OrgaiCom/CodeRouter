@@ -28,7 +28,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from coderouter.guards.tool_loop import ToolLoopBreakError
+from coderouter.guards.tool_loop import ToolCountExceededError, ToolLoopBreakError
 from coderouter.logging import get_logger
 from coderouter.routing import (
     FallbackEngine,
@@ -173,6 +173,18 @@ async def messages(
             status_code=400,
             detail=_tool_loop_break_detail(exc),
         ) from exc
+    except ToolCountExceededError as exc:
+        # v2.2: total tool-call count exceeded — surface as a 400.
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "tool_count_exceeded",
+                "message": str(exc),
+                "total_count": exc.exceeded.total_count,
+                "max_allowed": exc.exceeded.max_allowed,
+                "profile": exc.profile,
+            },
+        ) from exc
 
     # v2.0-G: collect drift header after engine dispatch.
     drift_severity = engine.last_drift_severity
@@ -235,6 +247,24 @@ async def _anthropic_sse_iterator(
                     "type": "invalid_request_error",
                     "message": str(exc),
                     "tool_loop": _tool_loop_break_extension(exc),
+                },
+            },
+        )
+        yield _format_anthropic_sse(err_event)
+    except ToolCountExceededError as exc:
+        # v2.2: streaming counterpart of the tool-count-exceeded 400.
+        err_event = AnthropicStreamEvent(
+            type="error",
+            data={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(exc),
+                    "tool_count": {
+                        "total_count": exc.exceeded.total_count,
+                        "max_allowed": exc.exceeded.max_allowed,
+                        "profile": exc.profile,
+                    },
                 },
             },
         )

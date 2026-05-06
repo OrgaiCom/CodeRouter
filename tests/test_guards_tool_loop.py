@@ -26,7 +26,9 @@ from coderouter.config.schemas import (
 )
 from coderouter.guards.tool_loop import (
     DEFAULT_LOOP_INJECT_HINT,
+    ToolCountExceededError,
     ToolLoopBreakError,
+    check_total_tool_count,
     detect_tool_loop,
     inject_loop_break_hint,
 )
@@ -395,4 +397,89 @@ def test_apply_guard_unknown_profile_is_noop(
     # fires under the default config — the test is asserting the
     # mechanism doesn't crash, not that an unknown profile suppresses
     # detection (default_profile resolution is the safety net).
+    assert out is not None
+
+
+# ======================================================================
+# v2.2: check_total_tool_count — hard cap on total tool calls
+# ======================================================================
+
+
+def test_total_count_returns_none_when_within_limit() -> None:
+    request = _request_with_history(
+        [
+            _assistant_tool_use("Bash", command="pwd"),
+            _user_tool_result(),
+            _assistant_tool_use("Read", path="/a"),
+            _user_tool_result(),
+        ]
+    )
+    assert check_total_tool_count(request, max_calls=10) is None
+
+
+def test_total_count_returns_exceeded_when_over_limit() -> None:
+    msgs: list[AnthropicMessage] = []
+    for i in range(6):
+        msgs.append(_assistant_tool_use("Bash", command=f"cmd_{i}"))
+        msgs.append(_user_tool_result())
+    request = _request_with_history(msgs)
+    exceeded = check_total_tool_count(request, max_calls=5)
+    assert exceeded is not None
+    assert exceeded.total_count == 6
+    assert exceeded.max_allowed == 5
+
+
+def test_total_count_returns_none_on_empty_history() -> None:
+    request = _request_with_history([])
+    assert check_total_tool_count(request, max_calls=50) is None
+
+
+def test_total_count_boundary_exact_limit_is_ok() -> None:
+    """Exactly at the limit is NOT exceeded — only strictly greater triggers."""
+    msgs: list[AnthropicMessage] = []
+    for i in range(5):
+        msgs.append(_assistant_tool_use("Bash", command=f"cmd_{i}"))
+        msgs.append(_user_tool_result())
+    request = _request_with_history(msgs)
+    assert check_total_tool_count(request, max_calls=5) is None
+
+
+def test_apply_guard_raises_tool_count_exceeded_on_break(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When action=break and total count exceeds max_tool_calls, raises."""
+    config = _config_for_tool_loop(action="break", profile_name="default")
+    # Override max_tool_calls to a small number for the test.
+    profile = config.profile_by_name("default")
+    object.__setattr__(profile, "max_tool_calls", 3)
+
+    msgs: list[AnthropicMessage] = []
+    for i in range(5):
+        msgs.append(_assistant_tool_use("Bash", command=f"cmd_{i}"))
+        msgs.append(_user_tool_result())
+    request = _request_with_history(msgs, profile="default")
+
+    with pytest.raises(ToolCountExceededError) as excinfo:
+        _apply_tool_loop_guard(request, config=config)
+    assert excinfo.value.exceeded.total_count == 5
+    assert excinfo.value.exceeded.max_allowed == 3
+
+
+def test_apply_guard_warns_on_tool_count_exceeded_warn_action(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When action=warn and total count exceeds max_tool_calls, log only."""
+    config = _config_for_tool_loop(action="warn", profile_name="default")
+    profile = config.profile_by_name("default")
+    object.__setattr__(profile, "max_tool_calls", 3)
+
+    msgs: list[AnthropicMessage] = []
+    for i in range(5):
+        msgs.append(_assistant_tool_use("Bash", command=f"cmd_{i}"))
+        msgs.append(_user_tool_result())
+    request = _request_with_history(msgs, profile="default")
+
+    with caplog.at_level(logging.WARNING, logger="coderouter"):
+        out = _apply_tool_loop_guard(request, config=config)
+    # Should not raise, just warn and return the request.
     assert out is not None

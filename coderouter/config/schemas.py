@@ -242,6 +242,21 @@ class ProviderConfig(BaseModel):
             "LM Studio Qwen3.5 128K → 131072, Anthropic Claude → 200000."
         ),
     )
+    # v2.0-J: optional shell command to restart this provider's backend
+    # process when it becomes UNHEALTHY. Executed via subprocess when
+    # self-healing is enabled and the provider crosses the UNHEALTHY
+    # threshold. Security: opt-in only — unset means no restart attempt.
+    restart_command: str | None = Field(
+        default=None,
+        description=(
+            "v2.0-J (Self-healing): shell command to restart this "
+            "provider's backend process. Examples: 'ollama serve', "
+            "'open -a LM\\ Studio'. Only executed when the profile's "
+            "backend_health_action is 'exclude' and the provider "
+            "transitions to UNHEALTHY. Unset = no automatic restart "
+            "(recovery probe still runs, waiting for manual restart)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_output_filters_known(self) -> ProviderConfig:
@@ -350,6 +365,24 @@ class FallbackChain(BaseModel):
             "error response. See FallbackChain comment for trade-offs."
         ),
     )
+    # v2.2: total tool-call count hard cap. A safety valve against
+    # runaway agents that call many *different* tools without looping
+    # (which the streak-based L3 detector misses). Set to 0 to
+    # disable the cap entirely.
+    max_tool_calls: int = Field(
+        default=50,
+        ge=0,
+        le=1000,
+        description=(
+            "v2.2: maximum total tool_use blocks allowed in the "
+            "conversation. When exceeded, the request is rejected with "
+            "a ``tool_count_exceeded`` error (if tool_loop_action is "
+            "``break``) or logged (if ``warn``). Set to 0 to disable. "
+            "Default 50 is deliberately more permissive than Unsloth "
+            "Studio's 25 — Claude Code agent sessions routinely reach "
+            "25+ calls in normal operation."
+        ),
+    )
     # v1.9-E phase 2 (L2): memory-pressure detection + cooldown.
     #
     # Local backends (Ollama / LM Studio / llama.cpp) report VRAM
@@ -410,7 +443,7 @@ class FallbackChain(BaseModel):
     # Distinct from the v1.9-C ``adaptive`` gradient (continuous
     # latency / error-rate buffer with debounce) which handles the
     # "slow but alive" case; L5 handles the "hard crash" case.
-    backend_health_action: Literal["off", "warn", "demote"] = Field(
+    backend_health_action: Literal["off", "warn", "demote", "exclude"] = Field(
         default="warn",
         description=(
             "v1.9-E (L5 phase 2): action when a provider transitions "
@@ -420,7 +453,12 @@ class FallbackChain(BaseModel):
             "moves the UNHEALTHY provider to the back of the chain "
             "for the next ``_resolve_chain`` (similar to v1.9-C "
             "adaptive demotion but state-machine-based, not "
-            "rolling-window-based). ``off`` disables the monitor "
+            "rolling-window-based). ``exclude`` (v2.0-J) removes the "
+            "UNHEALTHY provider from the chain entirely + triggers "
+            "self-healing (restart helper if configured, recovery "
+            "probe with exponential backoff). On recovery, the "
+            "provider is automatically restored to its original "
+            "chain position. ``off`` disables the monitor "
             "entirely (zero observation overhead, identical to "
             "v1.9.x behavior)."
         ),
@@ -437,6 +475,41 @@ class FallbackChain(BaseModel):
             "Ollama / LM Studio crashes (which produce a deterministic "
             "5xx pattern on every retry) without flapping on transient "
             "blips that the v1.9-C adaptive adjuster already handles."
+        ),
+    )
+    # v2.0-J: self-healing recovery probe configuration.
+    recovery_probe_initial_s: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=600.0,
+        description=(
+            "v2.0-J: initial interval (seconds) for recovery probes "
+            "sent to an UNHEALTHY-excluded provider. Each failed probe "
+            "doubles the interval up to ``recovery_probe_max_s``. "
+            "A successful probe restores the provider to its original "
+            "chain position immediately."
+        ),
+    )
+    recovery_probe_max_s: float = Field(
+        default=300.0,
+        ge=30.0,
+        le=3600.0,
+        description=(
+            "v2.0-J: maximum interval (seconds) for recovery probe "
+            "exponential backoff. Default 300 s (5 min) means a dead "
+            "backend is probed at most every 5 minutes indefinitely "
+            "until it recovers or the server shuts down."
+        ),
+    )
+    restart_timeout_s: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        description=(
+            "v2.0-J: timeout (seconds) for the restart_command "
+            "subprocess. If the command doesn't complete within this "
+            "window, it is killed. Prevents hung restart commands from "
+            "blocking recovery."
         ),
     )
     adaptive: bool = Field(
@@ -868,6 +941,63 @@ class CodeRouterConfig(BaseModel):
         description=(
             "v2.0-I: per-provider timeout for probe requests. A provider "
             "that doesn't respond within this window is recorded as failed."
+        ),
+    )
+
+    # v2.0-K: Persistent state — survive restarts.
+    state_dir: str | None = Field(
+        default=None,
+        description=(
+            "v2.0-K: directory for persistent state (sqlite3 KV store + "
+            "audit log). None = in-memory only (no persistence, backward-"
+            "compatible). Set to a path like '~/.coderouter/state/' to "
+            "enable cross-restart durability for budget totals, health "
+            "state, and self-healing exclusions. The directory is created "
+            "automatically if it doesn't exist."
+        ),
+    )
+    audit_log: Literal["off", "active"] = Field(
+        default="off",
+        description=(
+            "v2.0-K: structured audit log. 'active' writes guard "
+            "activations, chain fallbacks, budget warnings, self-healing "
+            "events, and drift transitions to a JSONL file in state_dir. "
+            "'off' = no audit log (backward-compatible default). Requires "
+            "state_dir to be set."
+        ),
+    )
+    audit_log_max_bytes: int = Field(
+        default=10_485_760,
+        ge=1_048_576,
+        le=1_073_741_824,
+        description=(
+            "v2.0-K: maximum audit log file size before rotation (bytes). "
+            "Default 10 MiB. When exceeded, the current file is renamed "
+            "to audit.jsonl.1 and a fresh file is started. Only one "
+            "backup is kept."
+        ),
+    )
+    request_log: Literal["off", "active"] = Field(
+        default="off",
+        description=(
+            "v2.0-K (Replay): request metadata journal. 'active' records "
+            "per-request metadata (provider, token counts, cost, streaming "
+            "flag) to a JSONL file in state_dir on every successful "
+            "response. Request/response bodies are NOT recorded (privacy "
+            "+ size). Used by ``coderouter replay`` for statistical A/B "
+            "analysis. 'off' = no journal (backward-compatible default). "
+            "Requires state_dir to be set."
+        ),
+    )
+    request_log_max_bytes: int = Field(
+        default=52_428_800,
+        ge=1_048_576,
+        le=1_073_741_824,
+        description=(
+            "v2.0-K (Replay): maximum request journal file size before "
+            "rotation (bytes). Default 50 MiB. Same single-backup "
+            "rotation as audit_log — when exceeded, the current file is "
+            "renamed to requests.jsonl.1 and a fresh file is started."
         ),
     )
 

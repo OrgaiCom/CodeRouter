@@ -24,12 +24,16 @@ Dual entry points (v0.3.x-1):
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
+    from coderouter.config.schemas import FallbackChain
     from coderouter.guards.drift_detection import DriftVerdict
+    from coderouter.guards.self_healing import SelfHealingOrchestrator
+    from coderouter.state.store import StateStore
 
 from coderouter.adapters.anthropic_native import AnthropicAdapter
 from coderouter.adapters.base import (
@@ -51,7 +55,9 @@ from coderouter.guards.memory_pressure import (
 )
 from coderouter.guards.tool_loop import (
     DEFAULT_LOOP_INJECT_HINT,
+    ToolCountExceededError,
     ToolLoopBreakError,
+    check_total_tool_count,
     detect_tool_loop,
     inject_loop_break_hint,
 )
@@ -130,7 +136,8 @@ def _apply_tool_loop_guard(
 
     Returns the (possibly mutated) request. Raises
     :class:`ToolLoopBreakError` when the configured action is ``break``
-    and a loop was detected.
+    and a loop was detected. Also raises :class:`ToolCountExceededError`
+    when the total tool-call count exceeds ``max_tool_calls`` (v2.2).
 
     Profile resolution: uses ``request.profile`` (the X-CodeRouter-Mode
     header / explicit body field) and falls back to
@@ -148,6 +155,30 @@ def _apply_tool_loop_guard(
         # silently no-ops so we don't double-error before the chain
         # resolution path produces its own diagnostic.
         return request
+
+    # v2.2: total tool-call count hard cap — runs before streak
+    # detection because it's a cheaper O(n) scan that catches a
+    # broader class of runaway behavior.
+    if profile.max_tool_calls > 0:
+        exceeded = check_total_tool_count(
+            request,
+            max_calls=profile.max_tool_calls,
+        )
+        if exceeded is not None:
+            logger.warning(
+                "tool-count-exceeded",
+                extra={
+                    "profile": profile.name,
+                    "total_count": exceeded.total_count,
+                    "max_allowed": exceeded.max_allowed,
+                    "action": profile.tool_loop_action,
+                },
+            )
+            if profile.tool_loop_action == "break":
+                raise ToolCountExceededError(exceeded, profile.name)
+            # For "warn" and "inject" actions, log only and continue.
+            # The inject action's hint is not meaningful for count
+            # exceeded (not a same-tool loop), so we just warn.
 
     detection = detect_tool_loop(
         request,
@@ -818,6 +849,12 @@ class FallbackEngine:
         # Distinct from v1.9-C ``adaptive`` which handles the
         # gradient case via a rolling window.
         self._backend_health_monitor: BackendHealthMonitor = BackendHealthMonitor()
+        # v2.0-J: self-healing orchestrator. Manages provider exclusion,
+        # restart, and recovery probing when backend_health_action is
+        # "exclude". Composes with the L5 backend health monitor.
+        from coderouter.guards.self_healing import SelfHealingOrchestrator
+
+        self._self_healing: SelfHealingOrchestrator = SelfHealingOrchestrator()
         # v2.0-G (L4): per-process drift detection window manager.
         # Stores per-provider rolling observations; the detector is
         # invoked after each provider-ok / provider-failed event and
@@ -831,6 +868,12 @@ class FallbackEngine:
         self._drift_demoted: dict[str, float] = {}
         # Last drift verdict (set by _observe_drift_signal for ingress header).
         self._last_drift_verdict: DriftVerdict | None = None
+        # v2.0-J: active recovery probe tasks (one per excluded provider).
+        self._recovery_tasks: dict[str, asyncio.Task[None]] = {}
+        # v2.0-J: shutdown event shared with recovery probe tasks.
+        self._recovery_shutdown: asyncio.Event | None = None
+        # v2.0-K: persistent state store (None = in-memory only).
+        self._state_store: StateStore | None = None
 
     @property
     def last_drift_severity(self) -> str | None:
@@ -914,6 +957,20 @@ class FallbackEngine:
     def _backend_health(self) -> BackendHealthMonitor:
         return self.backend_health
 
+    @property
+    def self_healing(self) -> SelfHealingOrchestrator:
+        """Return the v2.0-J self-healing orchestrator.
+
+        Lazy init for backward compat with __new__-constructed test engines.
+        """
+        from coderouter.guards.self_healing import SelfHealingOrchestrator
+
+        existing = getattr(self, "_self_healing", None)
+        if existing is None:
+            self._self_healing = SelfHealingOrchestrator()
+            existing = self._self_healing
+        return existing
+
     def _observe_provider_failure(
         self,
         provider: str,
@@ -991,6 +1048,18 @@ class FallbackEngine:
                     new_state=transition.new_state,
                     consecutive_failures=transition.consecutive_failures,
                 )
+                # v2.0-J: trigger self-healing on UNHEALTHY + exclude.
+                if (
+                    transition.new_state == "UNHEALTHY"
+                    and bh_action == "exclude"
+                ):
+                    newly_excluded = self.self_healing.on_unhealthy(
+                        provider,
+                        profile=chosen,
+                        consecutive_failures=transition.consecutive_failures,
+                    )
+                    if newly_excluded:
+                        self._spawn_recovery_probe(provider, chain=chain)
 
     def _observe_provider_success(
         self,
@@ -1031,6 +1100,134 @@ class FallbackEngine:
                 new_state=transition.new_state,
                 consecutive_failures=transition.consecutive_failures,
             )
+
+    def _spawn_recovery_probe(
+        self,
+        provider: str,
+        *,
+        chain: FallbackChain,
+    ) -> None:
+        """Launch an async recovery probe task for an excluded provider.
+
+        v2.0-J: called by ``_observe_provider_failure`` when a provider
+        is newly excluded. The task runs ``recovery_probe_loop`` with
+        exponential backoff until the provider recovers or shutdown.
+
+        Safe to call from a sync context — uses ``asyncio.get_event_loop``
+        to schedule the task. No-op if no running event loop (e.g. in
+        pure-sync tests).
+        """
+        import asyncio
+
+        from coderouter.guards.self_healing import recovery_probe_loop
+
+        # Find the ProviderConfig for this provider name.
+        provider_config = None
+        for p in self.config.providers:
+            if p.name == provider:
+                provider_config = p
+                break
+        if provider_config is None:
+            return
+
+        # Reuse or create a shared shutdown event.
+        if self._recovery_shutdown is None:
+            self._recovery_shutdown = asyncio.Event()
+
+        # Don't spawn duplicate tasks.
+        existing = self._recovery_tasks.get(provider)
+        if existing is not None and not existing.done():
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no event loop — skip (sync test context)
+
+        task = loop.create_task(
+            recovery_probe_loop(
+                provider_config,
+                orchestrator=self.self_healing,
+                record_fn=self.backend_health.record_attempt,
+                health_threshold=chain.backend_health_threshold,
+                initial_interval_s=chain.recovery_probe_initial_s,
+                max_interval_s=chain.recovery_probe_max_s,
+                restart_timeout_s=chain.restart_timeout_s,
+                probe_timeout_s=10.0,
+                shutdown_event=self._recovery_shutdown,
+                profile=chain.name,
+            ),
+            name=f"recovery-probe-{provider}",
+        )
+        self._recovery_tasks[provider] = task
+
+    async def shutdown_recovery_probes(self) -> None:
+        """Signal all recovery probe tasks to stop and await them.
+
+        Called from the app lifespan shutdown path.
+        """
+        import contextlib
+
+        if self._recovery_shutdown is not None:
+            self._recovery_shutdown.set()
+        for task in self._recovery_tasks.values():
+            if not task.done():
+                with contextlib.suppress(Exception):
+                    await task
+        self._recovery_tasks.clear()
+
+    # ------------------------------------------------------------------
+    # v2.0-K: State persistence
+    # ------------------------------------------------------------------
+
+    def attach_state_store(self, store: StateStore) -> None:
+        """Attach a :class:`StateStore` and load persisted state.
+
+        Called from the app lifespan startup path when ``state_dir``
+        is configured.  Loads budget, health, self-healing, and
+        metrics state from the store.
+        """
+        self._state_store = store
+        self._load_all_state()
+
+    def save_all_state(self) -> None:
+        """Persist all subsystem state to the attached store.
+
+        Called from the app lifespan shutdown path and optionally
+        on a periodic timer.  No-op if no store is attached.
+        """
+        store = self._state_store
+        if store is None:
+            return
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            store.put("budget", "state", self._budget.save_state())
+        with contextlib.suppress(Exception):
+            store.put("health", "state", self.backend_health.save_state())
+        with contextlib.suppress(Exception):
+            store.put("self_healing", "state", self.self_healing.save_state())
+        # MetricsCollector state is saved separately via the singleton.
+
+    def _load_all_state(self) -> None:
+        """Restore subsystem state from the attached store."""
+        store = self._state_store
+        if store is None:
+            return
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            budget_state = store.get("budget", "state")
+            if budget_state is not None:
+                self._budget.load_state(budget_state)  # type: ignore[arg-type]
+        with contextlib.suppress(Exception):
+            health_state = store.get("health", "state")
+            if health_state is not None:
+                self.backend_health.load_state(health_state)  # type: ignore[arg-type]
+        with contextlib.suppress(Exception):
+            sh_state = store.get("self_healing", "state")
+            if sh_state is not None:
+                self.self_healing.load_state(sh_state)  # type: ignore[arg-type]
 
     def _observe_drift_signal(
         self,
@@ -1340,6 +1537,19 @@ class FallbackEngine:
                         profile=chosen,
                     )
                 adapters = healthy + unhealthy
+
+        # Pass 4b: v2.0-J self-healing exclusion. When the action is
+        # "exclude", providers in the orchestrator's excluded set are
+        # removed entirely from the chain. Unlike "demote" (which
+        # moves to the back), excluded providers are not attempted at
+        # all — recovery probes run in the background to detect when
+        # they come back. If all providers are excluded, fall through
+        # to the existing NoProvidersAvailableError path.
+        if chain.backend_health_action == "exclude":
+            excluded = self.self_healing.excluded_providers()
+            if excluded:
+                adapters = [a for a in adapters if a.name not in excluded]
+
         return adapters
 
     def _resolve_anthropic_chain(self, request: AnthropicRequest) -> list[tuple[BaseAdapter, bool]]:
