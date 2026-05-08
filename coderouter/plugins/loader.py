@@ -137,7 +137,7 @@ def discover_and_load(config: CodeRouterConfig) -> PluginRegistry:
                     extra={
                         "plugin": ep.name,
                         "group": group,
-                        "module": ep.value,
+                        "entry_point": ep.value,
                     },
                 )
             except Exception as exc:
@@ -148,7 +148,7 @@ def discover_and_load(config: CodeRouterConfig) -> PluginRegistry:
                     extra={
                         "plugin": ep.name,
                         "group": group,
-                        "module": ep.value,
+                        "entry_point": ep.value,
                         "error_type": type(exc).__name__,
                         "error": str(exc),
                     },

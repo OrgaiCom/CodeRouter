@@ -6,6 +6,44 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.3.0a3] — 2026-05-08 (Plugin SDK — LogRecord.module collision fix)
+
+Patch over `v2.3.0a2`. The wheel-install-and-test job in CI surfaced
+one more issue that the source-tree test runs hadn't caught.
+
+### Fixed
+
+- **`KeyError: "Attempt to overwrite 'module' in LogRecord"`** in
+  `discover_and_load`. Python's `logging` module reserves several
+  attribute names on `LogRecord` (``name`` / ``msg`` / ``args`` /
+  ``levelname`` / ``levelno`` / ``pathname`` / ``filename`` /
+  **``module``** / ``lineno`` / ``funcName`` / ``exc_info`` /
+  ``exc_text`` / ``stack_info`` / ``created`` / ``msecs`` /
+  ``relativeCreated`` / ``thread`` / ``threadName`` / ``processName``
+  / ``process`` / ``message`` / ``asctime``); passing any of these
+  via ``extra=`` raises ``KeyError`` rather than silently overwriting.
+  v2.3.0a1's `plugin-loaded` and `plugin-load-failed` log lines used
+  ``"module"`` as an extra key (intended to mean "the module:attr
+  string from `entry_point.value`"), which collided.
+
+  Renamed the key to ``"entry_point"`` everywhere in
+  `coderouter/plugins/loader.py`. Audited every `extra=` payload in
+  the new plugins module + the engine's hook helpers — none of them
+  use any of the other reserved names.
+
+### Files touched
+
+```
+M  coderouter/plugins/loader.py     — "module" → "entry_point" (×2)
+M  CHANGELOG.md, pyproject.toml     — 2.3.0a2 → 2.3.0a3
+```
+
+No other behavioral change. Downstream consumers that don't rely on
+the structured log shape are unaffected; anyone parsing the JSON
+log lines should rename `module` → `entry_point` to match.
+
+---
+
 ## [v2.3.0a2] — 2026-05-08 (Plugin SDK — CI fixes)
 
 Patch over `v2.3.0a1`. The Plugin SDK addition was sound but two
