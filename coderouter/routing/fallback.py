@@ -75,6 +75,7 @@ from coderouter.logging import (
     log_skip_memory_pressure,
     log_tool_loop_detected,
 )
+from coderouter.plugins.registry import PluginRegistry
 from coderouter.routing.adaptive import AdaptiveAdjuster
 from coderouter.routing.budget import BudgetTracker
 from coderouter.routing.capability import (
@@ -803,7 +804,11 @@ class FallbackEngine:
     translation behavior.
     """
 
-    def __init__(self, config: CodeRouterConfig) -> None:
+    def __init__(
+        self,
+        config: CodeRouterConfig,
+        plugins: PluginRegistry | None = None,
+    ) -> None:
         """Pre-build one adapter per configured provider.
 
         Adapters are stateless with respect to requests (all state is
@@ -816,8 +821,19 @@ class FallbackEngine:
         with ``adaptive: true`` actually fires. Adapter calls under
         non-adaptive profiles record nothing — zero observation
         overhead in the default configuration.
+
+        v2.3.0: an optional :class:`PluginRegistry` carries
+        InputFilter / Observer instances loaded by
+        :func:`coderouter.plugins.discover_and_load`. When omitted (or
+        empty), all hook loops in :meth:`generate_anthropic` /
+        :meth:`stream_anthropic` short-circuit and the request flow is
+        bit-identical to v2.2.0 — that's the zero-cost no-plugin path.
         """
         self.config = config
+        # v2.3.0: plugin registry.  Default empty so legacy callers
+        # (engine constructed without going through the loader) keep
+        # working unchanged.
+        self.plugins: PluginRegistry = plugins or PluginRegistry.empty()
         # Cache adapters so we don't re-instantiate per request
         self._adapters: dict[str, BaseAdapter] = {
             p.name: build_adapter(p) for p in config.providers
@@ -1785,6 +1801,94 @@ class FallbackEngine:
             request, config=self.config, first_provider_config=first_provider_config,
         )
 
+    # ====================================================================
+    # v2.3.0: Plugin SDK hook helpers
+    # ====================================================================
+
+    async def _apply_input_filters(
+        self, request: AnthropicRequest
+    ) -> AnthropicRequest:
+        """Run the InputFilter chain over ``request``.
+
+        Filters apply in registration order (= the order the user
+        listed them in ``plugins.enabled``). A filter that raises is
+        logged at warn level and skipped — its predecessor's output
+        flows through unchanged. The chain is short-circuited
+        entirely when no plugin is registered (zero overhead).
+
+        Plugin contract: filters MUST return a new
+        :class:`AnthropicRequest` (typically via ``model_copy``) and
+        not mutate the input in place. The engine treats the return
+        value as the new authoritative request and discards the
+        previous one.
+        """
+        if self.plugins.is_empty():
+            return request
+        filters = self.plugins.input_filters
+        if not filters:
+            return request
+        for filt in filters:
+            try:
+                request = await filt.transform(request)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "input-filter-failed",
+                    extra={
+                        "plugin": getattr(filt, "name", filt.__class__.__name__),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:500],
+                    },
+                )
+        return request
+
+    def _fanout_observers(
+        self,
+        event_type: str,
+        **payload: Any,
+    ) -> None:
+        """Fan out an Observer event as a fire-and-forget asyncio task.
+
+        The engine never awaits these tasks: a slow observer (e.g. a
+        Langfuse uploader) cannot stretch the wire-level latency the
+        client measures. Errors are caught inside
+        :meth:`_safe_observe` and logged, never propagated.
+
+        ``payload`` is whatever the call site supplied; the receiving
+        plugin's :meth:`Observer.on_event` is expected to tolerate
+        unknown keys (forward-compat).
+        """
+        observers = self.plugins.observers
+        if not observers:
+            return
+        for obs in observers:
+            asyncio.create_task(
+                self._safe_observe(obs, event_type, payload)
+            )
+
+    async def _safe_observe(
+        self,
+        obs: Any,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Wrap a single Observer.on_event call in try/except.
+
+        Separated from the fanout loop so the test suite can call it
+        directly with a synthetic observer + payload.
+        """
+        try:
+            await obs.on_event(event_type, payload)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "observer-failed",
+                extra={
+                    "plugin": getattr(obs, "name", obs.__class__.__name__),
+                    "event": event_type,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                },
+            )
+
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
         # v1.9-E (L3): tool-loop guard runs before chain dispatch so the
@@ -1792,6 +1896,12 @@ class FallbackEngine:
         # naturally. `break` raises ToolLoopBreakError, which the
         # ingress converts to a 400 response.
         request = _apply_tool_loop_guard(request, config=self.config)
+        # v2.3.0: input_filter plugin chain runs *after* the built-in
+        # tool-loop guard but *before* chain resolution + context
+        # budget guard. That order lets a filter (e.g. memory inject)
+        # grow ``request.system`` without bypassing the budget cap —
+        # the budget guard sees the post-filter payload.
+        request = await self._apply_input_filters(request)
         chain = self._resolve_anthropic_chain(request)
 
         # v2.0-F (L1): context budget guard runs after chain resolution
@@ -1961,6 +2071,19 @@ class FallbackEngine:
                 provider_config=adapter.config,
                 budget=self._budget,
             )
+            # v2.3.0: observer plugin fanout — fire-and-forget, never
+            # blocks the engine response. Latency in ms uses the same
+            # per-attempt clock the adaptive recorder used above so a
+            # plugin's view of "this request took N ms" matches the
+            # /metrics view.
+            self._fanout_observers(
+                "request_completed",
+                request=request,
+                response=resp,
+                provider=adapter.name,
+                latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                stream=False,
+            )
             return resp
 
         profile = request.profile or self.config.default_profile
@@ -1982,6 +2105,11 @@ class FallbackEngine:
         """
         # v1.9-E (L3): tool-loop guard mirrors the non-streaming path.
         request = _apply_tool_loop_guard(request, config=self.config)
+        # v2.3.0: input_filter chain — same ordering rules as the
+        # non-streaming path. Filters can grow ``request.system``
+        # before chain resolution, and the budget guard below sees
+        # the post-filter payload.
+        request = await self._apply_input_filters(request)
         chain = self._resolve_anthropic_chain(request)
 
         # v2.0-F (L1): context budget guard mirrors the non-streaming path.
@@ -2168,6 +2296,19 @@ class FallbackEngine:
                 request_had_cache_control=request_had_cache_control,
                 provider_config=adapter.config,
                 budget=self._budget,
+            )
+            # v2.3.0: streaming observer fanout fires once, after the
+            # SSE terminates successfully. We hand the accumulator's
+            # final view (text + usage + tool-use flag) so plugins can
+            # treat it like the non-streaming response — they don't
+            # need to re-aggregate SSE chunks themselves.
+            self._fanout_observers(
+                "request_completed",
+                request=request,
+                response=acc,
+                provider=adapter.name,
+                latency_ms=None,  # streaming latency is end-of-stream-relative; left to plugin
+                stream=True,
             )
             return
 

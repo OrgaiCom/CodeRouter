@@ -14,7 +14,7 @@ Design notes (see plan.md §2 / §5.4):
 from __future__ import annotations
 
 import re
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
@@ -852,6 +852,51 @@ class AutoRouterConfig(BaseModel):
     )
 
 
+class PluginsConfig(BaseModel):
+    """The ``plugins:`` block in providers.yaml (v2.3.0).
+
+    Declarative opt-in for in-process plugins distributed as separate
+    PyPI packages (``coderouter-plugin-*``). Two-step gating:
+
+    1. ``pip install coderouter-plugin-X`` makes the entry point
+       discoverable.
+    2. The plugin's entry-point name MUST appear in :attr:`enabled`
+       before the loader will instantiate it.
+
+    Step 2 is the supply-chain defense: a malicious transitive dep
+    cannot wedge itself into the request flow without an explicit
+    user action in providers.yaml. See
+    :mod:`coderouter.plugins.loader` for the full discovery logic.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: list[str] = Field(
+        default_factory=list,
+        description=(
+            "v2.3.0: ordered list of plugin entry-point names to load. "
+            "An entry-point name is the LHS of an entry in a plugin's "
+            "``[project.entry-points.\"coderouter.<group>\"]`` block — "
+            "e.g. ``memory`` for ``coderouter-plugin-memory``. Order "
+            "controls the order InputFilter chains apply (each filter "
+            "sees the previous filter's output). Empty list = no "
+            "plugins active (default behavior, identical to v2.2.0)."
+        ),
+    )
+    config: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "v2.3.0: per-plugin keyword arguments. The dict at "
+            "``config[<plugin-name>]`` is splatted into the plugin's "
+            "``__init__`` as ``**kwargs``. Validation of each "
+            "sub-dict's schema is the plugin's responsibility — Core "
+            "stays out of plugin-specific config shapes. Plugins not "
+            "listed in :attr:`enabled` are ignored even if they have "
+            "config entries here."
+        ),
+    )
+
+
 class CodeRouterConfig(BaseModel):
     """Top-level config loaded from providers.yaml."""
 
@@ -998,6 +1043,21 @@ class CodeRouterConfig(BaseModel):
             "rotation (bytes). Default 50 MiB. Same single-backup "
             "rotation as audit_log — when exceeded, the current file is "
             "renamed to requests.jsonl.1 and a fresh file is started."
+        ),
+    )
+
+    # v2.3.0: in-process plugin SDK. Optional — when None, the engine
+    # builds an empty ``PluginRegistry`` and the hook chains are
+    # short-circuited (zero-cost path, identical to v2.2.0 behavior).
+    plugins: PluginsConfig | None = Field(
+        default=None,
+        description=(
+            "v2.3.0: in-process plugin configuration. Plugins are "
+            "distributed as separate PyPI packages (e.g. "
+            "``coderouter-plugin-memory``); this block lists which of "
+            "the installed plugins to actually activate, and supplies "
+            "their per-plugin keyword arguments. Absent or empty = no "
+            "plugins (zero-cost, backward-compatible default)."
         ),
     )
 

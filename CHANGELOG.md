@@ -6,6 +6,62 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.3.0a1] — 2026-05-08 (Plugin SDK)
+
+**Theme: in-process plugin SDK. Core 5 deps stays untouched.** v2.3.0a1 adds the plugin discovery + dispatch infrastructure that ``coderouter-plugin-memory`` 0.1.0+ will consume. Two of the six designed extension points (``input_filter`` and ``observer``) are wired into the engine; the other four (``frontend`` / ``guard`` / ``output_filter`` / ``adapter``) ship as Protocol contracts only — plugin authors can target them today, but engine integration is deferred until a real plugin drives the requirement (v2.4+).
+
+### Plugin SDK (new module: ``coderouter.plugins``)
+
+| Component | What it does |
+|---|---|
+| ``coderouter.plugins.base`` | Six ``Protocol`` definitions (InputFilter, Observer, Frontend, Guard, OutputFilter, Adapter). All ``runtime_checkable`` so ``isinstance(x, InputFilter)`` works for diagnostics. |
+| ``coderouter.plugins.loader`` | Reads ``importlib.metadata.entry_points`` under ``coderouter.<group>`` and applies the user's explicit ``plugins.enabled`` allowlist. Failures are logged + degraded — never abort startup. |
+| ``coderouter.plugins.registry`` | Group-keyed container. ``input_filters`` / ``observers`` properties return defensive copies. |
+| ``PluginsConfig`` (in ``schemas.py``) | New ``plugins:`` block in ``providers.yaml`` — ``enabled`` list + ``config`` dict. Absent → identical behavior to v2.2.0. |
+| ``FallbackEngine`` integration | ``__init__`` now takes ``plugins=PluginRegistry``; ``generate_anthropic`` runs the InputFilter chain before chain dispatch; both Anthropic paths fan out ``request_completed`` to observers as fire-and-forget asyncio tasks. The no-plugin code path is bit-identical to v2.2.0. |
+| ``ingress/app.py`` | ``create_app`` calls ``discover_and_load`` and hands the registry to the engine. |
+
+### Supply-chain defense
+
+``pip install coderouter-plugin-X`` is **not** sufficient to activate a plugin. The user must also list its entry-point name under ``plugins.enabled`` in ``providers.yaml``. Unlisted-but-installed entry points are logged ``plugin-skipped`` and never instantiated, so a compromised transitive dependency cannot wedge itself into the request flow.
+
+### Failure semantics
+
+| Failure | Engine behavior |
+|---|---|
+| ``importlib.metadata`` finds no entry point with an enabled name | ``plugin-not-found`` warn (one per missing name); engine boots normally. |
+| Plugin module import fails | ``plugin-load-failed`` error; engine boots without that plugin. |
+| Plugin ``__init__`` raises | Same — error logged, plugin skipped. |
+| ``InputFilter.transform`` raises | ``input-filter-failed`` warn; pre-mutation request flows to the next filter / chain. |
+| ``Observer.on_event`` raises | ``observer-failed`` warn; engine response is unaffected (fanout is fire-and-forget). |
+
+### Backward compatibility
+
+100%. ``providers.yaml`` files written for v2.2.0 keep working unchanged because ``plugins`` is optional and defaults to ``None``. The ``FallbackEngine(config)`` legacy constructor keeps working too — the new ``plugins=`` parameter has a sane default.
+
+### Files changed
+
+```
+A  coderouter/plugins/__init__.py
+A  coderouter/plugins/base.py
+A  coderouter/plugins/loader.py
+A  coderouter/plugins/registry.py
+M  coderouter/config/schemas.py    — PluginsConfig + CodeRouterConfig.plugins field
+M  coderouter/routing/fallback.py  — engine __init__, _apply_input_filters,
+                                     _fanout_observers, _safe_observe + hook calls
+M  coderouter/ingress/app.py       — discover_and_load wired into create_app
+A  tests/test_plugins_registry.py
+A  tests/test_plugins_loader.py
+A  tests/test_plugins_integration.py
+```
+
+### Out-of-scope (deferred)
+
+- Engine integration for ``frontend`` / ``guard`` / ``output_filter`` / ``adapter`` — Protocol contracts only.
+- ``coderouter-plugin-memory`` itself — separate repo, separate release cadence (0.1.0 lands after this Core release publishes).
+
+---
+
 ## [v2.2.0] — 2026-05-06 (Self-healing + Multi-day operation + Replay)
 
 **Theme: 自己修復 + 状態永続化 + 統計リプレイで "無人長時間運用" 基盤を完成。** v2.0-J で UNHEALTHY provider の自動除外 + restart + 復帰を実装、v2.0-K で sqlite3 StateStore + 構造化 audit log + request journal + `coderouter replay` 統計 A/B 分析を実装。v2.2 で Unsloth Studio 由来の堅牢化 3 件を吸収。**6 系統障害全対処 + 自己修復 + 永続化 + リプレイ**に到達。

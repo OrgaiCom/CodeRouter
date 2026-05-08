@@ -17,6 +17,7 @@ from coderouter.ingress.metrics_routes import router as metrics_router
 from coderouter.ingress.openai_routes import router as openai_router
 from coderouter.logging import configure_logging, get_logger
 from coderouter.metrics import install_collector
+from coderouter.plugins import discover_and_load
 from coderouter.routing import FallbackEngine
 from coderouter.routing.capability import check_claude_code_chain_suitability
 
@@ -38,7 +39,13 @@ def create_app(config_path: str | None = None) -> FastAPI:
     # so multiple create_app() calls (tests) don't stack handlers.
     install_collector()
     config = load_config(config_path)
-    engine = FallbackEngine(config)
+    # v2.3.0: discover plugins from importlib.metadata entry points and
+    # apply the user's explicit ``plugins.enabled`` allowlist. When the
+    # ``plugins`` block is absent or empty, the loader returns an empty
+    # registry and the engine's hook loops short-circuit — the request
+    # flow is bit-identical to v2.2.0 in that default case.
+    plugin_registry = discover_and_load(config)
+    engine = FallbackEngine(config, plugins=plugin_registry)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
