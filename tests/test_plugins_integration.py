@@ -1,17 +1,14 @@
 """Integration tests: FallbackEngine + InputFilter / Observer hooks (v2.3.0).
 
-Exercises the actual hot path:
-
-- engine.generate_anthropic invokes registered InputFilters before
-  chain dispatch
-- a successful response triggers observer fanout with the
-  ``request_completed`` event
-- a failing filter is logged + skipped, the chain still runs
-- the no-plugin path is bit-identical to v2.2.0 (zero hook calls)
-
-Adapter calls are mocked at the dispatch level so we don't reach
-HTTPx — keeps the tests fast and offline.
+These exercise the engine-side helpers directly
+(``_apply_input_filters`` / ``_fanout_observers`` /
+``_safe_observe``). We don't actually invoke ``generate_anthropic`` /
+``stream_anthropic`` here because doing so would mean stubbing the
+entire HTTP / chain dispatch path; the helpers themselves carry the
+plugin contract, and the broader engine paths are covered by
+``test_fallback*.py``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,13 +19,7 @@ import pytest
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.plugins.registry import PluginRegistry
 from coderouter.routing.fallback import FallbackEngine
-from coderouter.translation.anthropic import (
-    AnthropicMessage,
-    AnthropicRequest,
-    AnthropicResponse,
-    AnthropicUsage,
-)
-
+from coderouter.translation.anthropic import AnthropicMessage, AnthropicRequest
 
 # ---------------------------------------------------------------------
 # Synthetic plugin classes
@@ -78,99 +69,8 @@ class _RecordingObserver:
 
 
 # ---------------------------------------------------------------------
-# Fixtures + helpers
+# Helpers
 # ---------------------------------------------------------------------
-
-
-@pytest.fixture
-def fake_response() -> AnthropicResponse:
-    return AnthropicResponse(
-        id="msg_test",
-        type="message",
-        role="assistant",
-        content=[{"type": "text", "text": "ok"}],
-        model="x",
-        stop_reason="end_turn",
-        usage=AnthropicUsage(input_tokens=5, output_tokens=2),
-    )
-
-
-def _build_engine(
-    basic_config: CodeRouterConfig,
-    *,
-    plugins: PluginRegistry | None = None,
-    fake_response: AnthropicResponse | None = None,
-) -> tuple[FallbackEngine, list[AnthropicRequest]]:
-    """Build an engine and stub its first adapter to capture the
-    request and return ``fake_response``.
-
-    Returns ``(engine, captured_requests)`` — captured_requests is the
-    list of requests the (mocked) adapter saw, useful for asserting
-    that the InputFilter's mutation reached the dispatch layer.
-    """
-    engine = FallbackEngine(basic_config, plugins=plugins)
-    captured: list[AnthropicRequest] = []
-
-    # Stub: only used when test hands us a fake_response to return.
-    if fake_response is not None:
-        async def stub_generate_anthropic(
-            req: AnthropicRequest, *, overrides: Any = None
-        ) -> AnthropicResponse:
-            captured.append(req)
-            return fake_response
-
-        # Wrap the first adapter into a "native Anthropic" shape.
-        first_name = next(iter(engine._adapters))
-        first_adapter = engine._adapters[first_name]
-        # Convert the stub into AnthropicAdapter-shaped surface by
-        # patching the method directly. The engine's isinstance check
-        # for AnthropicAdapter still matters; instead of fighting it,
-        # we use a simpler approach: replace the chain resolution to
-        # always pick our stub adapter, AND patch generate_anthropic.
-        from coderouter.adapters.anthropic_native import AnthropicAdapter
-
-        if not isinstance(first_adapter, AnthropicAdapter):
-            # Not an Anthropic-native adapter — patch generate() and
-            # rely on the openai_compat code path which calls
-            # to_chat_request → adapter.generate() → to_anthropic_response.
-            async def stub_generate(
-                chat_req: Any, *, overrides: Any = None
-            ) -> Any:
-                # Build a minimal ChatResponse using the existing
-                # AnthropicResponse text. We import lazily to avoid a
-                # heavy module import at test collection time.
-                from coderouter.translation.convert import to_chat_request  # noqa: F401
-                from coderouter.translation import (  # noqa: F401
-                    ChatResponse,
-                    ChatResponseMessage,
-                )
-
-                # Capture the inbound chat request so we can also
-                # introspect what InputFilters mutated.
-                captured_chat = chat_req
-                # Build a chat-shaped response.
-                return ChatResponse(  # type: ignore[call-arg]
-                    id="cmpl_test",
-                    object="chat.completion",
-                    created=0,
-                    model=chat_req.model,
-                    choices=[
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "ok"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
-                )
-
-            first_adapter.generate = stub_generate  # type: ignore[method-assign]
-
-        # Always patch generate_anthropic regardless — if the adapter
-        # IS Anthropic-native this is the path; otherwise it's harmless.
-        first_adapter.generate_anthropic = stub_generate_anthropic  # type: ignore[method-assign,attr-defined]
-
-    return engine, captured
 
 
 def _make_request(text: str = "hi") -> AnthropicRequest:
@@ -188,15 +88,13 @@ def _make_request(text: str = "hi") -> AnthropicRequest:
 
 def test_no_plugins_means_no_hook_calls(basic_config: CodeRouterConfig) -> None:
     """With an empty registry, hook helpers are short-circuit no-ops."""
-    engine, _ = _build_engine(basic_config)
+    engine = FallbackEngine(basic_config)
 
-    # Direct private-method calls confirm zero work happens with no plugins.
+    # InputFilter chain returns request unchanged.
     out = asyncio.run(engine._apply_input_filters(_make_request()))
     assert out.messages[0].content == "hi"
 
-    # _fanout_observers with empty registry must NOT spawn tasks.
-    # Synchronous probe: just confirm it returns without error and
-    # doesn't iterate (no tasks pending afterwards).
+    # Observer fanout with empty registry must NOT spawn tasks.
     engine._fanout_observers("anything", request=None, response=None)
 
 
@@ -254,7 +152,6 @@ def test_safe_observe_swallows_exceptions(
     obs = BadObserver()
 
     with caplog.at_level("WARNING"):
-        # Direct call — the fanout wrapper does the same try/except.
         asyncio.run(engine._safe_observe(obs, "request_completed", {}))
 
     assert any(rec.msg == "observer-failed" for rec in caplog.records)
@@ -279,8 +176,6 @@ def test_observer_fanout_creates_tasks_when_observers_present(
         engine._fanout_observers("custom_event", payload_key="value")
         # Yield control so the spawned task gets a chance to run.
         await asyncio.sleep(0)
-        # Give the loop one more tick to ensure the fire-and-forget
-        # coroutine actually completes before we inspect.
         await asyncio.sleep(0)
 
     asyncio.run(run())

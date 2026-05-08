@@ -43,17 +43,14 @@ from coderouter.plugins.loader import (
 from coderouter.plugins.registry import PluginRegistry
 
 __all__ = [
-    # Active hooks
-    "InputFilter",
-    "Observer",
-    # Future hooks (Protocol-only, no engine integration yet)
+    "PLUGIN_GROUPS_FUTURE",
+    "PLUGIN_GROUPS_V2_3",
+    "Adapter",
     "Frontend",
     "Guard",
+    "InputFilter",
+    "Observer",
     "OutputFilter",
-    "Adapter",
-    # Discovery + container
     "PluginRegistry",
     "discover_and_load",
-    "PLUGIN_GROUPS_V2_3",
-    "PLUGIN_GROUPS_FUTURE",
 ]

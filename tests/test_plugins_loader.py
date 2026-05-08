@@ -11,6 +11,7 @@ while exercising the loader's real path: enabled-allowlist filtering,
 ``__init__`` dispatch with config dict, and degraded-continue on
 construction failure.
 """
+
 from __future__ import annotations
 
 import importlib.metadata as md
@@ -27,7 +28,6 @@ from coderouter.config.schemas import (
 )
 from coderouter.plugins import loader as loader_mod
 from coderouter.plugins.loader import discover_and_load
-
 
 # ---------------------------------------------------------------------
 # Synthetic plugin classes — module-level so EntryPoint.load() can
@@ -187,9 +187,7 @@ def test_failing_init_does_not_abort_loader(
     )
     monkeypatch.setattr(loader_mod.md, "entry_points", fake_eps)
 
-    cfg = _make_config(
-        plugins_cfg=PluginsConfig(enabled=["bad-init", "good-filter"])
-    )
+    cfg = _make_config(plugins_cfg=PluginsConfig(enabled=["bad-init", "good-filter"]))
     with caplog.at_level("ERROR"):
         reg = discover_and_load(cfg)
 
@@ -256,6 +254,4 @@ def test_future_group_logs_warning_but_still_loads(
         reg = discover_and_load(cfg)
 
     assert reg.count("frontend") == 1
-    assert any(
-        rec.msg == "plugin-group-not-yet-active" for rec in caplog.records
-    )
+    assert any(rec.msg == "plugin-group-not-yet-active" for rec in caplog.records)

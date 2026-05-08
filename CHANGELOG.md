@@ -6,6 +6,51 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.3.0a4] — 2026-05-08 (Plugin SDK — ruff cleanup)
+
+Patch over `v2.3.0a3`. CI's `ruff check .` job surfaced six lint
+findings in the new Plugin SDK code. None affect runtime behavior.
+
+### Fixed
+
+- **RUF022**: `__all__` in `coderouter/plugins/__init__.py` is now
+  isort-sorted alphabetically.
+- **RUF006**: `_fanout_observers` was using `asyncio.create_task`
+  without holding a strong reference. Asyncio's task tracker only
+  keeps a weakref, so a fanout-in-flight task could be GC'd before
+  the observer ran. Fixed by storing tasks in a per-engine
+  ``_observer_tasks: set[asyncio.Task[None]]`` and removing each
+  via ``task.add_done_callback(set.discard)`` on completion. The
+  attribute is lazy-initialized in `_fanout_observers` itself so
+  engines built via ``__new__`` (which bypass ``__init__``) still
+  work.
+- **I001 + F841**: `tests/test_plugins_integration.py` had unused
+  imports (`AnthropicResponse`, `AnthropicUsage`) and an unused
+  local (`captured_chat`) left over from a build-engine helper
+  whose code path never ran. Removed the helper entirely; the
+  remaining tests exercise the engine's hook surface
+  (``_apply_input_filters`` / ``_fanout_observers`` /
+  ``_safe_observe``) directly, which is what they always actually
+  did.
+- **I001**: `tests/test_plugins_loader.py` import block reordered
+  alphabetically by module name.
+
+### Files touched
+
+```
+M  coderouter/plugins/__init__.py        — __all__ alphabetical
+M  coderouter/routing/fallback.py        — task strong-ref set
+M  tests/test_plugins_integration.py     — drop dead helper
+M  tests/test_plugins_loader.py          — import order
+M  tests/test_plugins_registry.py        — formatting nit (blank line)
+M  CHANGELOG.md, pyproject.toml          — 2.3.0a3 → 2.3.0a4
+```
+
+After this patch, ``ruff check .`` passes against every tracked
+Python file in the repo.
+
+---
+
 ## [v2.3.0a3] — 2026-05-08 (Plugin SDK — LogRecord.module collision fix)
 
 Patch over `v2.3.0a2`. The wheel-install-and-test job in CI surfaced

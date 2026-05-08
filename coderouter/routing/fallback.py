@@ -838,6 +838,12 @@ class FallbackEngine:
         # so tests that build the engine via ``FallbackEngine.__new__``
         # see an empty registry instead of AttributeError.
         self._plugin_registry: PluginRegistry = plugins or PluginRegistry.empty()
+        # v2.3.0: holds strong refs to in-flight Observer fanout tasks
+        # so the asyncio event loop's weak-ref bookkeeping doesn't GC
+        # them mid-flight (RUF006).  Tasks remove themselves on done
+        # via ``add_done_callback(_observer_tasks.discard)`` in
+        # :meth:`_fanout_observers`.
+        self._observer_tasks: set[asyncio.Task[None]] = set()
         # Cache adapters so we don't re-instantiate per request
         self._adapters: dict[str, BaseAdapter] = {
             p.name: build_adapter(p) for p in config.providers
@@ -1881,10 +1887,22 @@ class FallbackEngine:
         observers = self.plugins.observers
         if not observers:
             return
+        # Lazy-init the task set for engines built via ``__new__`` —
+        # mirrors the lazy ``plugins`` property pattern so legacy
+        # tests that bypass __init__ don't crash here.
+        if not hasattr(self, "_observer_tasks"):
+            self._observer_tasks = set()
         for obs in observers:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._safe_observe(obs, event_type, payload)
             )
+            # Strong-ref keeps the task alive past the loop iteration;
+            # ``discard`` cleans up after the task completes (success
+            # or exception). Avoids the RUF006 footgun where
+            # asyncio.create_task's weakref-only bookkeeping can let
+            # the loop GC a fanout-in-progress task.
+            self._observer_tasks.add(task)
+            task.add_done_callback(self._observer_tasks.discard)
 
     async def _safe_observe(
         self,

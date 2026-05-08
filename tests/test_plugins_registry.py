@@ -1,4 +1,5 @@
 """Unit tests for ``coderouter.plugins.registry`` (v2.3.0)."""
+
 from __future__ import annotations
 
 from coderouter.plugins.registry import PluginRegistry
