@@ -6,6 +6,51 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.3.0a2] — 2026-05-08 (Plugin SDK — CI fixes)
+
+Patch over `v2.3.0a1`. The Plugin SDK addition was sound but two
+issues showed up in the test matrix and have been fixed:
+
+### Fixed
+
+- **`'FallbackEngine' object has no attribute 'plugins'`** —
+  Many existing tests construct the engine via
+  ``FallbackEngine.__new__`` to bypass full initialization (only
+  ``config`` + ``_adapters`` are populated). The new direct
+  attribute ``self.plugins`` was missing on those instances and
+  raised ``AttributeError`` whenever the engine reached the hook
+  helpers. Converted to the same lazy-property pattern that
+  ``_adaptive`` / ``_budget`` / ``_memory_pressure_guard`` already
+  use: store under ``_plugin_registry`` in ``__init__``, surface
+  via a ``plugins`` property that lazily builds an empty registry
+  when the underlying attribute is missing. Bypass-tests now see
+  an empty registry and the hook helpers short-circuit cleanly.
+
+- **`LogRecord` assertions in `test_plugins_loader.py` /
+  `test_plugins_integration.py`** — used ``rec.message`` which
+  isn't always populated (depends on whether a Formatter has
+  processed the record). Switched to ``rec.msg`` with exact
+  match, matching the rest of the test suite's convention
+  (e.g. ``test_fallback_paid_gate.py``,
+  ``test_memory_pressure.py``) where structured-log event names
+  are tested via ``rec.msg == "<event-name>"``.
+
+### Files touched
+
+```
+M  coderouter/routing/fallback.py    — lazy plugins property
+M  tests/test_plugins_loader.py      — rec.msg ==
+M  tests/test_plugins_integration.py — rec.msg ==
+M  CHANGELOG.md, pyproject.toml      — 2.3.0a1 → 2.3.0a2
+```
+
+No behavioral change vs `v2.3.0a1`. If you've already pinned
+`v2.3.0a1` in a downstream that doesn't construct engines via
+``__new__`` and doesn't run our test suite, the upgrade is a
+no-op for runtime.
+
+---
+
 ## [v2.3.0a1] — 2026-05-08 (Plugin SDK)
 
 **Theme: in-process plugin SDK. Core 5 deps stays untouched.** v2.3.0a1 adds the plugin discovery + dispatch infrastructure that ``coderouter-plugin-memory`` 0.1.0+ will consume. Two of the six designed extension points (``input_filter`` and ``observer``) are wired into the engine; the other four (``frontend`` / ``guard`` / ``output_filter`` / ``adapter``) ship as Protocol contracts only — plugin authors can target them today, but engine integration is deferred until a real plugin drives the requirement (v2.4+).

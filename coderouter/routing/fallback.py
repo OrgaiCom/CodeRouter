@@ -832,8 +832,12 @@ class FallbackEngine:
         self.config = config
         # v2.3.0: plugin registry.  Default empty so legacy callers
         # (engine constructed without going through the loader) keep
-        # working unchanged.
-        self.plugins: PluginRegistry = plugins or PluginRegistry.empty()
+        # working unchanged.  Stored under ``_plugin_registry`` and
+        # surfaced via the ``plugins`` property — same lazy fallback
+        # pattern as ``_adaptive`` / ``_budget`` / ``_memory_pressure_guard``
+        # so tests that build the engine via ``FallbackEngine.__new__``
+        # see an empty registry instead of AttributeError.
+        self._plugin_registry: PluginRegistry = plugins or PluginRegistry.empty()
         # Cache adapters so we don't re-instantiate per request
         self._adapters: dict[str, BaseAdapter] = {
             p.name: build_adapter(p) for p in config.providers
@@ -890,6 +894,23 @@ class FallbackEngine:
         self._recovery_shutdown: asyncio.Event | None = None
         # v2.0-K: persistent state store (None = in-memory only).
         self._state_store: StateStore | None = None
+
+    @property
+    def plugins(self) -> PluginRegistry:
+        """Return the plugin registry, lazily building an empty one if absent.
+
+        Same legacy-test compatibility pattern as :py:attr:`_adaptive` /
+        :py:attr:`_budget`. Tests that construct the engine via
+        ``FallbackEngine.__new__`` (bypassing ``__init__``) see an
+        empty registry here instead of AttributeError, so the hook
+        helpers ``_apply_input_filters`` / ``_fanout_observers``
+        short-circuit cleanly without any plugin work happening.
+        """
+        existing = getattr(self, "_plugin_registry", None)
+        if existing is None:
+            self._plugin_registry = PluginRegistry.empty()
+            existing = self._plugin_registry
+        return existing
 
     @property
     def last_drift_severity(self) -> str | None:

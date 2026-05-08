@@ -236,7 +236,7 @@ def test_failing_filter_does_not_abort_chain(
     assert out.system == "[OK]"
     assert bad.calls == 1
     assert good.calls == 1
-    assert any("input-filter-failed" in rec.message for rec in caplog.records)
+    assert any(rec.msg == "input-filter-failed" for rec in caplog.records)
 
 
 def test_safe_observe_swallows_exceptions(
@@ -257,7 +257,7 @@ def test_safe_observe_swallows_exceptions(
         # Direct call — the fanout wrapper does the same try/except.
         asyncio.run(engine._safe_observe(obs, "request_completed", {}))
 
-    assert any("observer-failed" in rec.message for rec in caplog.records)
+    assert any(rec.msg == "observer-failed" for rec in caplog.records)
 
 
 def test_observer_fanout_creates_tasks_when_observers_present(

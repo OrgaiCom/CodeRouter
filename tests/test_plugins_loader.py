@@ -197,7 +197,7 @@ def test_failing_init_does_not_abort_loader(
     assert reg.count("input_filter") == 1
     assert reg.input_filters[0].name == "good-filter"
     # An error log was emitted for the bad plugin.
-    assert any("plugin-load-failed" in rec.message for rec in caplog.records)
+    assert any(rec.msg == "plugin-load-failed" for rec in caplog.records)
 
 
 def test_unknown_enabled_name_emits_not_found_warning(
@@ -217,7 +217,7 @@ def test_unknown_enabled_name_emits_not_found_warning(
         reg = discover_and_load(cfg)
 
     assert reg.is_empty()
-    assert any("plugin-not-found" in rec.message for rec in caplog.records)
+    assert any(rec.msg == "plugin-not-found" for rec in caplog.records)
 
 
 def test_observer_group_loads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,5 +257,5 @@ def test_future_group_logs_warning_but_still_loads(
 
     assert reg.count("frontend") == 1
     assert any(
-        "plugin-group-not-yet-active" in rec.message for rec in caplog.records
+        rec.msg == "plugin-group-not-yet-active" for rec in caplog.records
     )
