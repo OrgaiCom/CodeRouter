@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-2.2.0-blue" alt="version"></a>
+  <a href="https://pypi.org/project/coderouter-cli/"><img src="https://img.shields.io/pypi/v/coderouter-cli?include_prereleases&color=blue&label=pypi" alt="pypi"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
