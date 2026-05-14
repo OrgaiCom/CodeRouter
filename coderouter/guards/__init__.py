@@ -12,6 +12,8 @@ to hit:
   * :mod:`coderouter.guards.self_healing`    — v2.0-J auto-exclude +
                                                  restart + recovery probe
   * :mod:`coderouter.guards.continuous_probe` — v2.0-I background probing
+  * :mod:`coderouter.guards._fingerprint`     — P1-4 response fingerprinting
+                                                 for goal_progress_stall signal
 
 Each guard is a pure-functional / single-class module that the engine
 consults at the appropriate dispatch point. Guards never block the

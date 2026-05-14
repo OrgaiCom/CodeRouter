@@ -658,6 +658,28 @@ class FallbackChain(BaseModel):
         ),
     )
 
+    # --- P1-5: goal_mode — tighter drift thresholds for /goal sessions -------
+    #
+    # When True, the drift detector automatically switches to the
+    # ``THRESHOLDS_GOAL`` preset regardless of ``drift_detection_sensitivity``,
+    # and lowers ``min_window_fill`` to 4 so stall detection fires faster.
+    #
+    # Intended for profiles routed by the ``/goal`` meta-command where
+    # the agent is expected to make steady forward progress. Repetition and
+    # length collapse are much more meaningful signals in that context than
+    # in a general-purpose chat session.
+    goal_mode: bool = Field(
+        default=False,
+        description=(
+            "P1-5: when True, automatically applies the ``goal`` drift "
+            "threshold preset (stricter thresholds, lower ``min_window_fill`` "
+            "of 4) for this profile. Overrides ``drift_detection_sensitivity`` "
+            "when drift_detection_action is not ``off``. Designed for "
+            "agent/goal sessions where forward-progress stalls are more "
+            "actionable than in ad-hoc chat."
+        ),
+    )
+
     # --- v2.0-H (L6): Mid-stream partial stitching --------------------------
     #   * ``off``      — discard partial content on mid-stream failure (legacy).
     #   * ``surface``  — return partial content as a truncated-but-valid response.

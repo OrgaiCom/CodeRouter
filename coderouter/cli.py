@@ -293,6 +293,18 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Use only the last N entries (applied after --since and --provider filters).",
     )
+    # P1-6: --suggest-rules — statistical analysis → routing rule proposals.
+    replay.add_argument(
+        "--suggest-rules",
+        action="store_true",
+        help=(
+            "P1-6: analyse the request journal and print actionable routing "
+            "rule suggestions as copy-paste YAML snippets. Suggestions cover "
+            "provider reordering by cost, prompt_cache enablement, drift "
+            "detection configuration, and goal profile creation. "
+            "Can be combined with --since / --limit to scope the analysis window."
+        ),
+    )
 
     return parser
 
@@ -682,6 +694,25 @@ def _run_replay(args: argparse.Namespace) -> int:
 
     if not entries:
         print("replay: no matching entries found.")
+        return 0
+
+    if getattr(args, "suggest_rules", False):
+        # P1-6: statistical rule suggestion mode.
+        # Always compute a full window summary (ignores --compare / --provider).
+        from coderouter.state.suggest_rules import format_suggestions, suggest_rules
+        from coderouter.state.replay import summarize_window as _sw
+
+        # Re-read without provider filter so we see all providers.
+        all_entries = read_request_log(log_path, since=args.since)
+        if args.limit is not None and args.limit > 0:
+            all_entries = all_entries[-args.limit:]
+        full_summary = _sw(all_entries)
+        suggestions = suggest_rules(full_summary)
+        print(f"Request journal: {len(all_entries)} entries analysed")
+        print(f"  Window: {full_summary.first_ts} → {full_summary.last_ts}")
+        print(f"  Providers: {', '.join(sorted(full_summary.providers))}")
+        print()
+        print(format_suggestions(suggestions))
         return 0
 
     if args.compare:

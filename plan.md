@@ -3,7 +3,7 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-05-06
+最終更新: 2026-05-07
 作成者: zephel01
 状態: **v2.2.0 — リリース準備完了** / **PyPI 最新: v2.1.0** (2026-05-05)。v2.2 (Unsloth 吸収) + v2.0-J (Self-healing) + v2.0-K (永続化 + Audit + Replay) を v2.2.0 として 1 リリース。**6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + 統計リプレイまで到達**。Tests: 964+、Runtime deps: 5 (据え置き連続 41 回)、完全互換。
 - **過去の出荷済みリリース**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
@@ -51,15 +51,15 @@
 
 ### ローカル backend 別接続マトリクス + テスト方針 (現役、運用中)
 
-CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Studio / vLLM / MLX-LM** いずれにも繋がる設計。各 backend の接続レシピと doctor probe での検証方法を以下にまとめる。
+CodeRouter は `kind: openai_compat` と `kind: anthropic` の 2 経路で **Ollama / llama.cpp / LM Studio / vLLM / MLX-LM** いずれにも繋がる設計。**Ollama v0.23.1+ / LM Studio 0.4.12+ は `kind: anthropic` (Anthropic API passthrough) が推奨経路** — 翻訳ゼロで全機能 (tool_use / thinking / cache_control) が透過する。legacy の `kind: openai_compat` も引き続き動作。
 
-| Backend | デフォルトポート | `base_url` (CodeRouter から) | 検証ステータス | 専用 doc |
-| --- | --- | --- | --- | --- |
-| **Ollama** | `11434` | `http://localhost:11434/v1` | ✅ v0.x 〜 v1.8.x 通して継続検証 | [`docs/quickstart.md`](./docs/quickstart.md) / [`docs/troubleshooting.md` §4-2](./docs/troubleshooting.md) |
-| **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/llamacpp-direct.md`](./docs/llamacpp-direct.md) |
-| **LM Studio** | `1234` | `http://localhost:1234/v1` (OpenAI 互換) または `http://localhost:1234` (Anthropic 互換 `/v1/messages`) | ✅ v1.8.4 で実機検証 (Qwen3.5 9B / Qwen3.6 35B-A3B / Qwopus3.5-9B-v3 すべて native tool_calls + tool_use OK、`cache_read_input_tokens: 280` 観測で Anthropic prompt caching 成立) | (新規 `docs/lmstudio-direct.md` を v1.9 で予定) |
-| **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | ⏳ TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外) | TBD |
-| **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | ⏳ TODO (Mac native、量子化が Apple Silicon 最適化) | TBD |
+| Backend | デフォルトポート | `base_url` (CodeRouter から) | 推奨 kind | 検証ステータス | 専用 doc |
+| --- | --- | --- | --- | --- | --- |
+| **Ollama** | `11434` | `http://localhost:11434` (Anthropic 互換) / `http://localhost:11434/v1` (OpenAI 互換) | **`anthropic`** (v0.23.1+) | ✅ v0.x 〜 v2.2 通して継続検証。**v0.23.1 Anthropic API 実機検証済み — Gemma 4 全サイズ Level 3 到達** ([検証記録](./docs/verify-ollama-0.23.1.md)) | [`docs/quickstart.md`](./docs/quickstart.md) / [`docs/troubleshooting.md` §4-2](./docs/troubleshooting.md) |
+| **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | `openai_compat` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/llamacpp-direct.md`](./docs/llamacpp-direct.md) |
+| **LM Studio** | `1234` | `http://localhost:1234` (Anthropic 互換) / `http://localhost:1234/v1` (OpenAI 互換) | **`anthropic`** (v0.4.12+) | ✅ v1.8.4 で実機検証 (Qwen3.5/3.6/Qwopus3.5 全動作、Anthropic prompt caching 成立) | [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md) |
+| **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | `openai_compat` | ⏳ TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外) | TBD |
+| **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | `openai_compat` | ⏳ TODO (Mac native、量子化が Apple Silicon 最適化) | TBD |
 
 ### 共通の検証手順 (どの backend にも適用可)
 
@@ -73,17 +73,33 @@ CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Stud
 
 | Backend | 確認ポイント |
 |---|---|
-| **Ollama** | `/api/chat` (native) と `/v1/chat/completions` (OpenAI-compat) で挙動差異あり、`extra_body.options.num_ctx` の効き、Modelfile の `PARAMETER num_ctx` 焼き込み、新 architecture の `unknown model architecture` 500 エラー |
+| **Ollama** | v0.23.1+ は `kind: anthropic` (Anthropic `/v1/messages`) 推奨。`/api/chat` (native) と `/v1/chat/completions` (OpenAI-compat) で挙動差異あり、`extra_body.options.num_ctx` の効き、Modelfile の `PARAMETER num_ctx` 焼き込み、新 architecture の `unknown model architecture` 500 エラー。**Anthropic 経路では thinking blocks が `type: "thinking"` で返るため max_tokens 設定に注意** (thinking が max_tokens を消費する) |
 | **llama.cpp** | `--jinja` で chat template が効くか、`reasoning_content` フィールド名 (Ollama は `reasoning`)、Metal / CUDA build flag、Unsloth Dynamic Quantization (UD-Q4_K_M) の精度優位 |
 | **LM Studio** | OpenAI 互換 endpoint の挙動が Ollama / llama.cpp と微妙に違う可能性、reasoning フィールドの命名、UI で context length / max tokens を server start 時に指定する必要 |
 | **vLLM** | `--enable-auto-tool-choice` フラグ、tool spec 形式 (Hermes / Mistral / Llama3 のどれを採用するか)、Continuous batching の動作 |
 | **MLX-LM** | Apple Silicon 専用、`mlx_lm.server` 起動時の量子化指定、tool_calls 対応状況 (やや限定的の可能性) |
 
-### LM Studio 接続レシピ (v1.8.4 で実機検証済み)
+### Anthropic API ネイティブ接続 (推奨経路、2026-05 確立)
 
-LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 3.5/3.6 性能改善が入った。CodeRouter からは **OpenAI 互換 / Anthropic 互換** の 2 経路で接続可能、後者は `kind: anthropic` で adapter 翻訳ゼロ透過。
+**Ollama v0.23.1+** と **LM Studio 0.4.12+** が Anthropic 互換 `/v1/messages` をネイティブサポート。CodeRouter からは `kind: anthropic` で翻訳ゼロ passthrough が推奨経路:
 
-検証手順 + providers.yaml の sample は `examples/providers.yaml` の `lmstudio-*` 4 entry を参照。詳細ガイド [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md) は v1.8.5 で出荷済み。
+```yaml
+# Ollama v0.23.1+ (推奨)
+ollama-anthropic:
+  kind: anthropic
+  base_url: http://localhost:11434
+  model: gemma4:12b
+
+# LM Studio 0.4.12+ (推奨)
+lmstudio-anthropic:
+  kind: anthropic
+  base_url: http://localhost:1234
+  model: gemma-4-12b
+```
+
+この経路では tool_use / thinking blocks / cache_control が全て Anthropic ネイティブ形式で透過する。**翻訳レイヤーを経由しないため、wire 上の情報欠落がゼロ**。
+
+検証記録: Ollama → [`docs/verify-ollama-0.23.1.md`](./docs/verify-ollama-0.23.1.md)、LM Studio → [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md)、providers.yaml sample → `examples/providers.yaml`。
 
 ### v1.10 候補 — **全完了 (v1.9.1 + v1.10.0、2026-05-01)**
 

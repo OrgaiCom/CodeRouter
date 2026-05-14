@@ -1283,6 +1283,7 @@ class FallbackEngine:
         stop_reason: str | None = None,
         is_error: bool = False,
         stream: bool = False,
+        response_fingerprint: str | None = None,
     ) -> DriftVerdict | None:
         """v2.0-G (L4): record an observation and check for drift.
 
@@ -1294,9 +1295,18 @@ class FallbackEngine:
         - Emits ``drift-detected`` log.
         - If action is ``promote`` or ``reload``, demotes the provider
           via the adaptive rank machinery.
+
+        Parameters
+        ----------
+        response_fingerprint:
+            P1-4: compact content fingerprint from
+            :func:`coderouter.guards._fingerprint.fingerprint_response`.
+            When set, enables the ``goal_progress_stall`` signal.
+            Pass ``None`` (default) to skip that signal.
         """
         from coderouter.guards.drift_detection import (
             SENSITIVITY_PRESETS,
+            THRESHOLDS_GOAL,
             ResponseObservation,
             detect_drift,
         )
@@ -1322,6 +1332,7 @@ class FallbackEngine:
             stop_reason=stop_reason,
             is_error=is_error,
             stream=stream,
+            response_fingerprint=response_fingerprint,
         )
         self._drift_window.record(obs)
 
@@ -1344,10 +1355,15 @@ class FallbackEngine:
             return None
 
         # Run detection
+        # P1-5: goal_mode overrides the sensitivity preset with the tighter
+        # THRESHOLDS_GOAL regardless of drift_detection_sensitivity setting.
         window = self._drift_window.get_window(provider)
-        thresholds = SENSITIVITY_PRESETS.get(
-            chain_cfg.drift_detection_sensitivity, SENSITIVITY_PRESETS["normal"]
-        )
+        if getattr(chain_cfg, "goal_mode", False):
+            thresholds = THRESHOLDS_GOAL
+        else:
+            thresholds = SENSITIVITY_PRESETS.get(
+                chain_cfg.drift_detection_sensitivity, SENSITIVITY_PRESETS["normal"]
+            )
         verdict = detect_drift(window, thresholds)
 
         if not verdict.drifted:
@@ -2083,6 +2099,13 @@ class FallbackEngine:
                 adapter.name, profile=request.profile
             )
             # v2.0-G (L4): drift detection observation (success path).
+            # P1-4: compute response fingerprint for goal_progress_stall.
+            _fp_text = " ".join(
+                getattr(b, "text", "") or (b.get("text", "") if isinstance(b, dict) else "")
+                for b in (resp.content or [])
+                if (getattr(b, "type", None) or (b.get("type") if isinstance(b, dict) else None)) == "text"
+            )
+            from coderouter.guards._fingerprint import fingerprint_response as _fp
             self._observe_drift_signal(
                 adapter.name,
                 profile=request.profile,
@@ -2093,6 +2116,7 @@ class FallbackEngine:
                 request_had_tools=bool(request.tools),
                 stop_reason=resp.stop_reason,
                 stream=False,
+                response_fingerprint=_fp(_fp_text) if _fp_text else None,
             )
             # v1.9-A: pair every successful Anthropic response with a
             # cache-observed log line. Native Anthropic / LM Studio
@@ -2312,6 +2336,11 @@ class FallbackEngine:
                     adapter.name, exc, partial_content=acc.partial_content
                 ) from exc
             # v2.0-G (L4): drift detection observation (stream success).
+            # P1-4: compute response fingerprint for goal_progress_stall.
+            _stream_fp_text = " ".join(
+                b.get("text", "") for b in acc.partial_content if b.get("type") == "text"
+            )
+            from coderouter.guards._fingerprint import fingerprint_response as _fp_s
             self._observe_drift_signal(
                 adapter.name,
                 profile=request.profile,
@@ -2320,6 +2349,7 @@ class FallbackEngine:
                 request_had_tools=bool(request.tools),
                 stop_reason=acc.stop_reason,
                 stream=True,
+                response_fingerprint=_fp_s(_stream_fp_text) if _stream_fp_text else None,
             )
             # v1.9-B2: pair the successful stream with a cache-observed
             # log line carrying the aggregated usage counters that the
