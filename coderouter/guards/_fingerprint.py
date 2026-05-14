@@ -109,6 +109,14 @@ def fingerprint_response(text: str, *, top_n: int = _TOP_N) -> str:
     for tok in tokens:
         freq[tok] = freq.get(tok, 0) + 1
 
+    # Require at least 3 distinct content words; single-word or near-empty
+    # responses (e.g. "xxxxx..." test stubs, error codes, bare ACKs) produce
+    # the same fingerprint every time and would falsely inflate the repetition
+    # rate.  Returning "" marks these as "not fingerprinted" so detect_drift
+    # skips them entirely.
+    if len(freq) < 3:
+        return ""
+
     top_words = sorted(freq, key=lambda w: (-freq[w], w))[:top_n]
 
     # 5. Sort alphabetically → stable join → hash
