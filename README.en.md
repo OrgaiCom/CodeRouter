@@ -100,7 +100,7 @@ Full decision matrix → [Do I need CodeRouter?](./docs/when-do-i-need-coderoute
 | Guard | What it protects against |
 |---|---|
 | **Context Budget** | Messages piling up → context window overflow. Auto-trim at 90% |
-| **Drift Detection** | Model quality degrading over time → switch provider or flush KV cache |
+| **Drift Detection** | Model quality degrading over time → switch provider or flush KV cache (6 signals incl. `goal_progress_stall`; `goal_mode` for tighter thresholds) |
 | **Self-healing** | Backend crashes → auto-exclude + restart + recovery probe → auto-restore |
 | **Tool Loop Guard** | Agent calling the same tool forever → detect and break |
 | **Memory Pressure** | GPU running out of VRAM → switch to lighter model |
@@ -113,7 +113,7 @@ Full decision matrix → [Do I need CodeRouter?](./docs/when-do-i-need-coderoute
 | **`coderouter doctor`** | 6-probe diagnosis of provider issues + copy-paste YAML patches |
 | **`/dashboard`** | Real-time browser view of what's happening |
 | **`coderouter audit`** | Search guard activation history |
-| **`coderouter replay`** | Compare providers statistically (A/B analysis) |
+| **`coderouter replay`** | Compare providers statistically (A/B analysis) / `--suggest-rules` for automated rule suggestions |
 | **Continuous Probe** | Background health monitoring even during idle |
 
 ---

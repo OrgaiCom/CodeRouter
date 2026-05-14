@@ -100,7 +100,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | ガード | 何から守るか |
 |---|---|
 | **Context Budget** | メッセージが溜まりすぎて context window 溢れ → 自動 trim |
-| **Drift Detection** | モデルの応答品質が徐々に劣化 → 別 provider に切替 or KV cache flush |
+| **Drift Detection** | モデルの応答品質が徐々に劣化 → 別 provider に切替 or KV cache flush (6 シグナル、`goal_mode` で目標達成停滞も検知) |
 | **Self-healing** | backend が落ちた → 自動除外 + restart + 回復 probe で自動復帰 |
 | **Tool Loop Guard** | 同じツールを無限に呼び続ける → 検知して停止 |
 | **Memory Pressure** | GPU メモリ不足を検知 → 軽量モデルに切替 |
@@ -113,7 +113,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | **`coderouter doctor`** | プロバイダの問題を 6 プローブで即診断 + 修正パッチ出力 |
 | **`/dashboard`** | ブラウザで今何が起きてるかリアルタイム確認 |
 | **`coderouter audit`** | guard 発火履歴を検索 |
-| **`coderouter replay`** | provider 切替の効果を統計比較 (A/B 分析) |
+| **`coderouter replay`** | provider 切替の効果を統計比較 (A/B 分析) / `--suggest-rules` でルール最適化提案 |
 | **Continuous Probe** | idle 時も定期的に backend を監視 |
 
 ---

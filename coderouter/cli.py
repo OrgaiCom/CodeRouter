@@ -699,8 +699,8 @@ def _run_replay(args: argparse.Namespace) -> int:
     if getattr(args, "suggest_rules", False):
         # P1-6: statistical rule suggestion mode.
         # Always compute a full window summary (ignores --compare / --provider).
-        from coderouter.state.suggest_rules import format_suggestions, suggest_rules
         from coderouter.state.replay import summarize_window as _sw
+        from coderouter.state.suggest_rules import format_suggestions, suggest_rules
 
         # Re-read without provider filter so we see all providers.
         all_entries = read_request_log(log_path, since=args.since)

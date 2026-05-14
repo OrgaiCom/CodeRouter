@@ -268,10 +268,10 @@ def _rule_small_window_low_sensitivity(
                     f"requires more evidence before promoting the provider."
                 ),
                 yaml_snippet=(
-                    f"profiles:\n"
-                    f"  - name: default\n"
-                    f"    drift_detection_sensitivity: low   # was: normal or high\n"
-                    f"    drift_detection_window_size: 30    # larger window = more stable"
+                    "profiles:\n"
+                    "  - name: default\n"
+                    "    drift_detection_sensitivity: low   # was: normal or high\n"
+                    "    drift_detection_window_size: 30    # larger window = more stable"
                 ),
                 evidence={
                     "provider": p.provider,

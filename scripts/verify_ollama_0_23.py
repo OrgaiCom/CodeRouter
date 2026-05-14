@@ -33,7 +33,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -600,7 +599,7 @@ def print_report(results: list[PhaseResult]) -> None:
     print(f"\n{'='*60}")
     print("VERIFICATION REPORT")
     print(f"{'='*60}")
-    print(f"Date: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Date: {datetime.now(datetime.UTC).isoformat()}")
     print()
 
     for r in results:
@@ -622,7 +621,7 @@ def print_report(results: list[PhaseResult]) -> None:
 
 def save_results(results: list[PhaseResult], path: str) -> None:
     data = {
-        "date": datetime.now(timezone.utc).isoformat(),
+        "date": datetime.now(datetime.UTC).isoformat(),
         "results": [
             {
                 "phase": r.phase,
@@ -655,7 +654,7 @@ async def main() -> None:
     models = args.models.split(",") if args.models else DEFAULT_MODELS
     phases = [args.phase] if args.phase else [1, 2, 3]
 
-    print(f"Ollama v0.23.1 Verification Script")
+    print("Ollama v0.23.1 Verification Script")
     print(f"Models: {models}")
     print(f"Phases: {phases}")
 
