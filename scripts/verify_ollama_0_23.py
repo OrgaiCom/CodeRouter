@@ -35,7 +35,7 @@ import asyncio
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import httpx
