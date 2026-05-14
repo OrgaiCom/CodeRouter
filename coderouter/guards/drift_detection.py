@@ -34,6 +34,10 @@ Signals
   * ``stop_anomaly_rate`` — fraction of responses with unexpected stop_reason
     (not "end_turn" / "tool_use" / "max_tokens")
   * ``error_rate`` — fraction of attempts that ended in failure
+  * ``goal_progress_stall`` (P1-4) — fraction of fingerprinted responses
+    whose fingerprint matches a previously-seen fingerprint in the window,
+    indicating the model is repeating itself without making progress.
+    Only fires when ``response_fingerprint`` is populated on observations.
 
 Thresholds are bundled as :class:`DriftThresholds` with three presets
 (``low`` / ``normal`` / ``high`` sensitivity).
@@ -71,6 +75,15 @@ class ResponseObservation:
     is_error: bool = False
     """True if the attempt ended in provider-failed / provider-failed-midstream."""
     stream: bool = False
+    response_fingerprint: str | None = None
+    """P1-4: compact content fingerprint of the response text.
+
+    When set, used by the ``goal_progress_stall`` signal to detect
+    repetition: the same fingerprint appearing multiple times in the
+    window indicates the model is not making progress. Computed by
+    :func:`coderouter.guards._fingerprint.fingerprint_response`.
+    Pass ``None`` (default) to opt-out — the signal is silently skipped.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +113,12 @@ class DriftThresholds:
     length_collapse_ratio: float = 0.5
     """If recent half median is < 50% of earlier half median → collapse."""
 
+    # P1-4: repetition/stall threshold
+    repetition_rate_threshold: float = 0.4
+    """P1-4: fraction of fingerprinted responses whose fingerprint has
+    appeared before in the window. Above this rate → goal_progress_stall
+    signal fires (mild). Default 0.4 = 2 out of 5 responses are repeats."""
+
     # Minimum observations before detection fires
     min_window_fill: int = 6
     """Don't trigger until at least this many observations in the window."""
@@ -112,6 +131,7 @@ THRESHOLDS_LOW = DriftThresholds(
     tool_silence_rate=0.8,
     stop_anomaly_rate=0.6,
     error_rate=0.4,
+    repetition_rate_threshold=0.6,
     min_window_fill=10,
 )
 
@@ -123,6 +143,19 @@ THRESHOLDS_HIGH = DriftThresholds(
     tool_silence_rate=0.5,
     stop_anomaly_rate=0.3,
     error_rate=0.15,
+    repetition_rate_threshold=0.25,
+    min_window_fill=4,
+)
+
+# P1-5: goal-mode preset — tighter thresholds + lower min_window_fill.
+# Applied automatically when the profile has goal_mode=True.
+THRESHOLDS_GOAL = DriftThresholds(
+    empty_response_rate=0.2,
+    length_collapse_ratio=0.6,
+    tool_silence_rate=0.5,
+    stop_anomaly_rate=0.3,
+    error_rate=0.15,
+    repetition_rate_threshold=0.2,
     min_window_fill=4,
 )
 
@@ -130,6 +163,7 @@ SENSITIVITY_PRESETS: dict[str, DriftThresholds] = {
     "low": THRESHOLDS_LOW,
     "normal": THRESHOLDS_NORMAL,
     "high": THRESHOLDS_HIGH,
+    "goal": THRESHOLDS_GOAL,
 }
 
 
@@ -243,6 +277,27 @@ def detect_drift(
     signals["error_rate"] = round(error_rate, 3)
     if error_rate > thresholds.error_rate:
         mild_flags.append(f"error_rate={error_rate:.2f}")
+
+    # --- Signal 6: Goal progress stall (P1-4) ---
+    # Only active when at least some observations have a fingerprint.
+    # Computes: how many fingerprinted responses repeat a fingerprint
+    # already seen earlier in the window.  High repetition → stall.
+    fingerprinted = [
+        obs for obs in window if obs.response_fingerprint  # excludes None and ""
+    ]
+    if len(fingerprinted) >= 3:
+        seen: set[str] = set()
+        repeat_count = 0
+        for obs in fingerprinted:
+            fp = obs.response_fingerprint  # guaranteed non-empty by filter above
+            if fp in seen:
+                repeat_count += 1
+            else:
+                seen.add(fp)
+        repetition_rate = repeat_count / len(fingerprinted)
+        signals["goal_progress_stall"] = round(repetition_rate, 3)
+        if repetition_rate > thresholds.repetition_rate_threshold:
+            mild_flags.append(f"goal_progress_stall={repetition_rate:.2f}")
 
     # --- Severity synthesis ---
     if severe_flags:

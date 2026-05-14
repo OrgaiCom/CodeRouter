@@ -6,6 +6,82 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.4.0] — 2026-05-15 (Goal-session awareness — P1-4/5/6)
+
+Stable release following v2.3.0a4. Promotes the Plugin SDK to stable,
+adds three goal-session features, and ships a rule-suggestion CLI.
+
+### Added
+
+- **`coderouter/guards/_fingerprint.py`** (P1-4): Response fingerprinting
+  helper.  `fingerprint_response(text)` returns a 12-hex SHA-256 digest
+  of the top-N content words (stop-word-filtered, order-independent).
+  Used by the new `goal_progress_stall` drift signal to detect when a
+  model repeats itself without making progress.
+
+- **Signal 6 — `goal_progress_stall`** (`drift_detection.py`, P1-4):
+  Sixth drift signal added to `detect_drift()`.  Fires (mild) when the
+  fraction of fingerprinted responses that repeat an already-seen
+  fingerprint exceeds `repetition_rate_threshold` (default 0.4).
+  Requires `response_fingerprint` to be populated on observations; when
+  absent the signal is silently skipped (backward-compatible).
+
+- **`DriftThresholds.repetition_rate_threshold`** (P1-4): New field on
+  `DriftThresholds`, present on all three presets.  `THRESHOLDS_GOAL`
+  preset added (`min_window_fill=4`, `repetition_rate_threshold=0.2`,
+  tighter across the board) and exposed via `SENSITIVITY_PRESETS["goal"]`.
+
+- **`FallbackChain.goal_mode: bool = False`** (`config/schemas.py`, P1-5):
+  Profile-level flag.  When `True`, the drift detector ignores
+  `drift_detection_sensitivity` and uses `THRESHOLDS_GOAL` instead
+  (stricter thresholds + `min_window_fill=4`).  Designed for `/goal`
+  agent sessions where forward-progress stalls are more actionable.
+
+- **`coderouter/state/suggest_rules.py`** (P1-6): Statistical rule
+  suggestion engine.  `suggest_rules(WindowSummary) → list[RuleSuggestion]`
+  analyses the request journal and emits copy-paste YAML snippets.
+  Five rules: `provider_reorder` (cost rank), `enable_prompt_cache`
+  (high-token / low-hit providers), `enable_drift_detection` (reminder),
+  `low_sensitivity_small_window` (sparse-traffic guard), `goal_profile`
+  (output-divergence → `goal_mode: true`).  Pure statistics — no LLM.
+
+- **`coderouter replay --suggest-rules`** (`cli.py`, P1-6): New flag on
+  the existing `replay` subcommand.  Reads the full request journal,
+  runs `suggest_rules`, and prints a formatted terminal report with
+  confidence badges and YAML snippets.
+
+### Changed
+
+- **`ResponseObservation.response_fingerprint: str | None = None`**
+  (`drift_detection.py`): New optional field (slots-safe, defaults to
+  `None`).  Fully backward-compatible — existing callers that don't
+  populate it get the same five-signal behaviour as before.
+
+- **`FallbackEngine._observe_drift_signal`** (`fallback.py`): Accepts
+  new `response_fingerprint` kwarg.  Non-streaming and streaming success
+  paths now compute and pass a fingerprint for the `goal_progress_stall`
+  signal.  `goal_mode` check applies `THRESHOLDS_GOAL` when the profile
+  flag is set.
+
+### Files touched
+
+```
+A  coderouter/guards/_fingerprint.py
+M  coderouter/guards/__init__.py          — module registry comment
+M  coderouter/guards/drift_detection.py   — Signal 6, THRESHOLDS_GOAL, new fields
+M  coderouter/config/schemas.py           — FallbackChain.goal_mode
+M  coderouter/routing/fallback.py         — fingerprint wiring, goal_mode dispatch
+A  coderouter/state/suggest_rules.py
+M  coderouter/state/__init__.py           — module registry comment
+M  coderouter/cli.py                      — replay --suggest-rules
+A  docs/articles/v1-saga/note-14-v0-4-goal-mode.md
+M  docs/articles/v1-saga/INDEX.md
+M  docs/inside/future.md
+M  CHANGELOG.md, pyproject.toml          — 2.3.0a4 → 2.4.0
+```
+
+---
+
 ## [v2.3.0a4] — 2026-05-08 (Plugin SDK — ruff cleanup)
 
 Patch over `v2.3.0a3`. CI's `ruff check .` job surfaced six lint

@@ -1,0 +1,161 @@
+# ============================================================
+# Ollama v0.23.1 検証用 providers.yaml
+#
+# Phase 3 の 3 経路比較に必要な最小構成:
+#   経路 A (直結):       Claude Code → Ollama (Anthropic API)  ← CodeRouter 不使用
+#   経路 B (CR+OpenAI):  Claude Code → CodeRouter → Ollama (OpenAI API)
+#   経路 C (CR+Anthropic): Claude Code → CodeRouter → Ollama (Anthropic API)
+#
+# 使い方:
+#   cp scripts/verify-providers.yaml ~/.coderouter/providers.yaml
+#   coderouter serve --port 8088
+#
+# 経路 A は CodeRouter を通さないので、この YAML は経路 B/C 用。
+# 経路 A のテストは verify_ollama_0_23.py が直接 Ollama を叩く。
+# ============================================================
+
+allow_paid: false
+default_profile: verify-gemma4-e4b
+
+providers:
+  # ── Ollama OpenAI 互換 (経路 B 用) ──────────────────────────
+
+  - name: ollama-gemma4-e4b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:e4b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  - name: ollama-gemma4-26b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:26b
+    paid: false
+    timeout_s: 180
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  - name: ollama-gemma4-31b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:31b
+    paid: false
+    timeout_s: 240
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  - name: ollama-qwen-coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ── Ollama Anthropic 互換 (経路 C 用) ──────────────────────
+  #
+  # Ollama v0.23.1 の新機能: /v1/messages エンドポイント
+  # kind: anthropic → CodeRouter は Anthropic adapter で透過接続
+  # (翻訳なし、tool_use block がそのまま通る)
+
+  - name: ollama-gemma4-e4b-anthropic
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: gemma4:e4b
+    paid: false
+    api_key_env: null              # Ollama は x-api-key: ollama で通る
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  - name: ollama-gemma4-26b-anthropic
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: gemma4:26b
+    paid: false
+    api_key_env: null
+    timeout_s: 180
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  - name: ollama-gemma4-31b-anthropic
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: gemma4:31b
+    paid: false
+    api_key_env: null
+    timeout_s: 240
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  - name: ollama-qwen-coder-7b-anthropic
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: qwen2.5-coder:7b
+    paid: false
+    api_key_env: null
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+# ── 検証用プロファイル ─────────────────────────────────────────
+#
+# verify_ollama_0_23.py の Phase 3 で使用。
+# スクリプトが X-CodeRouter-Profile ヘッダーでプロファイルを切り替える。
+
+profiles:
+  # 経路 B: CodeRouter が OpenAI 形式に翻訳して Ollama に渡す
+  - name: verify-gemma4-e4b
+    providers: [ollama-gemma4-e4b]
+
+  - name: verify-gemma4-26b
+    providers: [ollama-gemma4-26b]
+
+  - name: verify-gemma4-31b
+    providers: [ollama-gemma4-31b]
+
+  - name: verify-qwen-coder-7b
+    providers: [ollama-qwen-coder-7b]
+
+  # 経路 C: CodeRouter が Anthropic adapter で透過接続
+  - name: verify-gemma4-e4b-anthropic
+    providers: [ollama-gemma4-e4b-anthropic]
+
+  - name: verify-gemma4-26b-anthropic
+    providers: [ollama-gemma4-26b-anthropic]
+
+  - name: verify-gemma4-31b-anthropic
+    providers: [ollama-gemma4-31b-anthropic]
+
+  - name: verify-qwen-coder-7b-anthropic
+    providers: [ollama-qwen-coder-7b-anthropic]

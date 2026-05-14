@@ -32,6 +32,11 @@ env/
 ENV/
 .python-version-local
 
+# ============================================================
+# _OUTPUTS
+# ============================================================
+_OUTPUTS/
+
 # uv
 # Note: uv.lock SHOULD be committed (per plan.md §5.4)
 # Do NOT add uv.lock here.
