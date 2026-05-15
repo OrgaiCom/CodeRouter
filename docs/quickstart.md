@@ -199,17 +199,32 @@ profile は自動で `claude-code` (ローカル 2 段 + 無料クラウド) が
 
 ## Pattern B: codex CLI で使う
 
+> **バージョン注意**: Codex 0.88 以降はデフォルトで `wire_api = "responses"` を使い、
+> `/v1/responses` エンドポイントに接続します。CodeRouter は現時点で Chat Completions
+> 経路 (`/v1/chat/completions`) のみ対応しているため、**`wire_api = "chat"` を明示**
+> する必要があります。
+
 ### B-1. codex をインストール
 
 ```bash
 npm install -g @openai/codex
 ```
 
-### B-2. 環境変数で CodeRouter に向ける
+### B-2. `~/.codex/config.toml` を作成
+
+```toml
+model = "gpt-4o"          # CodeRouter 側で実際のモデルに差し替えられます
+model_provider = "coderouter"
+
+[model_providers.coderouter]
+name = "CodeRouter"
+base_url = "http://localhost:8088/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"          # ← 必須: responses エンドポイントは未対応
+```
 
 ```bash
-export OPENAI_BASE_URL="http://localhost:8088/v1"
-export OPENAI_API_KEY="dummy"   # ダミーで OK (同上)
+export OPENAI_API_KEY="dummy"   # ダミーで OK (CodeRouter がバックエンドを管理します)
 ```
 
 ### B-3. 実行
@@ -219,6 +234,11 @@ codex "write a python function that reverses a string"
 ```
 
 同じバックエンドチェーンに対して OpenAI 形式で話しかけているだけです。profile は `default` (ローカル 7b + 無料クラウド) が選ばれます。
+
+> **tool call 非対応モデルについて**: Codex はファイル操作・シェル実行をすべて
+> tool call で行います。Ollama のモデルが tool call に対応していない場合、接続は
+> できてもツールが動きません。`coderouter doctor --check-model <モデル名>` で
+> `tool_calls: OK` を確認してから使ってください。
 
 ---
 

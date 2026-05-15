@@ -202,17 +202,31 @@ The `claude-code` profile (local 2-tier + free cloud) is selected automatically.
 
 ## Pattern B: use it with the codex CLI
 
+> **Version note**: Codex 0.88+ defaults to `wire_api = "responses"`, which posts to
+> `/v1/responses`. CodeRouter currently only handles the Chat Completions path
+> (`/v1/chat/completions`), so you must **explicitly set `wire_api = "chat"`**.
+
 ### B-1. Install codex
 
 ```bash
 npm install -g @openai/codex
 ```
 
-### B-2. Point codex at CodeRouter
+### B-2. Create `~/.codex/config.toml`
+
+```toml
+model = "gpt-4o"          # CodeRouter will substitute the real model
+model_provider = "coderouter"
+
+[model_providers.coderouter]
+name = "CodeRouter"
+base_url = "http://localhost:8088/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"          # required: the responses endpoint is not yet supported
+```
 
 ```bash
-export OPENAI_BASE_URL="http://localhost:8088/v1"
-export OPENAI_API_KEY="dummy"   # placeholder is fine (same as above)
+export OPENAI_API_KEY="dummy"   # placeholder is fine (CodeRouter manages the backends)
 ```
 
 ### B-3. Run it
@@ -222,6 +236,11 @@ codex "write a python function that reverses a string"
 ```
 
 Same backend chain, just spoken to in OpenAI shape. The `default` profile (local 7b + free cloud) is selected.
+
+> **Models without tool-call support**: Codex drives all file and shell operations
+> through tool calls. If the Ollama model does not support tool calling, Codex will
+> connect but tools will silently do nothing. Run
+> `coderouter doctor --check-model <model>` and confirm `tool_calls: OK` before use.
 
 ---
 
