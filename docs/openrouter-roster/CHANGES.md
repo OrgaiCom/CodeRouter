@@ -5,6 +5,32 @@ entries appear at the top. Each section records a delta between two
 consecutive snapshots — not a cumulative list of free-tier models.
 For the current list, see `latest.json` in this directory.
 
+## 2026-05-18T01:21:41Z
+
+### Removed (8) ⚠️
+
+- `baidu/qianfan-ocr-fast:free` (was: ctx=65536, prompt=0, completion=0)
+- `google/gemma-3-12b-it:free` (was: ctx=32768, prompt=0, completion=0)
+- `google/gemma-3-27b-it:free` (was: ctx=131072, prompt=0, completion=0)
+- `google/gemma-3-4b-it:free` (was: ctx=32768, prompt=0, completion=0)
+- `google/gemma-3n-e2b-it:free` (was: ctx=8192, prompt=0, completion=0)
+- `google/gemma-3n-e4b-it:free` (was: ctx=8192, prompt=0, completion=0)
+- `inclusionai/ling-2.6-1t:free` (was: ctx=262144, prompt=0, completion=0)
+- `tencent/hy3-preview:free` (was: ctx=262144, prompt=0, completion=0)
+
+### Added (3)
+
+- `arcee-ai/trinity-large-thinking:free` (ctx=262144)
+- `baidu/cobuddy:free` (ctx=131072)
+- `deepseek/deepseek-v4-flash:free` (ctx=1048576)
+
+### Context changed (4)
+
+- `meta-llama/llama-3.3-70b-instruct:free`: 65536 → 131072
+- `minimax/minimax-m2.5:free`: 196608 → 204800
+- `nvidia/nemotron-3-super-120b-a12b:free`: 262144 → 1000000
+- `qwen/qwen3-coder:free`: 262000 → 1048576
+
 ## 2026-05-04T03:31:58Z
 
 ### Removed (2) ⚠️
