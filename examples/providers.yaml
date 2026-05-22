@@ -178,7 +178,7 @@ providers:
   #   curl http://localhost:1234/v1/chat/completions ...  # OpenAI 互換、native tool_calls 動作
   #   curl http://localhost:1234/v1/messages ...          # Anthropic 互換、native tool_use 動作
   #
-  # 詳細手順は docs/lmstudio-direct.md (v1.9 で予定)。
+  # 詳細手順は docs/backends/lmstudio-direct.md (v1.9 で予定)。
   # ------------------------------------------------------------
 
   # (a) Qwen3.5 9B — qwen35 architecture、軽量で起動が速い、検証用 first choice
@@ -821,7 +821,7 @@ providers:
   # 提供されていない人気モデル群。Ollama 0.3.13+ は HuggingFace 上の
   # GGUF を `ollama run hf.co/<user>/<repo>:<quant>` で直接実行できます。
   #
-  # 登録手順 (詳細は docs/hf-ollama-models.md 参照):
+  # 登録手順 (詳細は docs/backends/hf-ollama-models.md 参照):
   #
   #   1. ターゲット GGUF を ollama に download
   #      ollama pull hf.co/unsloth/Qwen3-Coder-30B-A3B-GGUF:Q4_K_M
@@ -1037,7 +1037,7 @@ profiles:
     # v2.0.0: Context Budget Management — 長時間 session の context overflow 防止
     # 8h+ の agentic session で context window に漸近 → 400 で死ぬ問題を自動防止。
     # "trim" にすると 90% 超過時に古い messages を自動削除 (tool pair は保全)。
-    # 詳細: docs/context-budget.md
+    # 詳細: docs/concepts/context-budget.md
     context_budget_action: trim            # off | warn | trim
     context_budget_warn_threshold: 0.80    # 80% で warning (header + log)
     context_budget_trim_threshold: 0.90    # 90% で自動 trim

@@ -159,7 +159,7 @@ def test_curated_coding_profile_head_is_claude_compatible_qwen() -> None:
 def test_nvidia_nim_example_has_nim_providers() -> None:
     """Narrow guard for the NIM starter.
 
-    Pins every property the Note article (docs/note-nvidia-nim.md) and
+    Pins every property the Note article (docs/articles/note/note-nvidia-nim.md) and
     the article's recommended quickstart depend on. A future edit that
     drifts from any of these is CI-visible before the sample ships.
     """

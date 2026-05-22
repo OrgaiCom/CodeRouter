@@ -256,5 +256,5 @@ ollama cp hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M qwen3-coder:30b
 - bartowski (品質重視の量子化版): <https://huggingface.co/bartowski>
 - Qwen3-Coder (Alibaba 公式): <https://huggingface.co/collections/Qwen/qwen3-coder>
 - Gemma 4 (Google 公式): <https://huggingface.co/collections/google/gemma-4>
-- CodeRouter doctor 詳細: [`docs/troubleshooting.md`](./troubleshooting.md)
-- providers.yaml 全体構造: [`examples/providers.yaml`](../examples/providers.yaml)
+- CodeRouter doctor 詳細: [`docs/troubleshooting.md`](../guides/troubleshooting.md)
+- providers.yaml 全体構造: [`examples/providers.yaml`](../../examples/providers.yaml)

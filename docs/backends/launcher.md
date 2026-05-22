@@ -283,6 +283,6 @@ CodeRouter を再起動すると UI に反映されます。
 
 - [Launcher クイックスタート](./launcher-quickstart.md) — llama.cpp / vLLM 導入からランチャー起動までの通し手順
 - [Launcher ガイド（デスクトップGUI版）](./launcher-gui.md) — ブラウザ不要の tkinter アプリ版
-- [アーキテクチャ詳細 — Launcher セクション](./architecture.md#launcher--llamacpp--vllm-プロセス管理-v250)
-- [利用ガイド](./usage-guide.md)
+- [アーキテクチャ詳細 — Launcher セクション](../concepts/architecture.md#launcher--llamacpp--vllm-プロセス管理-v250)
+- [利用ガイド](../guides/usage-guide.md)
 - [llama.cpp 直接接続ガイド](./llamacpp-direct.md)

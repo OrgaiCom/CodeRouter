@@ -1,7 +1,7 @@
 # 無料枠ガイド — NVIDIA NIM × OpenRouter Free でコストゼロ運用
 
 > このドキュメントは「CodeRouter をクレカ登録なしで、できるだけ長く無料で回す」ための実運用ガイドです。
-> [`README.md`](../README.md) が**何か**を、[`docs/usage-guide.md`](./usage-guide.md) が**どう使うか**を説明するのに対し、本書は**どの無料枠をどの順で並べ、どこでハマるか**にだけ絞って書いています。
+> [`README.md`](../../README.md) が**何か**を、[`docs/usage-guide.md`](./usage-guide.md) が**どう使うか**を説明するのに対し、本書は**どの無料枠をどの順で並べ、どこでハマるか**にだけ絞って書いています。
 
 English version: [`docs/free-tier-guide.en.md`](./free-tier-guide.en.md)
 
@@ -345,10 +345,10 @@ coderouter doctor --check-env .env
 ## 8. 関連ドキュメント
 
 - [`docs/usage-guide.md`](./usage-guide.md) — 利用ガイド全般（ハードウェア別モデル選定、`doctor` / `verify` の使い方、OS 別起動フロー）
-- [`docs/quickstart.md`](./quickstart.md) — Claude Code / codex を local Ollama で動かす最短手順
+- [`docs/quickstart.md`](../start/quickstart.md) — Claude Code / codex を local Ollama で動かす最短手順
 - [`docs/troubleshooting.md`](./troubleshooting.md) — つまずいたときの読み物（doctor の使い方、`.env` 罠、Llama 過剰呼び出し対処、1Password 連携レシピ）
-- [`examples/providers.nvidia-nim.yaml`](../examples/providers.nvidia-nim.yaml) — 本書で参照している YAML 本体。コメント内に観測済みハマり所を全て記載
-- [`examples/providers.yaml`](../examples/providers.yaml) — NIM 無しの標準サンプル（local + OpenRouter free + 有料）
-- [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) — OpenRouter `:free` SKU の週次差分（`scripts/openrouter_roster_diff.py` 出力）
-- [`docs/articles/note-nvidia-nim.md`](./articles/note-nvidia-nim.md) — NIM 検証の経緯を書いた note 記事ドラフト
-- [`docs/articles/note-1password-coderouter-2026.md`](./articles/note-1password-coderouter-2026.md) — 1Password Vault Item から CodeRouter に env を inject する運用記
+- [`examples/providers.nvidia-nim.yaml`](../../examples/providers.nvidia-nim.yaml) — 本書で参照している YAML 本体。コメント内に観測済みハマり所を全て記載
+- [`examples/providers.yaml`](../../examples/providers.yaml) — NIM 無しの標準サンプル（local + OpenRouter free + 有料）
+- [`docs/openrouter-roster/CHANGES.md`](../openrouter-roster/CHANGES.md) — OpenRouter `:free` SKU の週次差分（`scripts/openrouter_roster_diff.py` 出力）
+- [`docs/articles/note-nvidia-nim.md`](../articles/note/note-nvidia-nim.md) — NIM 検証の経緯を書いた note 記事ドラフト
+- [`docs/articles/note-1password-coderouter-2026.md`](../articles/note/note-1password-coderouter-2026.md) — 1Password Vault Item から CodeRouter に env を inject する運用記

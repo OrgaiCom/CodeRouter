@@ -90,7 +90,7 @@ codex "write a function that reverses a string in rust"
 ## 6. CodeRouter が必須になる場面
 
 - **Claude Code を Anthropic 以外のモデルで動かす。** `/v1/messages` は Ollama には存在しないため、直続きの経路自体がありません
-- **ローカル → 無料クラウド → 有料 の自動フォールバックを、mid-stream ガード付きで** 回したい。自前で書くと地味に難しい（[`docs/articles/zenn-02-coderouter-architecture.md`](./articles/zenn-02-coderouter-architecture.md) 参照）
+- **ローカル → 無料クラウド → 有料 の自動フォールバックを、mid-stream ガード付きで** 回したい。自前で書くと地味に難しい（[`docs/articles/zenn-02-coderouter-architecture.md`](../articles/zenn/zenn-02-coderouter-architecture.md) 参照）
 - **`coderouter doctor` で不調を診断したい** — 6 プローブが上記の失敗モードを網羅しています
 
 ## 7. CodeRouter では解けない場面

@@ -109,7 +109,7 @@ class RegistryCapabilities(BaseModel):
             "harness. ``degraded`` = the model over-eagerly invokes "
             "tools/skills when given Claude Code's system prompt — e.g. "
             "Llama-3.3-70B treating small talk like ``こんにちは`` as "
-            "``Skill(hello)`` invocations (see docs/troubleshooting.md "
+            "``Skill(hello)`` invocations (see docs/guides/troubleshooting.md "
             "§4-1 for the symptom log). ``ok`` = explicitly verified "
             "clean. ``None`` = no opinion (treated as ``ok`` at the "
             "startup check)."

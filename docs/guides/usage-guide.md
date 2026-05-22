@@ -1,6 +1,6 @@
 # CodeRouter 利用ガイド
 
-[`README.md`](../README.md) の実践的な補足です。README が CodeRouter が**何か**を説明するのに対し、本ガイドはハードウェアに合ったモデルの選び方、どのつまみを回すか、OS ごとの起動フローを説明します。
+[`README.md`](../../README.md) の実践的な補足です。README が CodeRouter が**何か**を説明するのに対し、本ガイドはハードウェアに合ったモデルの選び方、どのつまみを回すか、OS ごとの起動フローを説明します。
 
 目次:
 
@@ -168,7 +168,7 @@ providers:
 3. **`temperature`** は品質のつまみで、正しさのつまみではありません。ログで tool-call 修復が頻発する（`recover_garbled_tool_json` / v0.3-A）なら、まず 0.2 に落とすのが最初の対処。
 4. **`output_filters`** はアダプタ境界のレスポンスバイトストリームから `<think>` / `<|turn|>` / 他の stop マーカー漏れを除去。コンテンツを 1 回余計に舐める分のコストで、どのモデル・どのプロバイダ・どのクライアントでも動作します。
 
-ナラティブな症状→修正マップは [README → Ollama 初心者 — サイレント失敗 5 症状](../README.md#ollama-初心者--サイレント失敗-5-症状-v07-c) を参照。
+ナラティブな症状→修正マップは [README → Ollama 初心者 — サイレント失敗 5 症状](../../README.md#ollama-初心者--サイレント失敗-5-症状-v07-c) を参照。
 
 ---
 
@@ -289,7 +289,7 @@ OpenRouter は無料ティアのモデルをいくつかホストしており、
 | `openrouter-free` | `qwen/qwen3-coder:free` | 長文コーディング (262K ウィンドウ)、tool 使用 | 日次クォータ; 20 req/min 前後のレート制限 |
 | `openrouter-gpt-oss-free` | `openai/gpt-oss-120b:free` | 汎用チャット、qwen からのレート制限脱出 | 非標準 `reasoning` フィールドを吐く — v0.5-C が剥がす; 無害 |
 
-ロスターはローテーションします — 週次差分は [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) 参照。新しい無料モデルが現れたり、古いものが予告なく引き上げられたりします。週次で `scripts/openrouter_roster_diff.py`（または `scripts/` の cron）を走らせて追跡してください。
+ロスターはローテーションします — 週次差分は [`docs/openrouter-roster/CHANGES.md`](../openrouter-roster/CHANGES.md) 参照。新しい無料モデルが現れたり、古いものが予告なく引き上げられたりします。週次で `scripts/openrouter_roster_diff.py`（または `scripts/` の cron）を走らせて追跡してください。
 
 起動前に `OPENROUTER_API_KEY` を設定 — OpenRouter free でも認証は必要:
 
@@ -322,7 +322,7 @@ CodeRouter は 2 つの検証ツールを同梱:
 uv run coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
-**フルシステムの実機検証** — `bash scripts/verify_v1_0.sh`。3 つのペア（bare/tuned）シナリオをエンドツーエンドで回し、変換 + プローブのループが閉じていることを実証。シナリオ内訳は `scripts/verify_v1_0.sh --help`、参照エビデンスドキュメントは [`docs/retrospectives/v1.0-verify.md`](./retrospectives/v1.0-verify.md)。
+**フルシステムの実機検証** — `bash scripts/verify_v1_0.sh`。3 つのペア（bare/tuned）シナリオをエンドツーエンドで回し、変換 + プローブのループが閉じていることを実証。シナリオ内訳は `scripts/verify_v1_0.sh --help`、参照エビデンスドキュメントは [`docs/retrospectives/v1.0-verify.md`](../retrospectives/v1.0-verify.md)。
 
 v0.5 系にも `scripts/verify_v0_5.sh` があり、ケイパビリティゲート (`thinking` / `cache_control` / `reasoning`) の面を網羅。どちらも冪等で再実行して問題ありません。
 

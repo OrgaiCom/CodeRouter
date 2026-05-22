@@ -121,7 +121,7 @@ filter is what fixes it.
   doesn't exist on Ollama. There is no direct path.
 - **Automatic local → free cloud → paid fallback with the
   mid-stream safety guard.** Writing that yourself is subtle
-  (see [`docs/articles/zenn-02-coderouter-architecture.md`](./articles/zenn-02-coderouter-architecture.md)).
+  (see [`docs/articles/zenn-02-coderouter-architecture.md`](../articles/zenn/zenn-02-coderouter-architecture.md)).
 - **`coderouter doctor` for diagnosing a misbehaving setup.**
   Its six probes cover exactly the failure modes above.
 

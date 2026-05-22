@@ -383,10 +383,10 @@ provider-ok provider=lmstudio-qwen3-5-9b-anthropic stream=false native_anthropic
 ## 関連ドキュメント
 
 - [llamacpp-direct.md](./llamacpp-direct.md) — llama.cpp 直叩き経路 (CLI build + Unsloth GGUF)、Qwen3.6 35B-A3B 検証済
-- [troubleshooting.md §4-2](./troubleshooting.md) — Ollama / llama.cpp / LM Studio の既知問題
+- [troubleshooting.md §4-2](../guides/troubleshooting.md) — Ollama / llama.cpp / LM Studio の既知問題
 - [hf-ollama-models.md](./hf-ollama-models.md) — Ollama 経由 HF モデル取得
-- [examples/providers.yaml](../examples/providers.yaml) — `lmstudio-*` provider 例同梱 + `test-lmstudio-openai` / `test-lmstudio-anthropic` profile
-- 実機検証の経緯: [v1.8.4 note](./articles/v1-saga/note-4-v1-8-4-lmstudio-revival.md) — LM Studio 0.4.12 リリースで詰みが翌日解消した話
+- [examples/providers.yaml](../../examples/providers.yaml) — `lmstudio-*` provider 例同梱 + `test-lmstudio-openai` / `test-lmstudio-anthropic` profile
+- 実機検証の経緯: [v1.8.4 note](../articles/v1-saga/note-4-v1-8-4-lmstudio-revival.md) — LM Studio 0.4.12 リリースで詰みが翌日解消した話
 
 ---
 

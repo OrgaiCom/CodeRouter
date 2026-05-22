@@ -61,7 +61,7 @@ ls -lah ~/models/qwen3.6-35b-a3b-unsloth/
 # → Qwen3.6-35B-A3B-UD-Q4_K_M.gguf (~22GB) と tokenizer 関連ファイル
 ```
 
-> **旧 `huggingface-cli` からの移行**: コマンド名が `hf` に変わり、サブコマンド体系も更新されました (`huggingface-cli download` → `hf download`、`huggingface-cli login` → `hf auth login`)。本リポジトリの補助スクリプト [`gguf_dl.py`](../gguf_dl.py) を使えば、HF の URL を貼るだけで `hf download` 相当の処理を実行できます。
+> **旧 `huggingface-cli` からの移行**: コマンド名が `hf` に変わり、サブコマンド体系も更新されました (`huggingface-cli download` → `hf download`、`huggingface-cli login` → `hf auth login`)。本リポジトリの補助スクリプト [`gguf_dl.py`](../../gguf_dl.py) を使えば、HF の URL を貼るだけで `hf download` 相当の処理を実行できます。
 
 > **`UD-Q4_K_M` の意味**: Unsloth Dynamic Quantization。同 GGUF サイズで通常の Q4_K_M より精度が高い variant。コミュニティ報告でも de facto 標準として使われています。
 >
@@ -270,10 +270,10 @@ provider-ok provider=llamacpp-qwen3-6-35b-a3b
 
 ## 関連ドキュメント
 
-- [troubleshooting.md §4-2-A](./troubleshooting.md#4-2-a-qwen36) — Qwen3.6 + Ollama の既知問題
+- [troubleshooting.md §4-2-A](../guides/troubleshooting.md#4-2-a-qwen36) — Qwen3.6 + Ollama の既知問題
 - [hf-ollama-models.md](./hf-ollama-models.md) — Ollama 経由 HF モデル取得
-- [examples/providers.yaml](../examples/providers.yaml) — `llamacpp-qwen3-6-35b-a3b` provider 例同梱
-- 実機検証の経緯: [v1.8.1 note](./articles/v1-saga/note-1-v1-8-1-reality-check.md) → [v1.8.2 note](./articles/v1-saga/note-2-v1-8-2-doctor-self-diagnosis.md) → [v1.8.3 note](./articles/v1-saga/note-3-v1-8-3-llamacpp-rescue.md)
+- [examples/providers.yaml](../../examples/providers.yaml) — `llamacpp-qwen3-6-35b-a3b` provider 例同梱
+- 実機検証の経緯: [v1.8.1 note](../articles/v1-saga/note-1-v1-8-1-reality-check.md) → [v1.8.2 note](../articles/v1-saga/note-2-v1-8-2-doctor-self-diagnosis.md) → [v1.8.3 note](../articles/v1-saga/note-3-v1-8-3-llamacpp-rescue.md)
 
 ---
 

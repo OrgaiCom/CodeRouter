@@ -360,7 +360,7 @@ profiles:
   #   and a fabricated "What is your name?" elicitation. Qwen3-Coder-480B
   #   is purpose-trained for agentic coding and does not exhibit this
   #   behavior. Llama-3.3-70B is kept in the chain as a tail fallback,
-  #   not as the first responder. See docs/articles/note-nvidia-nim.md
+  #   not as the first responder. See docs/articles/note/note-nvidia-nim.md
   #   §6-2 for the symptom log.
   - name: claude-code-nim
     providers:

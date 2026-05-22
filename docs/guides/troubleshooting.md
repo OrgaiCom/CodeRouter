@@ -623,4 +623,4 @@ Ollama の `hf.co/<user>/<repo>:<quant>` ローダ経由で HF ホスト GGUF �
 
 同じローカル Ollama に対して CodeRouter (ルーター層) と [lunacode](https://github.com/zephel01/lunacode) (エディタハーネス) を両方走らせている場合、lunacode の [`docs/MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) が姉妹リファレンスです — 同じ 5 症状を、CodeRouter のプロバイダ粒度宣言が届かないエディタ/ハーネス層 (モデル別設定、チャットテンプレート上書き、`/no_think` バリアント) でカバーします。
 
-NIM / OpenRouter 無料枠の使い分けは [`docs/free-tier-guide.md`](./free-tier-guide.md)、設定の細かい意味は [`docs/usage-guide.md`](./usage-guide.md)、最短セットアップは [`docs/quickstart.md`](./quickstart.md) を参照。
+NIM / OpenRouter 無料枠の使い分けは [`docs/free-tier-guide.md`](./free-tier-guide.md)、設定の細かい意味は [`docs/usage-guide.md`](./usage-guide.md)、最短セットアップは [`docs/quickstart.md`](../start/quickstart.md) を参照。

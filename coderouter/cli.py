@@ -61,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "binding the server. Repeat to layer multiple files. By "
             "default, file values do NOT override variables already in "
             "the environment (the shell `export` wins). See "
-            "docs/troubleshooting.md §5 for 1Password / direnv / sops "
+            "docs/guides/troubleshooting.md §5 for 1Password / direnv / sops "
             "integration recipes."
         ),
     )
@@ -116,7 +116,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "POSIX file mode (0600 expected), .gitignore coverage, "
             "and git-tracking state. Bare `--check-env` (no PATH) "
             "looks for `./.env` then `~/.coderouter/.env`. "
-            "See docs/troubleshooting.md §5 for the threat model."
+            "See docs/guides/troubleshooting.md §5 for the threat model."
         ),
     )
     doctor.add_argument(

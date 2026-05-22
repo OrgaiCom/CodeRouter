@@ -1,6 +1,6 @@
 # Quickstart — 最短で動かす
 
-> この手順書は「最低限の作業で動かす」ことだけを目的にしています。設定の理由や背景は [usage-guide.md](./usage-guide.md) に寄せてあります。
+> この手順書は「最低限の作業で動かす」ことだけを目的にしています。設定の理由や背景は [usage-guide.md](../guides/usage-guide.md) に寄せてあります。
 
 Claude Code または codex CLI を、ローカルの Ollama で **$0** で回せる状態までを 10〜15 分で作ります。チェーンは共通で、最後のステップだけエージェント別に分かれます。
 
@@ -58,19 +58,19 @@ ollama serve &   # すでに動いていれば不要
 > — v1.8.1 〜 v1.8.3 の実機検証 + コミュニティ報告 (X / Reddit) で、Qwen3.6 系
 > は **Ollama 経由の chat template / tool 仕様が未成熟**で詰みやすいことが判明。
 > Unsloth GGUF + llama.cpp `llama-server` で直叩きすると native `tool_calls` が
-> 完璧に動作する。手順は [docs/llamacpp-direct.md](./llamacpp-direct.md) を参照
+> 完璧に動作する。手順は [docs/llamacpp-direct.md](../backends/llamacpp-direct.md) を参照
 > (CodeRouter v1.8.3 で実機検証済、`examples/providers.yaml` に provider 例も追加済)。
 >
 > **ヘッドルーム目安** — OS / ブラウザ / IDE で 8-12 GB 取られるので、
 > GGUF サイズに +8-10 GB の余裕を持たせるのが現実的（32 GB Mac で
 > 24 GB GGUF を載せると swap で遅くなる）。
 >
-> RAM を見て自動推奨させたいときは [`./setup.sh`](../setup.sh) を実行
+> RAM を見て自動推奨させたいときは [`./setup.sh`](../../setup.sh) を実行
 > — RAM tier に応じて安全側のモデルを推奨 + 自動 pull + `~/.coderouter/providers.yaml`
 > 生成まで一気にやってくれます。あとで上のような大きいモデルに上げるには
 > 手動編集 or `./setup.sh --ram-gb <larger> --force` で再生成。
-> 詳しくは v1.8.0 で出した [examples/providers.yaml](../examples/providers.yaml)
-> と [docs/hf-ollama-models.md](./hf-ollama-models.md) 参照。
+> 詳しくは v1.8.0 で出した [examples/providers.yaml](../../examples/providers.yaml)
+> と [docs/hf-ollama-models.md](../backends/hf-ollama-models.md) 参照。
 
 ### 2. CodeRouter をインストール
 
@@ -119,7 +119,7 @@ uv run coderouter serve --port 8088
 
 > **補足**: PyPI 上のパッケージ名は `coderouter-cli` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) 参照。
 >
-> **v1.8.0 から用途別 4 プロファイル**: `coderouter serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) と [`examples/providers.yaml`](../examples/providers.yaml) のコメントを参照。
+> **v1.8.0 から用途別 4 プロファイル**: `coderouter serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) と [`examples/providers.yaml`](../../examples/providers.yaml) のコメントを参照。
 
 ### 3. `providers.yaml` を配置
 
@@ -315,6 +315,6 @@ default_profile: auto   # ← この sentinel が auto_router を有効化する
 
 ## 次に読むもの
 
-- [usage-guide.md](./usage-guide.md) — 各設定項目の意味、複数プロバイダの詳細チューニング、doctor の全診断内容
-- [security.md](./security.md) — 有料 API を opt-in する時の注意
-- [README.md](../README.md) §「CodeRouter は自分に必要か？」 — そもそも自分の用途に要るかの判断フロー
+- [usage-guide.md](../guides/usage-guide.md) — 各設定項目の意味、複数プロバイダの詳細チューニング、doctor の全診断内容
+- [security.md](../guides/security.md) — 有料 API を opt-in する時の注意
+- [README.md](../../README.md) §「CodeRouter は自分に必要か？」 — そもそも自分の用途に要るかの判断フロー

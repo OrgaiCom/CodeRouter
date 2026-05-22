@@ -525,4 +525,4 @@ When you run HF-hosted GGUFs through Ollama's `hf.co/<user>/<repo>:<quant>` load
 
 If you run both CodeRouter (the router layer) and [lunacode](https://github.com/zephel01/lunacode) (the editor harness) against the same local Ollama, lunacode's [`docs/MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) is the sister reference — it covers the same five symptoms at the editor / harness layer (per-model settings, chat template overrides, `/no_think` variants) where CodeRouter's provider-granularity declarations stop.
 
-For NIM / OpenRouter free-tier strategy see [`docs/free-tier-guide.en.md`](./free-tier-guide.en.md), for the meaning of each config knob see [`docs/usage-guide.en.md`](./usage-guide.en.md), and for the shortest-path setup see [`docs/quickstart.en.md`](./quickstart.en.md).
+For NIM / OpenRouter free-tier strategy see [`docs/free-tier-guide.en.md`](./free-tier-guide.en.md), for the meaning of each config knob see [`docs/usage-guide.en.md`](./usage-guide.en.md), and for the shortest-path setup see [`docs/quickstart.en.md`](../start/quickstart.en.md).

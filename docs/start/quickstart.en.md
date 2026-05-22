@@ -1,6 +1,6 @@
 # Quickstart — get it running in one sitting
 
-> This guide is intentionally minimum-effort. Background on *why* each setting exists lives in [usage-guide.en.md](./usage-guide.en.md).
+> This guide is intentionally minimum-effort. Background on *why* each setting exists lives in [usage-guide.en.md](../guides/usage-guide.en.md).
 
 You'll have Claude Code or the codex CLI talking to a local Ollama stack for **$0** in about 10–15 minutes. The fallback chain is shared between the two patterns; only the last step differs per agent.
 
@@ -58,7 +58,7 @@ ollama serve &   # skip if it's already running
 > The v1.8.1 → v1.8.3 real-machine sessions and the X / Reddit community reports
 > both confirm that Qwen3.6 over Ollama is currently brittle (immature chat
 > template / tool spec). Unsloth GGUF + llama.cpp `llama-server` produces native
-> `tool_calls` cleanly. Recipe in [docs/llamacpp-direct.en.md](./llamacpp-direct.en.md)
+> `tool_calls` cleanly. Recipe in [docs/llamacpp-direct.en.md](../backends/llamacpp-direct.en.md)
 > (real-machine verified in CodeRouter v1.8.3, sample provider entry in
 > `examples/providers.yaml`).
 >
@@ -66,13 +66,13 @@ ollama serve &   # skip if it's already running
 > IDE. A 32 GB Mac running a 24 GB GGUF will swap and crawl; that's why the
 > default tier is conservative.
 >
-> Want it auto-detected based on RAM? Run [`./setup.sh`](../setup.sh) — it
+> Want it auto-detected based on RAM? Run [`./setup.sh`](../../setup.sh) — it
 > picks a safe model for your RAM tier, pulls it, and writes
 > `~/.coderouter/providers.yaml`. To upgrade to a larger model later,
 > either edit the YAML manually or rerun with
 > `./setup.sh --ram-gb <larger> --force`. See v1.8.0's
-> [examples/providers.yaml](../examples/providers.yaml) and
-> [docs/hf-ollama-models.md](./hf-ollama-models.md) for the full picture.
+> [examples/providers.yaml](../../examples/providers.yaml) and
+> [docs/hf-ollama-models.md](../backends/hf-ollama-models.md) for the full picture.
 
 ### 2. Install CodeRouter
 
@@ -122,7 +122,7 @@ Prefix with `uv run` and you don't need `source .venv/bin/activate` (or use dire
 
 > **Naming note**: the PyPI distribution is `coderouter-cli` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く).
 >
-> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) and [`examples/providers.yaml`](../examples/providers.yaml) comments for the rationale.
+> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) and [`examples/providers.yaml`](../../examples/providers.yaml) comments for the rationale.
 
 ### 3. Drop in a `providers.yaml`
 
@@ -320,6 +320,6 @@ When you want your own rules ("translate requests go to writing", "anything cont
 
 ## What to read next
 
-- [usage-guide.en.md](./usage-guide.en.md) — per-setting meaning, multi-provider tuning, full doctor diagnostic catalog
-- [security.en.md](./security.en.md) — caveats when opting into paid APIs
-- [README.en.md](../README.en.md) § "Do I actually need CodeRouter?" — decision flow for whether this fits your use case
+- [usage-guide.en.md](../guides/usage-guide.en.md) — per-setting meaning, multi-provider tuning, full doctor diagnostic catalog
+- [security.en.md](../guides/security.en.md) — caveats when opting into paid APIs
+- [README.en.md](../../README.en.md) § "Do I actually need CodeRouter?" — decision flow for whether this fits your use case

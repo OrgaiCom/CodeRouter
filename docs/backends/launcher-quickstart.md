@@ -183,5 +183,5 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 - [Launcher ガイド（デスクトップGUI版）](./launcher-gui.md)
 - [Launcher ガイド（Web版）](./launcher.md)
-- [CodeRouter クイックスタート](./quickstart.md)
+- [CodeRouter クイックスタート](../start/quickstart.md)
 - [llama.cpp 直接接続ガイド](./llamacpp-direct.md)
