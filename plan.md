@@ -3,9 +3,9 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-05-07
+最終更新: 2026-05-18
 作成者: zephel01
-状態: **v2.2.0 — リリース準備完了** / **PyPI 最新: v2.1.0** (2026-05-05)。v2.2 (Unsloth 吸収) + v2.0-J (Self-healing) + v2.0-K (永続化 + Audit + Replay) を v2.2.0 として 1 リリース。**6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + 統計リプレイまで到達**。Tests: 964+、Runtime deps: 5 (据え置き連続 41 回)、完全互換。
+状態: **v2.4.0 リリース済み** / **PyPI 最新: v2.4.0** (2026-05-15)。Plugin SDK (v2.3.0) + Goal-session awareness / `replay --suggest-rules` (v2.4.0) 出荷完了。**6 系統障害 (L1〜L6) 全対処 + Plugin 層 + Goal モード到達**。Tests: 1063+、Runtime deps: 5 (据え置き連続)、完全互換。`coderouter-plugin-memory` v0.4.0 (別 repo) も同日リリース済み。
 - **過去の出荷済みリリース**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / 市場分析 / 競合分析)**: 内部メモとして別途整理 (公開リポジトリには含まれない)
 - **本ドキュメント**: 現在進行中の実装スケジュール + ローカル backend 別接続マトリクス + 検討中 / やらないこと
@@ -118,30 +118,35 @@ lmstudio-anthropic:
 - **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
 - **examples の v1.10 機能サンプル追加**: `monthly_budget_usd` / `memory_pressure_action` / `backend_health_action` / `model_pattern` / `content_token_count_min` を組み合わせた典型的 production yaml の `examples/providers.production-grade.yaml` 雛形
 
-#### 出荷済み: v2.0〜v2.2 (Reliability Deepening + Unsloth 吸収)
+#### 出荷済み: v2.0〜v2.4 (Reliability Deepening → Plugin SDK → Goal-session)
 
 | Ver | 日付 | 内容 | PyPI |
 |---|---|---|---|
 | **v2.0.0** | 2026-05-05 | L1 Context budget management (warn 80% + auto trim 90%) | ✅ |
 | **v2.1.0** | 2026-05-05 | L4 Drift detection + L6 Mid-stream stitching + P3 Continuous probing | ✅ |
-| **v2.2** | 2026-05-06 (実装済み) | Unsloth 吸収 3 件 (tool_repair dedup / StripToolCallXmlFilter / max_tool_calls) + Ollama smoke test | v2.2.0 |
-| **v2.0-J** | 2026-05-06 (実装済み) | Self-healing routing — backend_health_action="exclude" + restart_command + recovery probe backoff | v2.2.0 |
-| **v2.0-K** | 2026-05-06 (実装済み) | Multi-day operation support — sqlite3 StateStore + JSONL audit log + `coderouter audit` CLI + Replay framework (request journal + 統計 A/B + `coderouter replay` CLI) | v2.2.0 |
+| **v2.2.0** | 2026-05-06 | Unsloth 吸収 3 件 + Self-healing (v2.0-J) + Multi-day operation / Replay (v2.0-K) | ✅ |
+| **v2.3.0** | 2026-05-08 | **Plugin SDK** — `coderouter.plugins` (InputFilter / Observer 2 hook engine 統合)。entry_points discovery + supply-chain defense (enabled allowlist)。Core 5 deps 据え置き | ✅ |
+| **v2.4.0** | 2026-05-15 | **Goal-session awareness** — `goal_progress_stall` Signal 6 + `_fingerprint.py` + `goal_mode: bool` + `THRESHOLDS_GOAL` preset + `coderouter replay --suggest-rules` (5 ルール統計エンジン、LLM 不要) | ✅ |
 
-**到達点**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 (v2.0-J) + 状態永続化 + 統計リプレイ (v2.0-K)。Vision pillar P1/P2/P3 が v2.x で完成。
+**到達点**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード対応。`coderouter-plugin-memory` v0.4.0 (別 repo、builtin JSONL + Ollama backend、stdlib only) も同日出荷。
 
 #### 次フェーズ (v2.5+ 候補、2026 後半)
 
-`docs/inside/future.md §8` で整理。v2.0-F〜K は全て実装済み、残る候補:
+詳細は `docs/inside/future.md §P2` 参照。**P1 全タスク完了 (2026-05-15)**。残る P2 候補:
 
-- ~~**v2.0-K Replay framework**: request journal + 統計 A/B 比較 → **実装済み (2026-05-06)**~~
-- **coderouter-plugin-memory** (Plugin 層): 会話 key facts の自動蓄積 + `append_system_prompt` 動的注入。K の persistent store 基盤を再利用。Core は薄いまま、使いたい人だけ opt-in (~1 ヶ月)
+| # | 内容 | 発火条件 |
+|---|---|---|
+| **7** | goal context bridge — plugin-memory に `goal_session` タグ記録 → 次セッション inject (§8.4) | plugin-memory agentmemory backend 完成後 |
+| **8** | `goal_context_preserve_turns` — L1 trim 時にゴール関連 turn を保護する policy | goal_mode フラグ完成後 |
+| **9** | Public benchmark — model-capabilities.yaml を HF dataset 公開 + 自動更新 pipeline | community 要望 or 競合 benchmark 公開時 |
+| **10** | plugin-memory agentmemory backend — 高品質 recall が必要なユーザー向け optional | community 要望 or builtin 限界到達時 |
+| **11** | Unsloth Studio 検証 E2E (~2h) | 時間確保時 |
 
 #### 残作業 (docs / examples 整備)
 
-- **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
-- **`examples/providers.production-grade.yaml`**: v1.10 機能 (`monthly_budget_usd` / `memory_pressure_action` / `backend_health_action` 等) を組み合わせた典型的 production yaml 雛形
-- **Unsloth Studio プロバイダー検証**: CodeRouter → Unsloth Studio E2E 手動テスト (~2h、Unsloth 側安定版待ち)
+- **`docs/verification.md` の精緻化**: MoE モデルの罠・rolling-window タイミング制約・goal_mode 実機検証知見を反映
+- **`examples/providers.production-grade.yaml`**: `monthly_budget_usd` / `memory_pressure_action` / `goal_mode: true` を組み合わせた production yaml 雛形
+- **Unsloth Studio プロバイダー検証**: E2E 手動テスト (~2h、安定版確認後)
 
 #### ❓ 検討中 — 実装方針 / 必要性が未確定
 
@@ -170,13 +175,11 @@ lmstudio-anthropic:
 
 | Ver | 日付 | タグ | 一言 |
 | --- | --- | --- | --- |
-| **v2.0-K** | 2026-05-06 | v2.2.0 | Multi-day operation support — sqlite3 StateStore + JSONL audit log + `coderouter audit` CLI + Replay framework (request journal + 統計 A/B + `coderouter replay` CLI) |
-| **v2.0-J** | 2026-05-06 | v2.2.0 | Self-healing routing — backend_health_action="exclude" + restart_command + recovery probe backoff |
-| **v2.2** | 2026-05-06 | v2.2.0 | Unsloth Studio 吸収 3 件 (tool_repair dedup / StripToolCallXmlFilter / max_tool_calls) + Ollama スモークテスト全 PASS |
-| **v2.1.0** | 2026-05-05 | `v2.1.0` | **PyPI 最新**。L4 Drift detection + L6 Mid-stream partial stitching + P3 Continuous probing — 6 系統障害対処完成 |
+| **v2.4.0** | 2026-05-15 | `v2.4.0` | **PyPI 最新**。Goal-session awareness — `goal_progress_stall` Signal 6 + `goal_mode` flag + `replay --suggest-rules` (5 ルール統計エンジン) |
+| **v2.3.0** | 2026-05-08 | `v2.3.0` | Plugin SDK — `coderouter.plugins` (InputFilter / Observer)、entry_points discovery、supply-chain defense。Core 5 deps 据え置き |
+| **v2.2.0** | 2026-05-06 | `v2.2.0` | Self-healing (v2.0-J) + Multi-day operation / Replay (v2.0-K) + Unsloth 吸収 3 件 |
+| **v2.1.0** | 2026-05-05 | `v2.1.0` | L4 Drift detection + L6 Mid-stream partial stitching + P3 Continuous probing — 6 系統障害対処完成 |
 | **v2.0.0** | 2026-05-05 | `v2.0.0` | L1 Context budget management (warn 80% + auto trim 90%)。char/4 heuristic、tool_use_id pair 保全 |
-| **v1.10.1** | 2026-05-04 | `v1.10.1` | tool-aware auto routing + Raspberry Pi starter |
-| **v1.10.0** | 2026-05-01 | `v1.10.0` | Umbrella — Cost enforcement + Long-run reliability completion + Auto-router 6 matcher feature complete |
 
 過去のリリース (v0.1.0〜v1.7.0) は [`CHANGELOG.md`](./CHANGELOG.md) の各エントリ、各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
 

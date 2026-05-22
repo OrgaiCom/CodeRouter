@@ -116,6 +116,37 @@ Full decision matrix → [Do I need CodeRouter?](./docs/when-do-i-need-coderoute
 | **`coderouter replay`** | Compare providers statistically (A/B analysis) / `--suggest-rules` for automated rule suggestions |
 | **Continuous Probe** | Background health monitoring even during idle |
 
+### Launcher — llama.cpp / vllm GUI
+
+Browser UI at `http://localhost:8088/launcher` for starting and managing local inference backends.
+
+| Feature | Detail |
+|---|---|
+| **Model scanner** | Recursively scans `model_dirs` for `.gguf` / `.safetensors` and lists them |
+| **Option profiles** | Name your flag presets in `providers.yaml` — select from a dropdown, no CLI needed |
+| **Multi-process** | Run llama.cpp and vllm side by side on different ports |
+| **Log viewer** | stdout/stderr of each process shown live in the browser |
+
+```yaml
+# Add to providers.yaml — no code changes needed
+launcher:
+  model_dirs:
+    - ~/models
+  option_profiles:
+    llama.cpp:
+      - name: "Full GPU"
+        args:
+          "-ngl": 99
+          "--ctx-size": 4096
+    vllm:
+      - name: "Standard"
+        args:
+          "--dtype": "auto"
+          "--max-model-len": 4096
+```
+
+Details → [Launcher guide](./docs/launcher.md)
+
 ---
 
 ## Minimal Config
@@ -152,6 +183,7 @@ More detail → [Usage guide](./docs/usage-guide.en.md) · [Architecture](./docs
 | Get running fast | [Quickstart](./docs/quickstart.en.md) |
 | Use it well | [Usage guide](./docs/usage-guide.en.md) |
 | Run for free | [Free-tier guide](./docs/free-tier-guide.en.md) |
+| Launch llama.cpp / vllm via GUI | [Launcher guide](./docs/launcher.md) |
 | Stuck? | [Troubleshooting](./docs/troubleshooting.en.md) |
 | Understand the design | [Architecture](./docs/architecture.md) |
 | Full release history | [CHANGELOG](./CHANGELOG.md) |

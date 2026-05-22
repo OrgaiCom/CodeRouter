@@ -3,7 +3,7 @@
 > **README に概要があります → [README.md](../README.md)**
 > 本ページは内部構造、設定リファレンス、機能の仕組みを図入りで解説します。
 
-最終更新: v2.2.0 (2026-05-06)
+最終更新: v2.5.0 (2026-05-22)
 
 ---
 
@@ -28,7 +28,8 @@
 │  │             │  │ L4 Drift     │  │ request journal    │  │
 │  │ tool-call   │  │ L5 Health    │  │ replay A/B         │  │
 │  │ 修復        │  │ L6 Mid-strm  │  │ /dashboard         │  │
-│  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│  │             │  └──────────────┘  │ /launcher          │  │
+│  └─────────────┘                    └────────────────────┘  │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │          Fallback Engine (profile → chain)               ││
@@ -325,3 +326,82 @@ except CodeRouterError as exc:
     # AdapterError / NoProvidersAvailableError / MidStreamError 全て
     logger.error("coderouter-failed", extra={"reason": str(exc)})
 ```
+
+---
+
+## Launcher — llama.cpp / vllm プロセス管理 (v2.5.0)
+
+`/launcher` で開くブラウザ UI。llama.cpp や vllm をコマンドラインなしで起動・管理する。
+
+### 構成
+
+```
+coderouter/ingress/launcher_routes.py
+  ├── LauncherRegistry  (app.state.launcher)
+  │     └── ManagedProcess  × N プロセス
+  ├── API  /api/launcher/*
+  └── UI   GET /launcher  (HTML + inline JS)
+```
+
+### プロセスライフサイクル
+
+```
+POST /api/launcher/start
+  → asyncio.create_subprocess_exec (llama-server / python -m vllm…)
+  → _tail_logs() バックグラウンドタスク (stdout+stderr → deque[200])
+  → ManagedProcess.status = "running"
+        │
+        ├─ POST /api/launcher/stop/{id}
+        │      → SIGTERM → (5s) → SIGKILL
+        │      → status = "stopped"
+        │
+        └─ プロセス自然終了
+               → status = "stopped" or "error"  (returncode に応じて)
+
+DELETE /api/launcher/processes/{id}  ← stopped のみ削除可
+```
+
+### YAML 設定リファレンス
+
+```yaml
+launcher:
+  # スキャン対象ディレクトリ (.gguf / .safetensors / .bin / .pt / .ggml を再帰検索)
+  model_dirs:
+    - ~/models
+    - /data/gguf
+
+  # バックエンド別オプションプリセット
+  # キー名 = バックエンド名 ("llama.cpp" / "vllm")
+  option_profiles:
+    llama.cpp:
+      - name: "GPU フル活用"
+        args:
+          "-ngl": 99           # int → "--flag value" として渡す
+          "--ctx-size": 4096
+          "--no-mmap": false   # bool false → フラグ省略
+          "--mlock": true      # bool true  → "--mlock" のみ (値なし)
+    vllm:
+      - name: "標準"
+        args:
+          "--dtype": "auto"
+          "--max-model-len": 4096
+```
+
+`args` の型変換ルール:
+
+| YAML 値 | CLI 出力 |
+|---|---|
+| `"-ngl": 99` | `-ngl 99` |
+| `"--mlock": true` | `--mlock` (値なし) |
+| `"--no-mmap": false` | 省略 |
+| `"--dtype": "auto"` | `--dtype auto` |
+
+### 追加オプション（自由入力）
+
+UI に「追加オプション」テキスト欄が常時表示。プロファイルに定義されていないフラグをその場で指定できる。`shlex.split()` でパースされるため、スペース入りパスはクォートで囲む。
+
+### プロセスレジストリの永続化
+
+意図的に **非永続**。CodeRouter 再起動時にプロセスレジストリは空になる (GPU メモリ確保の多重起動防止)。実行中の llama-server / vllm プロセス自体は OS 上で継続するが、Launcher UI からは見えなくなる。
+
+詳細 → [Launcher ガイド](./launcher.md)
