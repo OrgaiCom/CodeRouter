@@ -20,6 +20,7 @@ llama.cpp / vllm と CodeRouter をブラウザなしで起動・管理するデ
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import platform
 import queue
@@ -28,14 +29,13 @@ import shutil
 import subprocess
 import sys
 import threading
+import tkinter as tk
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from tkinter import messagebox, ttk
 from typing import Any
-
-import tkinter as tk
-from tkinter import ttk, font as tkfont, messagebox
 
 # ---------------------------------------------------------------------------
 # YAML loading (optional — graceful fallback)
@@ -67,12 +67,12 @@ _BACKEND_DEFAULTS = {
 # CodeRouter のデフォルトポート (README / docs に揃えて 8088)
 _CODEROUTER_PORT = 8088
 
-# ── ログ蓄積の上限（ビーチボール対策） ──────────────────────────────────────
+# ── ログ蓄積の上限(ビーチボール対策) ──────────────────────────────────────
 # 長時間稼働でログが無制限に溜まり、メインスレッドの処理が追いつかなくなって
-# UI が固まる（くるくる）のを防ぐための上限値。
-_MAX_LOG_LINES      = 5000   # mp.log_lines / _cr_log のメモリ上限（行数）
+# UI が固まる(くるくる)のを防ぐための上限値。
+_MAX_LOG_LINES      = 5000   # mp.log_lines / _cr_log のメモリ上限(行数)
 _MAX_TEXT_LINES     = 2000   # _log_text ウィジェットの表示行上限
-_MAX_LINES_PER_TICK = 1500   # _poll 1回で処理する最大行数（残りは次回へ繰越）
+_MAX_LINES_PER_TICK = 1500   # _poll 1回で処理する最大行数(残りは次回へ繰越)
 
 _CONFIG_SEARCH = [
     Path.cwd() / "providers.yaml",
@@ -208,11 +208,9 @@ def _detect_hardware() -> dict[str, Any]:
     """ハードウェアを best-effort で検出する (stdlib + CLI、追加依存なし)。"""
     cpu = os.cpu_count() or 4
     ram_gb = 0.0
-    try:
+    with contextlib.suppress(ValueError, OSError, AttributeError):
         ram_gb = (os.sysconf("SC_PHYS_PAGES")
                   * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
-    except (ValueError, OSError, AttributeError):
-        pass
     if ram_gb <= 0:
         try:
             out = subprocess.run(["sysctl", "-n", "hw.memsize"],
@@ -371,7 +369,7 @@ class ManagedProcess:
     pid: int | None = None
     returncode: int | None = None
     proc: Any = None
-    # 無制限肥大化を防ぐため上限付き deque を使用（古い行から自動破棄）
+    # 無制限肥大化を防ぐため上限付き deque を使用(古い行から自動破棄)
     log_lines: deque[str] = field(
         default_factory=lambda: deque(maxlen=_MAX_LOG_LINES))
 
@@ -571,7 +569,7 @@ class LauncherApp(tk.Tk):
                  fg=self.FG2, bg="#1e293b",
                  font=("sans-serif", 10)).pack(side="left", padx=(0, 10))
 
-        # ポート入力欄（停止中のみ編集可。trace は _cr_conn_var 生成後に設定）
+        # ポート入力欄(停止中のみ編集可。trace は _cr_conn_var 生成後に設定)
         tk.Label(inner, text="ポート", fg=self.FG2, bg="#1e293b",
                  font=("sans-serif", 9)).pack(side="left", padx=(0, 4))
         self._cr_port_var = tk.StringVar(value=str(_CODEROUTER_PORT))
@@ -604,10 +602,10 @@ class LauncherApp(tk.Tk):
         )
         self._cr_stop_btn.pack(side="left", padx=(0, 8))
 
-        # アニメーション用（Progressbar 非使用）
+        # アニメーション用(Progressbar 非使用)
         self._cr_anim_running: bool = False
 
-        # 接続文字列（Claude Code 用）
+        # 接続文字列(Claude Code 用)
         conn_str = f"ANTHROPIC_BASE_URL=http://localhost:{self._cr_port} ANTHROPIC_AUTH_TOKEN=dummy claude"
         self._cr_conn_var = tk.StringVar(value=conn_str)
         # ポート欄の編集に接続文字列・ラベルを追従させる
@@ -649,7 +647,7 @@ class LauncherApp(tk.Tk):
         raw = self._cr_port_var.get().strip()
         if raw.isdigit():
             self._cr_port = int(raw)
-        # 接続文字列を最新ポートで更新（無効入力時は直前の有効値を維持）
+        # 接続文字列を最新ポートで更新(無効入力時は直前の有効値を維持)
         self._cr_conn_var.set(
             f"ANTHROPIC_BASE_URL=http://localhost:{self._cr_port} "
             f"ANTHROPIC_AUTH_TOKEN=dummy claude"
@@ -684,14 +682,14 @@ class LauncherApp(tk.Tk):
             self._cr_stop_btn.configure(state="disabled")
             self._cr_anim_running = False
 
-        # ポート欄は停止中／エラー時のみ編集可（起動中・稼働中はロック）
+        # ポート欄は停止中/エラー時のみ編集可(起動中・稼働中はロック)
         editable = self._cr_status in ("stopped", "error")
         self._cr_port_entry.configure(state="normal" if editable else "disabled")
 
-    _ANIM_CHARS = ["|", "/", "-", "\\"]
+    _ANIM_CHARS = ("|", "/", "-", "\\")
 
     def _cr_anim_tick(self, idx: int) -> None:
-        """CodeRouter 起動中のテキストアニメーション（after() ベース）。"""
+        """CodeRouter 起動中のテキストアニメーション(after() ベース)。"""
         if not self._cr_anim_running:
             return
         ch = self._ANIM_CHARS[idx % len(self._ANIM_CHARS)]
@@ -699,7 +697,7 @@ class LauncherApp(tk.Tk):
         self.after(150, self._cr_anim_tick, idx + 1)
 
     def _launch_anim_tick(self, proc_id: str, idx: int) -> None:
-        """llama.cpp 起動中のボタンテキストアニメーション（after() ベース）。"""
+        """llama.cpp 起動中のボタンテキストアニメーション(after() ベース)。"""
         if self._launch_anim_proc_id != proc_id:
             return
         if proc_id not in self.processes or self.processes[proc_id].status not in ("starting",):
@@ -717,20 +715,20 @@ class LauncherApp(tk.Tk):
 
     def _start_coderouter(self) -> None:
         """CodeRouter をポート欄の値で起動する。providers.yaml がなければ自動生成。"""
-        # CodeRouter ポートの検証（ポート欄の値を使用）
+        # CodeRouter ポートの検証(ポート欄の値を使用)
         cr_port_raw = self._cr_port_var.get().strip()
         if not cr_port_raw.isdigit() or not (1024 <= int(cr_port_raw) <= 65535):
-            self._cr_err_var.set("CodeRouter ポートは 1024–65535 の数字で指定してください")
+            self._cr_err_var.set("CodeRouter ポートは 1024-65535 の数字で指定してください")
             return
         self._cr_port = int(cr_port_raw)
 
-        # llama.cpp の現在のポートを取得（フォームの値を使用）
+        # llama.cpp の現在のポートを取得(フォームの値を使用)
         try:
             llama_port = int(self._port_var.get())
         except (ValueError, AttributeError):
             llama_port = 8080
 
-        # providers.yaml を自動生成（存在しない場合のみ）
+        # providers.yaml を自動生成(存在しない場合のみ)
         created, yaml_path = _ensure_providers_yaml(llama_port)
         if created:
             self._cr_err_var.set(f"providers.yaml を生成しました: {yaml_path}")
@@ -743,9 +741,9 @@ class LauncherApp(tk.Tk):
         cr_port = self._cr_port  # スレッドに渡すためローカルに保持
 
         def _run() -> None:
-            # shutil.which() をスレッド内で実行（メインスレッドをブロックしない）
+            # shutil.which() をスレッド内で実行(メインスレッドをブロックしない)
             cr_cmd = _find_coderouter_cmd()
-            cmd = cr_cmd + ["serve", "--port", str(cr_port)]
+            cmd = [*cr_cmd, "serve", "--port", str(cr_port)]
             print(f"[CodeRouter] 起動: {' '.join(cmd)}", flush=True)
             try:
                 p = subprocess.Popen(
@@ -773,10 +771,8 @@ class LauncherApp(tk.Tk):
     def _stop_coderouter(self) -> None:
         """CodeRouter を停止する。"""
         if self._cr_proc and self._cr_proc.poll() is None:
-            try:
+            with contextlib.suppress(Exception):
                 self._cr_proc.terminate()
-            except Exception:
-                pass
             self._cr_log.append("[coderouter] SIGTERM 送信")
         self._cr_status = "stopped"
         self._cr_proc = None
@@ -788,18 +784,14 @@ class LauncherApp(tk.Tk):
         """ウィンドウを閉じる際に CodeRouter と全バックエンドを停止する。"""
         # CodeRouter 停止
         if self._cr_proc and self._cr_proc.poll() is None:
-            try:
+            with contextlib.suppress(Exception):
                 self._cr_proc.terminate()
-            except Exception:
-                pass
 
         # llama.cpp / vllm 停止
         for mp in list(self.processes.values()):
             if mp.proc and mp.proc.poll() is None:
-                try:
+                with contextlib.suppress(Exception):
                     mp.proc.terminate()
-                except Exception:
-                    pass
 
         self.destroy()
 
@@ -897,7 +889,7 @@ class LauncherApp(tk.Tk):
         idx = int(sel[0])
         m = self.models[idx]
         self._model_path_var.set(m["path"])
-        # Name が空、または前回ここで自動入力した値のまま（＝手で変更していない）
+        # Name が空、または前回ここで自動入力した値のまま(= 手で変更していない)
         # なら選択モデル名で更新する。手入力された名前は上書きしない。
         current = self._name_var.get()
         if not current or current == self._last_auto_name:
@@ -926,7 +918,7 @@ class LauncherApp(tk.Tk):
         self._extra_var.set(flags)
         self._hw_var.set(_hw_summary(hw))
         self._set_launch_err("")
-        self._set_status(f"推奨値を設定（目安）: {_hw_summary(hw)} → {flags}")
+        self._set_status(f"推奨値を設定(目安): {_hw_summary(hw)} → {flags}")
 
     # ── Right panel ──────────────────────────────────────────────────────────
 
@@ -1043,7 +1035,7 @@ class LauncherApp(tk.Tk):
                  wraplength=400).grid(row=9, column=0, columnspan=4,
                                       sticky="ew", padx=10, pady=(0, 6))
 
-        # アニメーション用（Progressbar 非使用）
+        # アニメーション用(Progressbar 非使用)
         self._launch_anim_proc_id: str | None = None
 
         self.after(200, self._update_binary_hint)
@@ -1060,7 +1052,7 @@ class LauncherApp(tk.Tk):
         bc = self.cfg.backends.get(backend)
         is_custom = bc is not None and bc.binary is not None
 
-        # 暫定表示（スレッド完了前）
+        # 暫定表示(スレッド完了前)
         self._binary_hint_var.set(f"{binary}  (確認中…)")
         self._binary_hint_lbl.configure(fg=self.FG2)
 
@@ -1132,7 +1124,7 @@ class LauncherApp(tk.Tk):
             self._set_launch_err("モデルパスを入力してください (左のリストから選択か直接入力)")
             return
         if not port_str.isdigit() or not (1024 <= int(port_str) <= 65535):
-            self._set_launch_err("ポートは 1024–65535 の数字で指定してください")
+            self._set_launch_err("ポートは 1024-65535 の数字で指定してください")
             return
 
         port = int(port_str)
@@ -1169,7 +1161,7 @@ class LauncherApp(tk.Tk):
         self._set_launch_err("")
         self._set_status(f"起動中: {name}…")
 
-        # ボタンアニメーション開始（Progressbar 非使用）
+        # ボタンアニメーション開始(Progressbar 非使用)
         self._launch_anim_proc_id = proc_id
         self._launch_btn.configure(state="disabled", cursor="arrow")
         self._launch_anim_tick(proc_id, 0)
@@ -1212,10 +1204,8 @@ class LauncherApp(tk.Tk):
         mp = self.processes[pid]
         if mp.proc and mp.proc.poll() is None:
             mp.status = "stopping"
-            try:
+            with contextlib.suppress(Exception):
                 mp.proc.terminate()
-            except Exception:
-                pass
             mp.log_lines.append("[launcher] SIGTERM sent")
             self._refresh_process_table()
 
@@ -1225,10 +1215,8 @@ class LauncherApp(tk.Tk):
             return
         mp = self.processes[pid]
         if mp.proc and mp.proc.poll() is None:
-            try:
+            with contextlib.suppress(Exception):
                 mp.proc.kill()
-            except Exception:
-                pass
             mp.log_lines.append("[launcher] SIGKILL sent")
             self._refresh_process_table()
 
@@ -1240,10 +1228,8 @@ class LauncherApp(tk.Tk):
         if mp.status in ("running", "starting"):
             if not messagebox.askyesno("確認", f"{mp.name} は実行中です。強制終了して削除しますか?"):
                 return
-            try:
+            with contextlib.suppress(Exception):
                 mp.proc.kill()
-            except Exception:
-                pass
         del self.processes[pid]
         self.selected_proc_id = None
         self._refresh_process_table()
@@ -1336,10 +1322,8 @@ class LauncherApp(tk.Tk):
 
     def _select_process(self, proc_id: str) -> None:
         self.selected_proc_id = proc_id
-        try:
+        with contextlib.suppress(Exception):
             self._proc_tree.selection_set(proc_id)
-        except Exception:
-            pass
         self._refresh_log_view()
 
     # ── Log viewer ────────────────────────────────────────────────────────────
@@ -1409,7 +1393,8 @@ class LauncherApp(tk.Tk):
             backlog = self._poll_impl()
         except Exception as e:
             print(f"[DEBUG] _poll EXCEPTION: {e}", flush=True)
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
         finally:
             # バックログが残っていれば短間隔で再開し、
             # UI に制御を返しつつ素早く追従する
@@ -1478,7 +1463,7 @@ class LauncherApp(tk.Tk):
                 self._set_status(f"起動: {pname} (PID {mp.pid})")
                 self._port_var.set(str(int(pport) + 1))
                 self._name_var.set("")
-                # アニメーション停止（_launch_anim_tick が次回呼ばれたとき自動停止）
+                # アニメーション停止(_launch_anim_tick が次回呼ばれたとき自動停止)
                 self._launch_anim_proc_id = None
                 self._launch_btn.configure(
                     text="▶ llama.cpp / vllm 起動", state="normal", cursor="hand2"
@@ -1504,7 +1489,7 @@ class LauncherApp(tk.Tk):
                 pending_log_lines.append(line)
             changed = True
 
-        # ログをまとめて1回だけ書き込む（行ごとに configure するとUI固まる）
+        # ログをまとめて1回だけ書き込む(行ごとに configure するとUI固まる)
         if pending_log_lines:
             self._log_text.configure(state="normal")
             self._log_text.insert("end", "\n".join(pending_log_lines) + "\n")

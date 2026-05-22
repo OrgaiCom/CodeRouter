@@ -41,6 +41,9 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+# 背景タスクへの強参照を保持する (create_task の戻り値が GC されるのを防ぐ)
+_background_tasks: set[asyncio.Task[Any]] = set()
+
 # ---------------------------------------------------------------------------
 # Model file extensions to scan
 # ---------------------------------------------------------------------------
@@ -87,7 +90,7 @@ class LauncherRegistry:
         try:
             return self._procs[proc_id]
         except KeyError:
-            raise KeyError(proc_id)
+            raise KeyError(proc_id) from None
 
     def add(self, proc: ManagedProcess) -> None:
         self._procs[proc.id] = proc
@@ -200,11 +203,9 @@ def _detect_hardware() -> dict[str, Any]:
     """
     cpu = os.cpu_count() or 4
     ram_gb = 0.0
-    try:
+    with contextlib.suppress(ValueError, OSError, AttributeError):
         ram_gb = (os.sysconf("SC_PHYS_PAGES")
                   * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
-    except (ValueError, OSError, AttributeError):
-        pass
     if ram_gb <= 0:
         try:
             out = subprocess.run(["sysctl", "-n", "hw.memsize"],
@@ -378,7 +379,7 @@ async def shutdown_launcher(app: Any) -> None:
             continue
         try:
             await asyncio.wait_for(p.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             with contextlib.suppress(Exception):
                 p.kill()
         except Exception:
@@ -410,7 +411,7 @@ async def api_models(request: Request) -> dict[str, Any]:
     cfg = request.app.state.config
     launcher_cfg = getattr(cfg, "launcher", None)
     model_dirs: list[str] = launcher_cfg.model_dirs if launcher_cfg else []
-    # rglob / stat はブロッキング I/O。イベントループ（= プロキシ全体）を
+    # rglob / stat はブロッキング I/O。イベントループ(= プロキシ全体)を
     # 止めないよう別スレッドへ退避する。
     models = await asyncio.to_thread(_scan_models, model_dirs)
     hw = await asyncio.to_thread(_detect_hardware)
@@ -516,7 +517,7 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
             binary=configured_binary,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     proc_id = uuid.uuid4().hex[:8]
     proc = ManagedProcess(
@@ -541,9 +542,9 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail=f"Executable not found: {cmd[0]!r}. Is {req.backend} installed?",
-        )
+        ) from None
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     proc._proc = p
     proc.pid = p.pid
@@ -551,7 +552,9 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     proc.log_tail.append(f"[launcher] started PID {p.pid}")
 
     _registry(request).add(proc)
-    asyncio.create_task(_tail_logs(proc))
+    _task = asyncio.create_task(_tail_logs(proc))
+    _background_tasks.add(_task)
+    _task.add_done_callback(_background_tasks.discard)
 
     return {"id": proc_id, "pid": p.pid, "command": cmd}
 
@@ -562,14 +565,15 @@ async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
     try:
         proc = _registry(request).get(proc_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Process {proc_id!r} not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Process {proc_id!r} not found.") from None
 
     if proc._proc and proc.status == "running":
         proc._proc.terminate()
         proc.log_tail.append("[launcher] SIGTERM sent")
         try:
             await asyncio.wait_for(proc._proc.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc._proc.kill()
             proc.log_tail.append("[launcher] SIGKILL sent (timeout)")
         proc.status = "stopped"
@@ -585,7 +589,8 @@ async def api_delete(proc_id: str, request: Request) -> dict[str, Any]:
     try:
         proc = reg.get(proc_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Process {proc_id!r} not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Process {proc_id!r} not found.") from None
     if proc.status == "running":
         raise HTTPException(status_code=400, detail="Stop the process before deleting.")
     reg.remove(proc_id)
@@ -598,7 +603,8 @@ async def api_logs(proc_id: str, request: Request, n: int = 100) -> dict[str, An
     try:
         proc = _registry(request).get(proc_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Process {proc_id!r} not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Process {proc_id!r} not found.") from None
     tail = list(proc.log_tail)
     return {"id": proc_id, "logs": tail[-n:], "total": len(tail)}
 
@@ -733,7 +739,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
       <div>
         <div class="flex items-center justify-between mb-1">
-          <label class="block text-xs text-slate-400">追加オプション（自由入力）</label>
+          <label class="block text-xs text-slate-400">追加オプション(自由入力)</label>
           <button onclick="suggestOptions()" class="btn-sm btn-slate">⚙ 推奨値</button>
         </div>
         <input id="f-extra" type="text" placeholder="-ngl 99 --threads 8" />
@@ -895,7 +901,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
       if (!r.ok) { showLaunchErr(d.detail || "推奨値の取得に失敗"); return; }
       document.getElementById("f-extra").value = d.extra_args;
       showLaunchErr("");
-      statusMsg("推奨値を設定（目安）: " + d.extra_args);
+      statusMsg("推奨値を設定(目安): " + d.extra_args);
     } catch (e) {
       showLaunchErr(e.message);
     }
@@ -905,7 +911,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
     const m = _modelCache[idx];
     if (!m) return;
     document.getElementById("f-model").value = m.path;
-    // 名前が空 or 前回自動入力した値のまま → 選択モデル名で更新（手入力は保護）
+    // 名前が空 or 前回自動入力した値のまま → 選択モデル名で更新(手入力は保護)
     const nameEl = document.getElementById("f-name");
     if (!nameEl.value || nameEl.value === _lastAutoName) {
       _lastAutoName = m.name.replace(/\.[^.]+$/, "").slice(0, 30);
@@ -1036,7 +1042,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
     if (!name) { showLaunchErr("名前を入力してください"); return; }
     if (!model) { showLaunchErr("モデルパスを入力してください"); return; }
-    if (!port || port < 1024 || port > 65535) { showLaunchErr("ポートは 1024–65535"); return; }
+    if (!port || port < 1024 || port > 65535) { showLaunchErr("ポートは 1024-65535"); return; }
 
     const btn = document.getElementById("btn-launch");
     btn.disabled = true;
