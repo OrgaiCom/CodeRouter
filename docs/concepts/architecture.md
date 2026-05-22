@@ -1,6 +1,6 @@
 # CodeRouter アーキテクチャ詳細
 
-> **README に概要があります → [README.md](../README.md)**
+> **README に概要があります → [README.md](../../README.md)**
 > 本ページは内部構造、設定リファレンス、機能の仕組みを図入りで解説します。
 
 最終更新: v2.5.0 (2026-05-22)
@@ -404,4 +404,4 @@ UI に「追加オプション」テキスト欄が常時表示。プロファ�
 
 意図的に **非永続**。CodeRouter 再起動時にプロセスレジストリは空になる (GPU メモリ確保の多重起動防止)。実行中の llama-server / vllm プロセス自体は OS 上で継続するが、Launcher UI からは見えなくなる。
 
-詳細 → [Launcher ガイド](./launcher.md)
+詳細 → [Launcher ガイド](../backends/launcher.md)

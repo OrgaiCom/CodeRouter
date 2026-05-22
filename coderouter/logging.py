@@ -779,7 +779,7 @@ def log_output_filter_applied(
 # v1.7-B: chain-claude-code-suitability-degraded log shape
 #
 # Motivation (plan.md §11.B.4 #2):
-#   v1.6.2 documented in docs/troubleshooting.md §4-1 that putting
+#   v1.6.2 documented in docs/guides/troubleshooting.md §4-1 that putting
 #   Llama-3.3-70B at the head of a Claude-Code-facing chain causes
 #   over-eager tool invocation (small talk like ``こんにちは`` getting
 #   rewritten to ``Skill(hello)`` calls). Docs alone require the operator
@@ -805,7 +805,7 @@ def log_output_filter_applied(
 _DEFAULT_CLAUDE_CODE_SUITABILITY_HINT: str = (
     "move the degraded provider(s) to the tail of the chain or replace "
     "with an agentic-coding-tuned model (e.g. qwen3-coder-480b-a35b-instruct); "
-    "see docs/troubleshooting.md §4-1"
+    "see docs/guides/troubleshooting.md §4-1"
 )
 
 

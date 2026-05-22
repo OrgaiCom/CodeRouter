@@ -1,7 +1,7 @@
 # Free-tier guide — NVIDIA NIM + OpenRouter for zero-cost operation
 
 > This document is the operational recipe for running CodeRouter as long as possible without a credit card.
-> [`README.en.md`](../README.en.md) tells you what CodeRouter *is*; [`docs/usage-guide.en.md`](./usage-guide.en.md) tells you *how to use it in general*. This page covers only **which free tiers to stack, in what order, and where they bite**.
+> [`README.en.md`](../../README.en.md) tells you what CodeRouter *is*; [`docs/usage-guide.en.md`](./usage-guide.en.md) tells you *how to use it in general*. This page covers only **which free tiers to stack, in what order, and where they bite**.
 
 Japanese version: [`docs/free-tier-guide.md`](./free-tier-guide.md)
 
@@ -338,8 +338,8 @@ Three checks: POSIX 0600 permissions, `.gitignore` coverage, git-tracking state.
 ## 8. Related docs
 
 - [`docs/usage-guide.en.md`](./usage-guide.en.md) — general usage guide (hardware-tier model picks, `doctor` / `verify` usage, per-OS launch flow)
-- [`docs/quickstart.en.md`](./quickstart.en.md) — shortest path to Claude Code / codex + local Ollama
+- [`docs/quickstart.en.md`](../start/quickstart.en.md) — shortest path to Claude Code / codex + local Ollama
 - [`docs/troubleshooting.en.md`](./troubleshooting.en.md) — when things don't work (doctor, `.env` traps, Llama over-eager mitigation, 1Password recipe)
-- [`examples/providers.nvidia-nim.yaml`](../examples/providers.nvidia-nim.yaml) — the YAML referenced here, with every observed footgun documented inline
-- [`examples/providers.yaml`](../examples/providers.yaml) — standard sample without NIM (local + OpenRouter free + paid)
-- [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) — weekly diffs for OpenRouter `:free` SKUs (output of `scripts/openrouter_roster_diff.py`)
+- [`examples/providers.nvidia-nim.yaml`](../../examples/providers.nvidia-nim.yaml) — the YAML referenced here, with every observed footgun documented inline
+- [`examples/providers.yaml`](../../examples/providers.yaml) — standard sample without NIM (local + OpenRouter free + paid)
+- [`docs/openrouter-roster/CHANGES.md`](../openrouter-roster/CHANGES.md) — weekly diffs for OpenRouter `:free` SKUs (output of `scripts/openrouter_roster_diff.py`)

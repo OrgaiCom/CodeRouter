@@ -35,7 +35,7 @@
 #                                       Claude Code's agentic-coding harness;
 #                                       "degraded" triggers a startup WARN when
 #                                       the provider is on a `claude-code-*`
-#                                       chain. See docs/troubleshooting.md §4-1.
+#                                       chain. See docs/guides/troubleshooting.md §4-1.
 #
 # First-match semantics: rules within a file are evaluated top-to-bottom
 # per flag; the first rule whose glob matches AND declares that flag
@@ -153,7 +153,7 @@ rules:
   # Llama-3.3-70B (verified 2026-04-24 against NVIDIA NIM) rewrites
   # ``こんにちは`` into ``Skill(hello)`` invocations and fabricates
   # ``AskUserQuestion("What is your name?")`` elicitations — see
-  # docs/articles/note-nvidia-nim.md §6-2 + docs/troubleshooting.md §4-1.
+  # docs/articles/note/note-nvidia-nim.md §6-2 + docs/guides/troubleshooting.md §4-1.
   #
   # Glob coverage: NIM uses ``meta/llama-3.3-70b-instruct``, OpenRouter
   # uses ``meta-llama/llama-3.3-70b-instruct``, some local servers use

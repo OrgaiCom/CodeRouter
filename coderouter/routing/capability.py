@@ -312,7 +312,7 @@ def anthropic_request_has_cache_control(request: AnthropicRequest) -> bool:
 # v1.7-B: claude_code_suitability startup check
 #
 # Motivation (plan.md §11.B.4 #2):
-#   v1.6.2 documented in docs/troubleshooting.md §4-1 the "Llama-3.3-70B
+#   v1.6.2 documented in docs/guides/troubleshooting.md §4-1 the "Llama-3.3-70B
 #   over-eagerly invokes Skill() for small talk under Claude Code"
 #   symptom. v1.7-B promotes that hint from prose-only to a structured
 #   automatic startup WARN: at app startup we scan every profile whose

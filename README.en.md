@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="./README.md">日本語</a> · <a href="./docs/quickstart.en.md">Get started in 10 min</a> · <a href="./docs/architecture.md">Architecture</a>
+  <strong>English</strong> · <a href="./README.md">日本語</a> · <a href="./docs/start/quickstart.en.md">Get started in 10 min</a> · <a href="./docs/concepts/architecture.md">Architecture</a>
 </p>
 
 ---
@@ -80,7 +80,7 @@ That's it. Claude Code works as usual, but your local Ollama is answering behind
 | codex / gemini-cli + Ollama works fine | Optional — if you want fallback |
 | Using Claude API directly, no issues | Not needed |
 
-Full decision matrix → [Do I need CodeRouter?](./docs/when-do-i-need-coderouter.en.md)
+Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-coderouter.en.md)
 
 ---
 
@@ -145,7 +145,7 @@ launcher:
           "--max-model-len": 4096
 ```
 
-Details → [Launcher guide](./docs/launcher.md)
+Details → [Launcher guide](./docs/backends/launcher.md)
 
 ---
 
@@ -172,7 +172,7 @@ providers:
     api_key_env: OPENROUTER_API_KEY
 ```
 
-More detail → [Usage guide](./docs/usage-guide.en.md) · [Architecture](./docs/architecture.md)
+More detail → [Usage guide](./docs/guides/usage-guide.en.md) · [Architecture](./docs/concepts/architecture.md)
 
 ---
 
@@ -180,15 +180,15 @@ More detail → [Usage guide](./docs/usage-guide.en.md) · [Architecture](./docs
 
 | Goal | Document |
 |---|---|
-| Get running fast | [Quickstart](./docs/quickstart.en.md) |
-| Use it well | [Usage guide](./docs/usage-guide.en.md) |
-| Run for free | [Free-tier guide](./docs/free-tier-guide.en.md) |
-| Launch llama.cpp / vllm via GUI | [Launcher guide](./docs/launcher.md) |
-| Stuck? | [Troubleshooting](./docs/troubleshooting.en.md) |
-| Understand the design | [Architecture](./docs/architecture.md) |
+| Get running fast | [Quickstart](./docs/start/quickstart.en.md) |
+| Use it well | [Usage guide](./docs/guides/usage-guide.en.md) |
+| Run for free | [Free-tier guide](./docs/guides/free-tier-guide.en.md) |
+| Launch llama.cpp / vllm via GUI | [Launcher guide](./docs/backends/launcher.md) |
+| Stuck? | [Troubleshooting](./docs/guides/troubleshooting.en.md) |
+| Understand the design | [Architecture](./docs/concepts/architecture.md) |
 | Full release history | [CHANGELOG](./CHANGELOG.md) |
 
-日本語: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [トラブルシューティング](./docs/troubleshooting.md)
+日本語: [Quickstart](./docs/start/quickstart.md) · [利用ガイド](./docs/guides/usage-guide.md) · [無料枠ガイド](./docs/guides/free-tier-guide.md) · [トラブルシューティング](./docs/guides/troubleshooting.md)
 
 ---
 
@@ -198,10 +198,10 @@ More detail → [Usage guide](./docs/usage-guide.en.md) · [Architecture](./docs
 
 | Symptom | Cause | Details |
 |---|---|---|
-| 401 error | API key not set / missing `export` in `.env` | [§1](./docs/troubleshooting.en.md#1-five-startup--config-gotchas-added-in-v162) |
-| Empty / garbage replies | Ollama `num_ctx` truncated to 2048 | [§3](./docs/troubleshooting.en.md#3-ollama-beginner--5-silent-fail-symptoms-v07-c) |
-| `<think>` tags leaking | Add `output_filters: [strip_thinking]` | [§3](./docs/troubleshooting.en.md#3-ollama-beginner--5-silent-fail-symptoms-v07-c) |
-| Tool calls misbehaving in Claude Code | Tool-call repair not kicking in | [§4](./docs/troubleshooting.en.md#4-claude-code-integration-gotchas-added-in-v162) |
+| 401 error | API key not set / missing `export` in `.env` | [§1](./docs/guides/troubleshooting.en.md#1-five-startup--config-gotchas-added-in-v162) |
+| Empty / garbage replies | Ollama `num_ctx` truncated to 2048 | [§3](./docs/guides/troubleshooting.en.md#3-ollama-beginner--5-silent-fail-symptoms-v07-c) |
+| `<think>` tags leaking | Add `output_filters: [strip_thinking]` | [§3](./docs/guides/troubleshooting.en.md#3-ollama-beginner--5-silent-fail-symptoms-v07-c) |
+| Tool calls misbehaving in Claude Code | Tool-call repair not kicking in | [§4](./docs/guides/troubleshooting.en.md#4-claude-code-integration-gotchas-added-in-v162) |
 
 Open `http://localhost:8088/dashboard` while debugging — most issues become visible in 10 seconds.
 
@@ -227,7 +227,7 @@ CodeRouter runs as an independent backend router layer. Point any project's `OPE
 
 ## Security
 
-Secrets go in env vars, not config files. See [`docs/security.en.md`](./docs/security.en.md) for the full policy and reporting instructions.
+Secrets go in env vars, not config files. See [`docs/security.en.md`](./docs/guides/security.en.md) for the full policy and reporting instructions.
 
 ## License
 

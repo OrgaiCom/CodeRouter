@@ -197,4 +197,4 @@ launcher:
 - [Launcher クイックスタート](./launcher-quickstart.md) — llama.cpp / vLLM 導入からランチャー起動までの通し手順
 - [Launcher ガイド（Web版）](./launcher.md) — `/launcher` ページ版
 - [llama.cpp 直接接続ガイド](./llamacpp-direct.md)
-- [利用ガイド](./usage-guide.md)
+- [利用ガイド](../guides/usage-guide.md)

@@ -1,6 +1,6 @@
 # CodeRouter Usage Guide
 
-A practical companion to [`README.md`](../README.en.md). The README tells you what CodeRouter *is*; this guide tells you how to pick a model for your hardware, which knobs to tune, and which OS flow to follow.
+A practical companion to [`README.md`](../../README.en.md). The README tells you what CodeRouter *is*; this guide tells you how to pick a model for your hardware, which knobs to tune, and which OS flow to follow.
 
 Sections:
 
@@ -167,7 +167,7 @@ providers:
 3. **`temperature`** is a quality knob, not a correctness knob. If tool-call repair fires a lot in your logs (`recover_garbled_tool_json` / v0.3-A), dropping temperature to 0.2 is the first fix.
 4. **`output_filters`** removes `<think>` / `<|turn|>` / other stop-marker leaks from the response byte stream at the adapter boundary. Costs one pass over the content; works on every model, every provider, every client.
 
-See [README.md → Ollama beginner — 5 silent-fail symptoms](../README.en.md#ollama-beginner--5-silent-fail-symptoms-v07-c) for the symptom→fix mapping in narrative form.
+See [README.md → Ollama beginner — 5 silent-fail symptoms](../../README.en.md#ollama-beginner--5-silent-fail-symptoms-v07-c) for the symptom→fix mapping in narrative form.
 
 ---
 
@@ -288,7 +288,7 @@ Currently shipped as free-tier references:
 | `openrouter-free` | `qwen/qwen3-coder:free` | Long-context coding (262K window), tool-use | Daily quota; rate-limits around 20 req/min |
 | `openrouter-gpt-oss-free` | `openai/gpt-oss-120b:free` | General chat, rate-limit escape from qwen | Emits non-standard `reasoning` field — v0.5-C strips it; harmless |
 
-The roster rotates — see [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) for the weekly diff. New free models appear, old ones get pulled without warning. Re-run `scripts/openrouter_roster_diff.py` weekly (or let the cron in `scripts/` handle it) to track.
+The roster rotates — see [`docs/openrouter-roster/CHANGES.md`](../openrouter-roster/CHANGES.md) for the weekly diff. New free models appear, old ones get pulled without warning. Re-run `scripts/openrouter_roster_diff.py` weekly (or let the cron in `scripts/` handle it) to track.
 
 Set `OPENROUTER_API_KEY` before launch — OpenRouter free still requires auth:
 
@@ -321,7 +321,7 @@ CodeRouter ships two verification tools:
 uv run coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
-**Full-system real-machine verify** — `bash scripts/verify_v1_0.sh`. Runs three paired bare/tuned scenarios end-to-end to prove the transformation + probe loop is closed. See `scripts/verify_v1_0.sh --help` for the scenario breakdown and [`docs/retrospectives/v1.0-verify.md`](./retrospectives/v1.0-verify.md) for the reference evidence doc.
+**Full-system real-machine verify** — `bash scripts/verify_v1_0.sh`. Runs three paired bare/tuned scenarios end-to-end to prove the transformation + probe loop is closed. See `scripts/verify_v1_0.sh --help` for the scenario breakdown and [`docs/retrospectives/v1.0-verify.md`](../retrospectives/v1.0-verify.md) for the reference evidence doc.
 
 The earlier v0.5 series also has its own verify runner at `scripts/verify_v0_5.sh` covering the capability-gate (`thinking` / `cache_control` / `reasoning`) surface. Both scripts are idempotent and safe to re-run.
 
@@ -331,7 +331,7 @@ The earlier v0.5 series also has its own verify runner at `scripts/verify_v0_5.s
 
 Short map to the right README section for each common symptom:
 
-- **Blank / gibberish reply, 200 status** → [silent-fail symptom #1](../README.en.md#ollama-beginner--5-silent-fail-symptoms-v07-c) (`num_ctx` too low).
+- **Blank / gibberish reply, 200 status** → [silent-fail symptom #1](../../README.en.md#ollama-beginner--5-silent-fail-symptoms-v07-c) (`num_ctx` too low).
 - **"Cut off mid-word"** → silent-fail symptom not numbered yet (`num_predict` too low). v1.0-C doctor probe detects it.
 - **"Can't read files" / no tool calls** → silent-fail symptom #2 (`capabilities.tools` mismatch).
 - **`<think>` tags in UI** → silent-fail symptom #3 (`output_filters: [strip_thinking]`).

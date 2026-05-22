@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.en.md">English</a> · <strong>日本語</strong> · <a href="./docs/quickstart.md">10 分で動かす</a> · <a href="./docs/architecture.md">設計詳細</a>
+  <a href="./README.en.md">English</a> · <strong>日本語</strong> · <a href="./docs/start/quickstart.md">10 分で動かす</a> · <a href="./docs/concepts/architecture.md">設計詳細</a>
 </p>
 
 ---
@@ -80,7 +80,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | codex / gemini-cli + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら |
 | Claude API を直接叩いてて問題ない | 不要 |
 
-詳細は → [要否判定ガイド](./docs/when-do-i-need-coderouter.md)
+詳細は → [要否判定ガイド](./docs/start/when-do-i-need-coderouter.md)
 
 ---
 
@@ -145,7 +145,7 @@ launcher:
           "--max-model-len": 4096
 ```
 
-詳細 → [Launcher ガイド](./docs/launcher.md)
+詳細 → [Launcher ガイド](./docs/backends/launcher.md)
 
 ---
 
@@ -172,7 +172,7 @@ providers:
     api_key_env: OPENROUTER_API_KEY
 ```
 
-もっと詳しい設定 → [利用ガイド](./docs/usage-guide.md) · [設計詳細](./docs/architecture.md)
+もっと詳しい設定 → [利用ガイド](./docs/guides/usage-guide.md) · [設計詳細](./docs/concepts/architecture.md)
 
 ---
 
@@ -180,15 +180,15 @@ providers:
 
 | やりたいこと | ドキュメント |
 |---|---|
-| すぐ動かす | [Quickstart](./docs/quickstart.md) |
-| 使いこなす | [利用ガイド](./docs/usage-guide.md) |
-| 無料で回す | [無料枠ガイド](./docs/free-tier-guide.md) |
-| llama.cpp / vllm を GUI で起動 | [Launcher ガイド](./docs/launcher.md) |
-| 詰まった | [トラブルシューティング](./docs/troubleshooting.md) |
-| 設計を知りたい | [アーキテクチャ詳細](./docs/architecture.md) |
+| すぐ動かす | [Quickstart](./docs/start/quickstart.md) |
+| 使いこなす | [利用ガイド](./docs/guides/usage-guide.md) |
+| 無料で回す | [無料枠ガイド](./docs/guides/free-tier-guide.md) |
+| llama.cpp / vllm を GUI で起動 | [Launcher ガイド](./docs/backends/launcher.md) |
+| 詰まった | [トラブルシューティング](./docs/guides/troubleshooting.md) |
+| 設計を知りたい | [アーキテクチャ詳細](./docs/concepts/architecture.md) |
 | 全リリース履歴 | [CHANGELOG](./CHANGELOG.md) |
 
-English: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier](./docs/free-tier-guide.en.md) · [Troubleshooting](./docs/troubleshooting.en.md)
+English: [Quickstart](./docs/start/quickstart.en.md) · [Usage guide](./docs/guides/usage-guide.en.md) · [Free-tier](./docs/guides/free-tier-guide.en.md) · [Troubleshooting](./docs/guides/troubleshooting.en.md)
 
 ---
 
@@ -198,10 +198,10 @@ English: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-gui
 
 | 症状 | 原因 | 詳細 |
 |---|---|---|
-| 401 エラー | API キー未設定 / `.env` に `export` 忘れ | [§1](./docs/troubleshooting.md#1-起動設定で踏みやすい-5-つの罠-v162-追加) |
-| 返信が空 / 意味不明 | Ollama の `num_ctx` が 2048 に切り詰め | [§3](./docs/troubleshooting.md#3-ollama-初心者--サイレント失敗-5-症状-v07-c) |
-| `<think>` タグが漏れる | `output_filters: [strip_thinking]` を付ける | [§3](./docs/troubleshooting.md#3-ollama-初心者--サイレント失敗-5-症状-v07-c) |
-| Claude Code でツール呼び出しがおかしい | tool-call 修復が効いてない | [§4](./docs/troubleshooting.md#4-claude-code-連携で踏みやすい罠-v162-追加) |
+| 401 エラー | API キー未設定 / `.env` に `export` 忘れ | [§1](./docs/guides/troubleshooting.md#1-起動設定で踏みやすい-5-つの罠-v162-追加) |
+| 返信が空 / 意味不明 | Ollama の `num_ctx` が 2048 に切り詰め | [§3](./docs/guides/troubleshooting.md#3-ollama-初心者--サイレント失敗-5-症状-v07-c) |
+| `<think>` タグが漏れる | `output_filters: [strip_thinking]` を付ける | [§3](./docs/guides/troubleshooting.md#3-ollama-初心者--サイレント失敗-5-症状-v07-c) |
+| Claude Code でツール呼び出しがおかしい | tool-call 修復が効いてない | [§4](./docs/guides/troubleshooting.md#4-claude-code-連携で踏みやすい罠-v162-追加) |
 
 `http://localhost:8088/dashboard` を開いておくと、ほとんどの問題が見て 10 秒でわかります。
 
@@ -227,7 +227,7 @@ CodeRouter は backend ルーター層として独立して動きます。`OPENA
 
 ## Security
 
-シークレットは環境変数に置きます。[`docs/security.md`](./docs/security.md) に完全な方針と報告手順があります。
+シークレットは環境変数に置きます。[`docs/security.md`](./docs/guides/security.md) に完全な方針と報告手順があります。
 
 ## License
 
