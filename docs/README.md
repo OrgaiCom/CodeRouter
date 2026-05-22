@@ -63,9 +63,9 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 
 ローカル推論バックエンドの導入・起動・接続。 / Installing, launching, and connecting local inference backends.
 
+- **install-backends** — llama.cpp / vLLM / MLX のインストール手順 / Installing the three backends · [日本語](backends/install-backends.md) · [English](backends/install-backends.en.md)
 - **launcher-quickstart** — バックエンド導入から起動までの最短手順 / Install a backend and launch · [日本語](backends/launcher-quickstart.md)
-- **launcher** — ブラウザから使う Web 版ランチャー / Web launcher · [日本語](backends/launcher.md)
-- **launcher-gui** — デスクトップ GUI ランチャー / Desktop GUI launcher · [日本語](backends/launcher-gui.md)
+- **launcher** — Launcher ガイド(Web版・デスクトップGUI版) / Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md)
 - **llamacpp-direct** — llama.cpp に直結する / Connect llama.cpp directly · [日本語](backends/llamacpp-direct.md) · [English](backends/llamacpp-direct.en.md)
 - **lmstudio-direct** — LM Studio に直結する / Connect LM Studio directly · [日本語](backends/lmstudio-direct.md) · [English](backends/lmstudio-direct.en.md)
 - **hf-ollama-models** — HuggingFace 配布モデルを Ollama で使う / Use HF models via Ollama · [日本語](backends/hf-ollama-models.md)

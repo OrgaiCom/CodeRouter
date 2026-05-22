@@ -253,14 +253,32 @@ def _model_recommendation(size_gb: float, hw: dict[str, Any]) -> dict[str, str]:
     return {"level": "warn", "label": "メモリ厳しい"}
 
 
-def _suggest_launch_flags(size_gb: float, hw: dict[str, Any]) -> str:
-    """選択モデル + ハードから -ngl / --ctx-size / --threads を提案する。
+def _suggest_launch_flags(backend: str, size_gb: float,
+                          hw: dict[str, Any]) -> str:
+    """選択モデル + ハード + バックエンドから推奨起動フラグを提案する。
 
+    バックエンドごとにフラグ体系が違うため分岐する:
+      - llama.cpp : -ngl / --ctx-size / --threads を算出
+      - vllm      : モデル config からの自動導出に任せる (空文字)
+      - mlx       : 統合メモリ前提で起動時フラグ不要 (空文字)
     あくまで目安。他プロセスのメモリ使用や量子化方式までは考慮しない。
     """
-    threads = max(1, int(hw.get("cpu_count", 4)) - 2)
+    if backend == "mlx":
+        # MLX は統合メモリ + Metal 前提。llama.cpp の -ngl に相当する
+        # レイヤーオフロードの概念がなく、mlx_lm.server は起動時の
+        # 性能チューニングフラグを取らない。
+        return ""
+    if backend == "vllm":
+        # vllm の --max-model-len はモデルの実コンテキスト長に依存する。
+        # メモリ量だけのヒューリスティックで値を出すと、モデルの上限を
+        # 超えたときに vllm が起動を拒否する。空にしてエンジンの
+        # 自動導出 (モデル config) に任せるのが安全。
+        return ""
+
+    # llama.cpp (デフォルト)
     usable = _usable_memory_gb(hw)
     weights = size_gb * 1.15                       # 重み + オーバーヘッド概算
+    threads = max(1, int(hw.get("cpu_count", 4)) - 2)
     if hw.get("gpu") == "cpu":
         ngl = 0
     elif usable >= weights + 1.0:
@@ -620,17 +638,20 @@ async def api_logs(proc_id: str, request: Request, n: int = 100) -> dict[str, An
 
 
 @router.get("/api/launcher/suggest")
-async def api_suggest(model_path: str = "") -> dict[str, Any]:
+async def api_suggest(model_path: str = "",
+                      backend: str = "llama.cpp") -> dict[str, Any]:
     """Suggest launch flags for the given model based on detected hardware.
 
     クライアントの「推奨値」ボタンから呼ばれる。値はあくまで目安。
+    バックエンドごとにフラグ体系が違うため backend も受け取る。
     """
     hw = await asyncio.to_thread(_detect_hardware)
     size_gb = 0.0
     if model_path:
         size_gb = await asyncio.to_thread(_model_size_gb, model_path)
     return {
-        "extra_args": _suggest_launch_flags(size_gb, hw),
+        "extra_args": _suggest_launch_flags(backend, size_gb, hw),
+        "backend": backend,
         "hardware": hw,
         "size_gb": round(size_gb, 2),
     }
@@ -905,14 +926,24 @@ _LAUNCHER_HTML = r"""<!doctype html>
   window.suggestOptions = async () => {
     const model = document.getElementById("f-model").value.trim();
     if (!model) { showLaunchErr("先にモデルを選択してください"); return; }
+    const backend = document.getElementById("f-backend").value;
     try {
       const r = await fetch("/api/launcher/suggest?model_path="
-                            + encodeURIComponent(model));
+                            + encodeURIComponent(model)
+                            + "&backend=" + encodeURIComponent(backend));
       const d = await r.json();
       if (!r.ok) { showLaunchErr(d.detail || "推奨値の取得に失敗"); return; }
       document.getElementById("f-extra").value = d.extra_args;
       showLaunchErr("");
-      statusMsg("推奨値を設定(目安): " + d.extra_args);
+      if (d.extra_args) {
+        statusMsg("推奨値を設定(目安): " + d.extra_args);
+      } else if (backend === "mlx") {
+        statusMsg("MLX は起動時の調整フラグ不要です(統合メモリで自動)");
+      } else if (backend === "vllm") {
+        statusMsg("vllm は起動時フラグ不要です(モデル設定から自動導出)");
+      } else {
+        statusMsg("このバックエンドは推奨フラグの自動設定対象外です");
+      }
     } catch (e) {
       showLaunchErr(e.message);
     }

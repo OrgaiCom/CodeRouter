@@ -6,6 +6,41 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.5.2] — 2026-05-22 (Backend-aware Launcher suggestions + backend install guide)
+
+Patch release: a Launcher bug fix and documentation improvements.
+
+### Fixed
+
+- **Launcher "suggest values" (`⚙ 推奨値`) is now backend-aware.**
+  Previously the button emitted llama.cpp flags
+  (`-ngl` / `--ctx-size` / `--threads`) for every backend, but vLLM and
+  MLX reject those. Now:
+  - **llama.cpp** — the flags, as before.
+  - **vLLM** — empty; `--max-model-len` etc. depend on the model's real
+    context length, so the engine's auto-derivation is left to do its job.
+  - **MLX** — empty; it assumes unified memory and takes no launch-time
+    tuning flags.
+
+  Fixed in both the desktop GUI (`launcher_gui.py`) and the Web launcher
+  (`coderouter/ingress/launcher_routes.py`); the `/api/launcher/suggest`
+  endpoint now accepts a `backend` parameter.
+
+### Documentation
+
+- New **`docs/backends/install-backends.md`** (+ `.en.md`) — an
+  installation guide for llama.cpp / vLLM / MLX covering macOS / Linux /
+  Windows, with per-backend verification steps and common pitfalls.
+- **Launcher docs consolidated from 3 files to 2**: `launcher-gui.md` is
+  merged into a unified `launcher.md` (Web + Desktop GUI in one guide,
+  shared reference documented once); `launcher-quickstart.md` is slimmed
+  to delegate installation to the new guide.
+- **Backend venv convention documented**: vLLM / MLX virtual
+  environments live under `~/.coderouter/backends/<backend>/`, one venv
+  per backend.
+
+---
+
 ## [v2.5.1] — 2026-05-22 (MLX backend + docs reorganization)
 
 Patch release: a third Launcher backend, a reorganized documentation
