@@ -6,6 +6,38 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.5.1] — 2026-05-22 (MLX backend + docs reorganization)
+
+Patch release: a third Launcher backend, a reorganized documentation
+tree, and a security fix.
+
+### Added
+
+- **MLX backend** for the Launcher (`launcher_gui.py` and
+  `coderouter/ingress/launcher_routes.py`): `mlx` joins `llama.cpp` and
+  `vllm`, aimed at Apple Silicon users. Launches
+  `python -m mlx_lm.server --model <m> --port <p>`. The backend
+  selectors (desktop GUI combobox / Web `<select>`) gain an `mlx`
+  option, and the binary-not-found error messages are now
+  backend-agnostic.
+
+### Changed
+
+- **`docs/` reorganized** into role-based folders — `start/`, `guides/`,
+  `backends/`, `concepts/` — with a new bilingual (JA/EN) master index
+  at `docs/README.md` including a quick "what to read" table. Internal
+  cross-links, `README.md` / `README.en.md`, and code/config path
+  references were updated to the new layout.
+- **`plan.md` restructured**: deduplicated, version ordering fixed,
+  sections compressed (1747 → 721 lines).
+
+### Security
+
+- **starlette `1.0.0` → `1.0.1`** (`uv.lock`): fixes PYSEC-2026-161,
+  which failed the `cve-audit` CI job.
+
+---
+
 ## [v2.5.0] — 2026-05-22 (Launcher — llama.cpp / vllm GUI)
 
 Browser-based process manager for local inference backends, integrated
