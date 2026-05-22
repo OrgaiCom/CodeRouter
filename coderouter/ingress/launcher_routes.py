@@ -1,13 +1,13 @@
 """Launcher routes — ``GET /launcher`` + ``/api/launcher/*``.
 
-llama.cpp / vllm プロセス管理 UI。
+llama.cpp / vllm / mlx プロセス管理 UI。
 
 設計方針:
 - ダッシュボードと同じ "1ファイル完結" スタイル (Tailwind CDN + inline JS)
 - プロセスレジストリは app.state.launcher に持たせる (再起動で消えるが意図通り)
 - option_profiles は providers.yaml の launcher: セクションで管理 → コード変更不要で拡張可
 - 複数プロセスの同時起動に対応 (UUID ベースの ID 管理)
-- llama.cpp / vllm どちらも同じ key-value args スキーマで統一
+- llama.cpp / vllm / mlx いずれも同じ key-value args スキーマで統一
 
 エンドポイント:
   GET  /launcher                   → HTML UI
@@ -62,7 +62,7 @@ class ManagedProcess:
 
     id: str
     name: str
-    backend: str         # "llama.cpp" | "vllm"
+    backend: str         # "llama.cpp" | "vllm" | "mlx"
     model_path: str
     port: int
     options: dict[str, Any]
@@ -150,6 +150,7 @@ def _scan_models(model_dirs: list[str]) -> list[dict[str, Any]]:
 _BACKEND_DEFAULTS: dict[str, str] = {
     "llama.cpp": "llama-server",
     "vllm": "python",
+    "mlx": "python",          # mlx_lm.server (Apple Silicon 向け)
 }
 
 
@@ -312,8 +313,17 @@ def _build_cmd(
             "--model", model_path,
             "--port", str(port),
         ]
+    elif backend == "mlx":
+        cmd = [
+            exe, "-m", "mlx_lm.server",
+            "--model", model_path,
+            "--port", str(port),
+        ]
     else:
-        raise ValueError(f"Unknown backend: {backend!r}. Expected 'llama.cpp' or 'vllm'.")
+        raise ValueError(
+            f"Unknown backend: {backend!r}. "
+            "Expected 'llama.cpp', 'vllm' or 'mlx'."
+        )
 
     for flag, val in options.items():
         if isinstance(val, bool):
@@ -720,6 +730,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
         <select id="f-backend" onchange="onBackendChange()">
           <option value="llama.cpp">llama.cpp</option>
           <option value="vllm">vllm</option>
+          <option value="mlx">mlx</option>
         </select>
         <div id="binary-hint" class="mt-1 text-xs text-slate-500 min-h-[1.2rem]"></div>
       </div>
@@ -961,7 +972,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
     // Enable/disable launch button based on binary availability
     if (!info.found) {
       btn.disabled = true;
-      showLaunchErr(`⚠ "${esc(info.resolved)}" が見つかりません。llama.cpp をインストールするか、providers.yaml の launcher.backends.llama\\.cpp.binary にフルパスを設定してください。`);
+      showLaunchErr(`⚠ "${esc(info.resolved)}" が見つかりません。選択中のバックエンド (${esc(backend)}) をインストールするか、providers.yaml の launcher.backends.${esc(backend)}.binary にフルパスを設定してください。`);
     } else {
       btn.disabled = false;
       // Clear error only if it was a binary-not-found error

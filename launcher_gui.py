@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 CodeRouter Launcher GUI — tkinter 版
-llama.cpp / vllm と CodeRouter をブラウザなしで起動・管理するデスクトップツール
+llama.cpp / vllm / mlx と CodeRouter をブラウザなしで起動・管理するデスクトップツール
 
 使い方:
   python3 launcher_gui.py
@@ -12,7 +12,7 @@ llama.cpp / vllm と CodeRouter をブラウザなしで起動・管理するデ
 
 起動フロー:
   launcher_gui.py 起動
-    → ① llama.cpp / vllm を選択モデルで起動 (ポート 8080)
+    → ① llama.cpp / vllm / mlx を選択モデルで起動 (ポート 8080)
     → ② CodeRouter を起動 (ポート 8088)  ← ★ このGUIから直接起動
     → Claude Code: ANTHROPIC_BASE_URL=http://localhost:8088 claude
 """
@@ -62,6 +62,7 @@ _MODEL_EXTS = {".gguf", ".ggml", ".safetensors", ".bin", ".pt", ".pth"}
 _BACKEND_DEFAULTS = {
     "llama.cpp": "llama-server",
     "vllm": "python",
+    "mlx": "python",          # mlx_lm.server (Apple Silicon 向け)
 }
 
 # CodeRouter のデフォルトポート (README / docs に揃えて 8088)
@@ -183,6 +184,9 @@ def _build_cmd(backend: str, model_path: str, port: int,
         cmd = [binary, "-m", model_path, "--port", str(port)]
     elif backend == "vllm":
         cmd = [binary, "-m", "vllm.entrypoints.openai.api_server",
+               "--model", model_path, "--port", str(port)]
+    elif backend == "mlx":
+        cmd = [binary, "-m", "mlx_lm.server",
                "--model", model_path, "--port", str(port)]
     else:
         raise ValueError(f"Unknown backend: {backend!r}")
@@ -703,7 +707,7 @@ class LauncherApp(tk.Tk):
         if proc_id not in self.processes or self.processes[proc_id].status not in ("starting",):
             # 起動完了 or エラー → ボタンを元に戻す
             self._launch_btn.configure(
-                text="▶ llama.cpp / vllm 起動", state="normal", cursor="hand2"
+                text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
             )
             self._launch_anim_proc_id = None
             return
@@ -947,7 +951,7 @@ class LauncherApp(tk.Tk):
                      font=("sans-serif", 9)).grid(
                 row=r, column=c, sticky="w", padx=(10, 4), pady=(6, 0))
 
-        tk.Label(card, text="LAUNCH  llama.cpp / vllm", fg=self.FG2, bg=self.BG2,
+        tk.Label(card, text="LAUNCH  llama.cpp / vllm / mlx", fg=self.FG2, bg=self.BG2,
                  font=("sans-serif", 9, "bold")).grid(
             row=0, column=0, columnspan=4, sticky="w",
             padx=10, pady=(8, 2))
@@ -1016,7 +1020,7 @@ class LauncherApp(tk.Tk):
         _btn_wrap = tk.Frame(card, bg=self.ACCENT, bd=0)
         _btn_wrap.grid(row=8, column=0, columnspan=4, sticky="ew", padx=10, pady=8)
         self._launch_btn = tk.Button(
-            _btn_wrap, text="▶ llama.cpp / vllm 起動",
+            _btn_wrap, text="▶ llama.cpp / vllm / mlx 起動",
             fg="white", bg=self.ACCENT,
             activebackground="#4f46e5", activeforeground="white",
             disabledforeground=self.FG2,
@@ -1058,11 +1062,13 @@ class LauncherApp(tk.Tk):
 
         def _check() -> None:
             found = _check_binary(binary)
-            self.after(0, lambda: self._apply_binary_hint(binary, found, is_custom))
+            self.after(0, lambda: self._apply_binary_hint(
+                backend, binary, found, is_custom))
 
         threading.Thread(target=_check, daemon=True).start()
 
-    def _apply_binary_hint(self, binary: str, found: bool, is_custom: bool) -> None:
+    def _apply_binary_hint(self, backend: str, binary: str,
+                           found: bool, is_custom: bool) -> None:
         label = "カスタム設定" if is_custom else "PATH"
         status = "✓ 利用可" if found else "✗ 見つかりません"
         self._binary_hint_var.set(f"{binary}  ({label} — {status})")
@@ -1075,8 +1081,8 @@ class LauncherApp(tk.Tk):
         if not found:
             self._set_launch_err(
                 f"⚠ {binary} が見つかりません。\n"
-                "llama.cpp をインストールするか、providers.yaml の\n"
-                "launcher.backends.llama\\.cpp.binary にフルパスを設定してください。"
+                f"バックエンド ({backend}) をインストールするか、providers.yaml の\n"
+                f"launcher.backends.{backend}.binary にフルパスを設定してください。"
             )
         else:
             self._set_launch_err("")
@@ -1466,7 +1472,7 @@ class LauncherApp(tk.Tk):
                 # アニメーション停止(_launch_anim_tick が次回呼ばれたとき自動停止)
                 self._launch_anim_proc_id = None
                 self._launch_btn.configure(
-                    text="▶ llama.cpp / vllm 起動", state="normal", cursor="hand2"
+                    text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
                 )
                 changed = True
                 continue
@@ -1479,7 +1485,7 @@ class LauncherApp(tk.Tk):
                 # アニメーション停止
                 self._launch_anim_proc_id = None
                 self._launch_btn.configure(
-                    text="▶ llama.cpp / vllm 起動", state="normal", cursor="hand2"
+                    text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
                 )
                 changed = True
                 continue
