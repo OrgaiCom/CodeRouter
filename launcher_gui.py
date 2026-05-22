@@ -271,14 +271,32 @@ def _model_recommendation(size_gb: float, hw: dict[str, Any]) -> dict[str, str]:
     return {"level": "warn", "label": "メモリ厳しい"}
 
 
-def _suggest_launch_flags(size_gb: float, hw: dict[str, Any]) -> str:
-    """選択モデル + ハードから -ngl / --ctx-size / --threads を提案する。
+def _suggest_launch_flags(backend: str, size_gb: float,
+                          hw: dict[str, Any]) -> str:
+    """選択モデル + ハード + バックエンドから推奨起動フラグを提案する。
 
+    バックエンドごとにフラグ体系が違うため分岐する:
+      - llama.cpp : -ngl / --ctx-size / --threads を算出
+      - vllm      : モデル config からの自動導出に任せる (空文字)
+      - mlx       : 統合メモリ前提で起動時フラグ不要 (空文字)
     あくまで目安。他プロセスのメモリ使用や量子化方式までは考慮しない。
     """
-    threads = max(1, int(hw.get("cpu_count", 4)) - 2)
+    if backend == "mlx":
+        # MLX は統合メモリ + Metal 前提。llama.cpp の -ngl に相当する
+        # レイヤーオフロードの概念がなく、mlx_lm.server は起動時の
+        # 性能チューニングフラグを取らない。
+        return ""
+    if backend == "vllm":
+        # vllm の --max-model-len はモデルの実コンテキスト長に依存する。
+        # メモリ量だけのヒューリスティックで値を出すと、モデルの上限を
+        # 超えたときに vllm が起動を拒否する。空にしてエンジンの
+        # 自動導出 (モデル config) に任せるのが安全。
+        return ""
+
+    # llama.cpp (デフォルト)
     usable = _usable_memory_gb(hw)
     weights = size_gb * 1.15                       # 重み + オーバーヘッド概算
+    threads = max(1, int(hw.get("cpu_count", 4)) - 2)
     if hw.get("gpu") == "cpu":
         ngl = 0
     elif usable >= weights + 1.0:
@@ -918,11 +936,22 @@ class LauncherApp(tk.Tk):
             size_gb = Path(model_path).expanduser().stat().st_size / (1024 ** 3)
         except OSError:
             size_gb = 0.0
-        flags = _suggest_launch_flags(size_gb, hw)
+        backend = self._backend_var.get()
+        flags = _suggest_launch_flags(backend, size_gb, hw)
         self._extra_var.set(flags)
         self._hw_var.set(_hw_summary(hw))
         self._set_launch_err("")
-        self._set_status(f"推奨値を設定(目安): {_hw_summary(hw)} → {flags}")
+        if flags:
+            self._set_status(f"推奨値を設定(目安): {_hw_summary(hw)} → {flags}")
+        elif backend == "mlx":
+            self._set_status(
+                f"{_hw_summary(hw)} — MLX は起動時の調整フラグ不要です(目安)")
+        elif backend == "vllm":
+            self._set_status(
+                f"{_hw_summary(hw)} — vllm は起動時フラグ不要"
+                "(モデル設定から自動導出)")
+        else:
+            self._set_status(f"{_hw_summary(hw)} — 推奨フラグなし")
 
     # ── Right panel ──────────────────────────────────────────────────────────
 
