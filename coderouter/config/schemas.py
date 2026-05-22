@@ -874,6 +874,130 @@ class AutoRouterConfig(BaseModel):
     )
 
 
+class LauncherBackendConfig(BaseModel):
+    """Per-backend binary path configuration for the Launcher.
+
+    When ``binary`` is unset, the Launcher falls back to the default
+    executable name (``llama-server`` for llama.cpp, ``python`` for vllm)
+    and relies on ``$PATH`` resolution — which works when the tool is
+    globally installed.  Set ``binary`` when:
+
+    - llama.cpp was built from source (e.g. ``~/llama.cpp/build/bin/llama-server``)
+    - vllm lives in a virtualenv (e.g. ``~/.venv/bin/python``)
+    - Multiple builds coexist and you want to pin a specific one
+
+    Tilde (``~``) and environment variables are expanded at launch time.
+
+    Example::
+
+        backends:
+          llama.cpp:
+            binary: ~/llama.cpp/build/bin/llama-server
+          vllm:
+            binary: ~/.venv/bin/python
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    binary: str | None = Field(
+        default=None,
+        description=(
+            "Absolute or ``~``-relative path to the backend executable. "
+            "llama.cpp default: ``llama-server`` (PATH). "
+            "vllm default: ``python`` (PATH). "
+            "Expanded at launch time."
+        ),
+    )
+
+
+class LauncherOptionProfile(BaseModel):
+    """One named option preset for a launcher backend (e.g. llama.cpp / vllm).
+
+    ``args`` maps CLI flag strings to their values.  A bool value of
+    ``True`` means "include the flag without a value" (e.g. ``--no-mmap``);
+    ``False`` means "omit the flag entirely".  All other value types are
+    converted to strings and appended as ``--flag value`` pairs.
+
+    Example::
+
+        name: "GPU速度重視"
+        args:
+          "-ngl": 99
+          "--ctx-size": 4096
+          "--no-mmap": false
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="Display name shown in the Launcher UI dropdown.")
+    args: dict[str, str | int | float | bool] = Field(
+        default_factory=dict,
+        description=(
+            "CLI flag → value mapping. "
+            "bool True = flag only (no value). "
+            "bool False = omit flag. "
+            "All other types are stringified and passed as '--flag value'."
+        ),
+    )
+
+
+class LauncherConfig(BaseModel):
+    """The ``launcher:`` block in providers.yaml.
+
+    Controls the Launcher UI available at ``/launcher``.
+
+    Example::
+
+        launcher:
+          model_dirs:
+            - ~/models
+            - /data/gguf
+          option_profiles:
+            llama.cpp:
+              - name: "GPU速度重視"
+                args:
+                  "-ngl": 99
+                  "--ctx-size": 4096
+            vllm:
+              - name: "標準"
+                args:
+                  "--dtype": "auto"
+                  "--max-model-len": 4096
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_dirs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Directories to scan for model files "
+            "(.gguf, .safetensors, .bin, .pt, .ggml). "
+            "Paths are expanded (~ and env vars) at scan time, not at load. "
+            "Non-existent paths are silently skipped."
+        ),
+    )
+    backends: dict[str, LauncherBackendConfig] = Field(
+        default_factory=dict,
+        description=(
+            "Per-backend binary path overrides. "
+            "Keys are backend names ('llama.cpp', 'vllm'). "
+            "When a key is absent, the default executable is used "
+            "('llama-server' / 'python') and resolved via PATH. "
+            "Useful when running a from-source build or a venv-specific binary."
+        ),
+    )
+    option_profiles: dict[str, list[LauncherOptionProfile]] = Field(
+        default_factory=dict,
+        description=(
+            "Named option presets per backend. "
+            "Keys should be backend names: 'llama.cpp', 'vllm'. "
+            "Each key maps to an ordered list of named presets. "
+            "A free-form 'extra args' field is always available in the UI "
+            "for one-off overrides without touching this config."
+        ),
+    )
+
+
 class PluginsConfig(BaseModel):
     """The ``plugins:`` block in providers.yaml (v2.3.0).
 
@@ -1080,6 +1204,17 @@ class CodeRouterConfig(BaseModel):
             "the installed plugins to actually activate, and supplies "
             "their per-plugin keyword arguments. Absent or empty = no "
             "plugins (zero-cost, backward-compatible default)."
+        ),
+    )
+    launcher: LauncherConfig | None = Field(
+        default=None,
+        description=(
+            "Launcher configuration for the /launcher UI. "
+            "Defines model_dirs to scan and option_profiles per backend "
+            "('llama.cpp', 'vllm'). "
+            "Unset (None) = Launcher UI shows empty model list and no profiles. "
+            "The Launcher UI itself is always available at /launcher "
+            "regardless of this setting."
         ),
     )
 

@@ -1,0 +1,151 @@
+# ============================================================
+# CodeRouter providers.yaml — llama.cpp / vllm ローカル推論サンプル
+#
+# このファイルは以下を想定した最小構成です:
+#   - llama.cpp (llama-server) でモデルを起動
+#   - または vllm でモデルを起動
+#   - Launcher UI (/launcher) で起動・管理
+#
+# 使い方:
+#   1. cp examples/providers.llama-cpp-vllm.yaml ~/.coderouter/providers.yaml
+#   2. 必要に応じてパス・ポートを編集
+#   3. coderouter serve
+#   4. http://localhost:8088/launcher でモデルを起動
+#   5. 起動後は自動的に CodeRouter がルーティングを引き受ける
+#
+# ============================================================
+
+# ── プロバイダ定義 ────────────────────────────────────────────────────────────
+#
+# Launcher で起動したサーバーを CodeRouter のプロバイダとして登録します。
+# ポート番号は /launcher の Launch フォームで指定したものと合わせてください。
+
+providers:
+  # llama.cpp (llama-server) を 8080 で起動した場合
+  - name: llama-cpp-local
+    kind: openai_compat
+    base_url: http://localhost:8080/v1
+    model: ""            # llama-server は model 名を気にしないので空 or ファイル名ベースで OK
+    timeout_s: 120
+
+  # vllm を 8081 で起動した場合
+  - name: vllm-local
+    kind: openai_compat
+    base_url: http://localhost:8081/v1
+    model: ""            # vllm: --model に渡したモデル名 or HuggingFace repo ID を記入
+    timeout_s: 120
+
+# ── プロファイル定義 ──────────────────────────────────────────────────────────
+
+profiles:
+  # llama.cpp のみ使うプロファイル
+  - name: local-llama
+    providers: [llama-cpp-local]
+
+  # vllm のみ使うプロファイル
+  - name: local-vllm
+    providers: [vllm-local]
+
+  # llama.cpp をメイン、vllm をフォールバックにするプロファイル
+  - name: default
+    providers: [llama-cpp-local, vllm-local]
+
+default_profile: default
+
+# ── Launcher 設定 ─────────────────────────────────────────────────────────────
+#
+# /launcher UI でモデルを起動するための設定です。
+# ここで定義したオプションプロファイルが Launch フォームのドロップダウンに表示されます。
+
+launcher:
+
+  # モデルファイルのスキャン対象ディレクトリ
+  # .gguf / .safetensors / .bin / .pt / .ggml を再帰的に検索します
+  model_dirs:
+    - ~/models
+    # - ~/Downloads
+    # - /Volumes/External/gguf
+
+  # バイナリパス設定 (PATH に入っている場合は省略可)
+  backends:
+    llama.cpp:
+      binary: null          # null = PATH の llama-server を使用
+      # binary: ~/llama.cpp/build/bin/llama-server   # ソースビルド例
+    vllm:
+      binary: null          # null = PATH の python を使用
+      # binary: ~/.venv/bin/python                    # venv 例
+
+  option_profiles:
+
+    # ── llama.cpp オプションプロファイル ──────────────────────────────────────
+    llama.cpp:
+
+      - name: "GPU フル活用 (CUDA/Metal)"
+        args:
+          "-ngl": 99
+          "--ctx-size": 4096
+          "--threads": 4
+          "--batch-size": 512
+
+      - name: "GPU 控えめ (VRAM 節約)"
+        args:
+          "-ngl": 20
+          "--ctx-size": 2048
+          "--threads": 8
+
+      - name: "CPU のみ"
+        args:
+          "-ngl": 0
+          "--ctx-size": 4096
+          "--threads": 12
+          "--mlock": true
+
+      - name: "Apple Silicon M-series"
+        args:
+          "-ngl": 99          # Metal: 全レイヤー GPU
+          "--ctx-size": 4096
+          "--threads": 6
+
+      - name: "長コンテキスト (128K)"
+        args:
+          "-ngl": 99
+          "--ctx-size": 131072
+          "--batch-size": 1024
+          "--ubatch-size": 512
+
+    # ── vllm オプションプロファイル ───────────────────────────────────────────
+    vllm:
+
+      - name: "標準 (auto dtype)"
+        args:
+          "--dtype": "auto"
+          "--max-model-len": 4096
+          "--gpu-memory-utilization": 0.85
+
+      - name: "高速推論 (float16)"
+        args:
+          "--dtype": "float16"
+          "--max-model-len": 4096
+          "--gpu-memory-utilization": 0.90
+          "--max-num-batched-tokens": 8192
+
+      - name: "省メモリ (bitsandbytes int8)"
+        args:
+          "--dtype": "float16"
+          "--quantization": "bitsandbytes"
+          "--load-format": "bitsandbytes"
+          "--max-model-len": 2048
+          "--gpu-memory-utilization": 0.70
+
+      - name: "長コンテキスト (32K)"
+        args:
+          "--dtype": "auto"
+          "--max-model-len": 32768
+          "--gpu-memory-utilization": 0.92
+
+      - name: "マルチ GPU (tensor parallel x2)"
+        args:
+          "--dtype": "auto"
+          "--tensor-parallel-size": 2
+          "--max-model-len": 8192
+          "--gpu-memory-utilization": 0.85

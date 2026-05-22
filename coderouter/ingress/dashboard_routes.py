@@ -76,6 +76,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <header class="border-b border-slate-800 px-6 py-3">
     <div class="max-w-7xl mx-auto flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
       <span class="text-lg font-semibold tracking-tight">CodeRouter</span>
+      <a href="/launcher" class="text-slate-400 hover:text-slate-200 transition-colors text-sm">Launcher</a>
       <span class="text-slate-400">profile: <span data-bind="profile" class="text-slate-100 font-mono">—</span></span>
       <span class="text-slate-400">uptime: <span data-bind="uptime" class="text-slate-100 font-mono tabnum">—</span></span>
       <span class="text-slate-400">requests: <span data-bind="requests_total" class="text-slate-100 font-mono tabnum">0</span></span>

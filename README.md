@@ -116,6 +116,37 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | **`coderouter replay`** | provider 切替の効果を統計比較 (A/B 分析) / `--suggest-rules` でルール最適化提案 |
 | **Continuous Probe** | idle 時も定期的に backend を監視 |
 
+### Launcher — llama.cpp / vllm 起動 UI
+
+`http://localhost:8088/launcher` で開けるブラウザ UI。llama.cpp や vllm を GUI で起動・管理できます。
+
+| 機能 | 詳細 |
+|---|---|
+| **モデルスキャン** | `model_dirs` に指定したフォルダを再帰スキャンして `.gguf` / `.safetensors` をリスト化 |
+| **オプションプロファイル** | `providers.yaml` に名前付きプリセットを定義 → ドロップダウンで選択するだけ |
+| **複数プロセス管理** | llama.cpp と vllm を同時に起動し、ポートごとに独立管理 |
+| **ログビューア** | 各プロセスの stdout/stderr をブラウザ内でリアルタイム確認 |
+
+```yaml
+# providers.yaml に追記するだけで有効になる
+launcher:
+  model_dirs:
+    - ~/models
+  option_profiles:
+    llama.cpp:
+      - name: "GPU フル活用"
+        args:
+          "-ngl": 99
+          "--ctx-size": 4096
+    vllm:
+      - name: "標準"
+        args:
+          "--dtype": "auto"
+          "--max-model-len": 4096
+```
+
+詳細 → [Launcher ガイド](./docs/launcher.md)
+
 ---
 
 ## 設定例 (最小)
@@ -152,6 +183,7 @@ providers:
 | すぐ動かす | [Quickstart](./docs/quickstart.md) |
 | 使いこなす | [利用ガイド](./docs/usage-guide.md) |
 | 無料で回す | [無料枠ガイド](./docs/free-tier-guide.md) |
+| llama.cpp / vllm を GUI で起動 | [Launcher ガイド](./docs/launcher.md) |
 | 詰まった | [トラブルシューティング](./docs/troubleshooting.md) |
 | 設計を知りたい | [アーキテクチャ詳細](./docs/architecture.md) |
 | 全リリース履歴 | [CHANGELOG](./CHANGELOG.md) |

@@ -13,6 +13,7 @@ from coderouter import __version__
 from coderouter.config import load_config
 from coderouter.ingress.anthropic_routes import router as anthropic_router
 from coderouter.ingress.dashboard_routes import router as dashboard_router
+from coderouter.ingress.launcher_routes import router as launcher_router
 from coderouter.ingress.metrics_routes import router as metrics_router
 from coderouter.ingress.openai_routes import router as openai_router
 from coderouter.logging import configure_logging, get_logger
@@ -178,6 +179,12 @@ def create_app(config_path: str | None = None) -> FastAPI:
             with contextlib.suppress(Exception):
                 await probe_task
 
+        # Launcher: stop child llama.cpp / vllm processes so they don't orphan.
+        from coderouter.ingress.launcher_routes import shutdown_launcher
+
+        with contextlib.suppress(Exception):
+            await shutdown_launcher(app)
+
         # v2.0-J: graceful shutdown of recovery probe tasks.
         with contextlib.suppress(Exception):
             await engine.shutdown_recovery_probes()
@@ -259,6 +266,10 @@ def create_app(config_path: str | None = None) -> FastAPI:
     # Same root-level mount as /metrics.json — the dashboard is a UI
     # concern and doesn't belong under the /v1 API surface.
     app.include_router(dashboard_router, tags=["dashboard"])
+    # Launcher UI + process management API.
+    # /launcher       → single-page HTML UI
+    # /api/launcher/* → model scan, process start/stop/logs
+    app.include_router(launcher_router, tags=["launcher"])
 
     return app
 

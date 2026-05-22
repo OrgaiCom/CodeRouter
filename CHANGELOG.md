@@ -6,6 +6,54 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.5.0] — 2026-05-22 (Launcher — llama.cpp / vllm GUI)
+
+Browser-based process manager for local inference backends, integrated
+into the existing CodeRouter web UI at `/launcher`.
+
+### Added
+
+- **`coderouter/ingress/launcher_routes.py`**: New route module providing
+  the Launcher UI and its backing API.
+
+  - `GET /launcher` — Single-page HTML UI (Tailwind CDN + inline JS,
+    same dark-theme aesthetic as `/dashboard`).
+  - `GET /api/launcher/models` — Recursively scans `launcher.model_dirs`
+    and returns discovered model files with name, path, size (GB), and
+    extension.
+  - `GET /api/launcher/option-profiles` — Returns named option presets
+    from `providers.yaml` keyed by backend (`llama.cpp`, `vllm`).
+  - `GET /api/launcher/processes` — Lists all managed processes.
+  - `POST /api/launcher/start` — Starts a backend process. Accepts name,
+    backend, model_path, port, options dict, and extra_args free-text.
+  - `POST /api/launcher/stop/{id}` — SIGTERM → SIGKILL (5 s timeout).
+  - `DELETE /api/launcher/processes/{id}` — Removes a stopped process.
+  - `GET /api/launcher/logs/{id}` — Returns last N lines from the
+    process's 200-line stdout/stderr ring buffer.
+
+- **`LauncherOptionProfile` / `LauncherConfig`** (`config/schemas.py`):
+  New Pydantic models for the `launcher:` block in `providers.yaml`.
+  Adding new CLI flags requires only a YAML edit — no code change.
+
+- **`launcher_profiles.yaml.example`**: Template with 7 llama.cpp
+  presets and 7 vllm presets. For GitHub distribution and community
+  profile contributions.
+
+- **`/dashboard` header**: Added a "Launcher" navigation link.
+
+### Design notes
+
+- **YAML-driven**: option profiles live entirely in `providers.yaml`.
+  No code changes needed to add new backend flags.
+- **Multi-process**: each launched process gets a UUID-based ID and is
+  tracked independently. llama.cpp and vllm can run side by side.
+- **Zero new dependencies**: uses `asyncio.create_subprocess_exec`
+  (stdlib only). The 5-dep invariant is maintained.
+- **In-memory registry**: does not persist across CodeRouter restarts
+  (intentional — avoids zombie GPU allocations on restart).
+
+---
+
 ## [v2.4.0] — 2026-05-15 (Goal-session awareness — P1-4/5/6)
 
 Stable release following v2.3.0a4. Promotes the Plugin SDK to stable,
