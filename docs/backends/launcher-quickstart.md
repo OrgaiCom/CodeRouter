@@ -1,94 +1,50 @@
 # Launcher クイックスタート — バックエンド導入から起動まで
 
-CodeRouter Launcher を初めて使うための手引きです。Launcher が起動・管理するバックエンド（llama.cpp / vLLM）の導入から、Launcher の起動・Claude Code 接続までを通しで説明します。
+CodeRouter Launcher を初めて使うための手引きです。Launcher が起動・管理するバックエンド（llama.cpp / vLLM / mlx）の導入から、Launcher の起動・Claude Code 接続までを通しで説明します。
 
-対象プラットフォーム: macOS (Apple Silicon) / Linux
+対象プラットフォーム: macOS / Linux / Windows
 
 ---
 
 ## 全体の流れ
 
-1. バックエンド（**llama.cpp** か **vLLM**）をインストール
-2. モデル（`.gguf` 等）を用意
+1. バックエンド（**llama.cpp** / **vLLM** / **mlx** のいずれか）をインストール
+2. モデルを用意
 3. `providers.yaml` に `launcher:` ブロックを書く
 4. Launcher を起動（デスクトップGUI版 または Web版）
 5. Launcher からバックエンド＋CodeRouter を起動 → Claude Code を接続
 
-llama.cpp と vLLM はどちらか一方があれば始められます。**迷ったら llama.cpp を推奨** — macOS でも Linux でも動き、`.gguf` モデルが豊富で、セットアップが軽量です。vLLM は Linux + NVIDIA GPU 向けです。
+バックエンドは 1 つあれば始められます。**迷ったら llama.cpp を推奨** — 全 OS で動き、`.gguf` モデルが豊富で、セットアップが軽量です。
 
 ---
 
-## 1. llama.cpp をインストール
+## 1. バックエンドをインストール
 
-OpenAI 互換 API を提供する `llama-server` を用意します。
+Launcher が起動する推論バックエンドを 1 つ入れます。**迷ったら llama.cpp** — 全 OS で動き、`.gguf` モデルが豊富です。
 
-### 方法 A — Homebrew（macOS / Linux、最も簡単）
+| バックエンド | 最短インストール | 対応 |
+|---|---|---|
+| **llama.cpp** | `brew install llama.cpp`（macOS / Linux）/ `winget install ggml.llamacpp`（Windows） | 全 OS |
+| **MLX** | `pip install mlx-lm`（venv 推奨） | macOS / Apple Silicon |
+| **vLLM** | `uv pip install vllm`（venv 推奨） | Linux + NVIDIA GPU |
 
-```bash
-brew install llama.cpp
-```
+複数のインストール方法・OS 別の詳細・動作確認・つまずき集は **[バックエンド インストール手順書](./install-backends.md)** にまとめてあります。
 
-`llama-server` が PATH に入ります。これで完了です。
-
-### 方法 B — ソースからビルド（最新版・GPU 最適化したい場合）
-
-```bash
-git clone https://github.com/ggml-org/llama.cpp
-cd llama.cpp
-```
-
-**macOS (Apple Silicon)** — Metal は既定で有効:
-
-```bash
-cmake -B build
-cmake --build build --config Release -j
-```
-
-**Linux (NVIDIA CUDA)** — CUDA Toolkit が必要:
-
-```bash
-cmake -B build -DGGML_CUDA=ON
-cmake --build build --config Release -j
-```
-
-ビルド後、サーバーバイナリは `build/bin/llama-server` に生成されます。このフルパスを後で Launcher に設定します。
-
-> CUDA と Metal は同一バイナリに同梱できません。実行マシンに合わせてそれぞれビルドしてください。
+> vLLM / MLX は専用の Python 仮想環境（venv）が必要です。venv はバックエンドごとに `~/.coderouter/backends/<バックエンド名>/`（例: `~/.coderouter/backends/vllm/`）に分けて作る方針です。詳細は同手順書を参照。
 
 ---
 
-## 2. vLLM をインストール（任意）
+## 2. モデルを用意
 
-vLLM は **Linux + NVIDIA GPU (CUDA)** 向けの高速推論サーバーです。macOS では CPU バックエンドのみで実用的ではないため、**macOS なら llama.cpp を使ってください**。
+- **llama.cpp** — `.gguf` 形式。Hugging Face などから入手
+- **MLX** — MLX 形式（`mlx-community` 配布のもの）。`.gguf` は読めません
+- **vLLM** — Hugging Face のモデル ID、またはローカルパス
 
-`uv`（高速な Python 環境管理ツール）での導入が推奨されています:
-
-```bash
-uv venv --python 3.12 --seed
-source .venv/bin/activate
-uv pip install vllm --torch-backend=auto
-```
-
-`pip` でも可:
-
-```bash
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install vllm
-```
-
-Launcher は vLLM を `<python> -m vllm.entrypoints.openai.api_server` の形で起動します。後の設定では、この **vLLM を入れた venv の python** のパスを指定します（例: `~/.venv/bin/python`）。
+`.gguf` 等のローカルファイルは 1 つのディレクトリ（例: `~/llm/models/`）にまとめておきます。サブフォルダも再帰的にスキャンされます。
 
 ---
 
-## 3. モデルを用意
-
-llama.cpp は `.gguf` 形式のモデルを使います。Hugging Face などから入手し、1 つのディレクトリにまとめておきます（例: `~/llm/models/`）。サブフォルダも再帰的にスキャンされます。
-
-vLLM は Hugging Face のモデル ID、またはローカルパスを使います。
-
----
-
-## 4. providers.yaml に launcher ブロックを書く
+## 3. providers.yaml に launcher ブロックを書く
 
 Launcher はモデル一覧・オプションプロファイル・バイナリパスを `~/.coderouter/providers.yaml` の `launcher:` ブロックから読み込みます。
 
@@ -99,11 +55,11 @@ launcher:
     - ~/llm/models                      # .gguf 等を再帰検索
   backends:
     llama.cpp:
-      # 方法B でビルドした場合はフルパスを指定。
-      # Homebrew (方法A) なら backends ごと省略可（PATH から自動解決）。
+      # ソースビルドした場合はフルパスを指定。
+      # Homebrew / winget なら backends ごと省略可（PATH から自動解決）。
       binary: ~/llama.cpp/build/bin/llama-server
     vllm:
-      binary: ~/.venv/bin/python        # vLLM を入れた venv の python
+      binary: ~/.coderouter/backends/vllm/bin/python   # vLLM を入れた venv
   option_profiles:
     llama.cpp:
       - name: "GPU フル活用"
@@ -112,11 +68,11 @@ launcher:
           "--ctx-size": 32768
 ```
 
-テンプレートは `launcher_profiles.yaml.example` をコピーして始められます。設定項目の詳細は [Launcher ガイド（Web版）の設定リファレンス](./launcher.md#設定リファレンス) を参照してください。
+テンプレートは `launcher_profiles.yaml.example` をコピーして始められます。設定項目の詳細は [Launcher ガイドの設定リファレンス](./launcher.md#設定リファレンス) を参照してください。
 
 ---
 
-## 5. Launcher を起動
+## 4. Launcher を起動
 
 Launcher には 2 種類あります。初回は **デスクトップGUI版** が簡単です（CodeRouter 自体もそこから起動できます）。
 
@@ -133,11 +89,11 @@ uv run python launcher_gui.py
 ウィンドウが開いたら:
 
 1. MODELS から使うモデルをクリック（メモリ的に `✓ 推奨` のものが安心）
-2. オプションプロファイルを選び「▶ llama.cpp / vllm 起動」
+2. オプションプロファイルを選び「▶ llama.cpp / vllm / mlx 起動」
 3. 上部バーの「▶ CodeRouter 起動」
 4. 表示される接続文字列をコピー
 
-詳細は [Launcher ガイド（デスクトップGUI版）](./launcher-gui.md)。
+詳細は [Launcher ガイド](./launcher.md)。
 
 ### Web版 — CodeRouter 稼働中の運用 UI
 
@@ -149,11 +105,11 @@ coderouter serve --port 8088
 
 ブラウザで `http://localhost:8088/launcher` を開き、モデルを選んで「▶ 起動」します。
 
-詳細は [Launcher ガイド（Web版）](./launcher.md)。
+詳細は [Launcher ガイド](./launcher.md)。
 
 ---
 
-## 6. Claude Code から使う
+## 5. Claude Code から使う
 
 CodeRouter が稼働したら、Claude Code を CodeRouter に向けて起動します:
 
@@ -175,13 +131,13 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | vLLM が macOS で遅い／動かない | vLLM は Linux/CUDA 向け。macOS では llama.cpp を使う |
 | モデルに `⚠ メモリ厳しい` と出る | 搭載メモリに対しモデルが大きい。より小さい量子化版を選ぶ |
 
-さらに詳しいトラブルシューティングは各 Launcher ガイドを参照してください。
+さらに詳しいトラブルシューティングは [Launcher ガイド](./launcher.md) を参照してください。
 
 ---
 
 ## 関連ドキュメント
 
-- [Launcher ガイド（デスクトップGUI版）](./launcher-gui.md)
-- [Launcher ガイド（Web版）](./launcher.md)
+- [バックエンド インストール手順書（llama.cpp / vLLM / MLX）](./install-backends.md)
+- [Launcher ガイド（Web版・デスクトップGUI版）](./launcher.md)
 - [CodeRouter クイックスタート](../start/quickstart.md)
 - [llama.cpp 直接接続ガイド](./llamacpp-direct.md)
