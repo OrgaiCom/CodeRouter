@@ -59,6 +59,19 @@ dependencies = [
 doctor = [
     "ruamel.yaml>=0.18.6",
 ]
+# Low-memory accuracy track: precise token counting for the memory-budget
+# guard (CJK char/4 under-counting is the main OOM/over-trim trigger).
+# OPTIONAL — lazy-imported in ``coderouter.token_estimation_accurate`` with a
+# char/4 fallback, so the strict 5 base deps are unchanged. ``tokenizers``
+# is loaded local-file-only (no HuggingFace Hub network access).
+accuracy = [
+    "tokenizers>=0.20",
+]
+# Optional rescue-parsing hardening for malformed tool-call JSON emitted by
+# small models. Lazy-imported; absence falls back to the built-in repair.
+repair = [
+    "json-repair>=0.30",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",

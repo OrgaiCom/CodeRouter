@@ -218,7 +218,7 @@ class BudgetTracker:
             totals = state.get("totals", {})
             if isinstance(totals, dict):
                 self._totals = {
-                    k: float(v) for k, v in totals.items() if isinstance(v, (int, float))
+                    k: float(v) for k, v in totals.items() if isinstance(v, int | float)
                 }
                 self._month = current
 
