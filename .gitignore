@@ -89,3 +89,6 @@ docs/articles/
 # of the repo because the Vault path includes personal Vault names.
 .env.publish.tpl
 .env.tpl
+
+# FUSE / virtiofs artifacts
+.fuse_hidden*
