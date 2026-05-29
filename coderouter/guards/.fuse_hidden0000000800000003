@@ -1,0 +1,249 @@
+"""Proactive memory-budget guard (low-memory track, L1).
+
+Where :mod:`coderouter.guards.memory_pressure` reacts *after* an OOM,
+this guard prevents it: given the host's available memory (from
+:mod:`coderouter.hardware`) and the model's shape (from
+:mod:`coderouter.gguf_introspect`), it computes the largest context
+window (``num_ctx``) that will actually fit, *before* the request is
+dispatched.
+
+The engine then (a) caps the backend's ``num_ctx`` to that value and
+(b) trims conversation history to the same budget via
+:func:`coderouter.guards.context_budget.trim_to_budget`.
+
+Everything here is **pure** (no I/O, no globals) so it is trivially
+testable and free of the 5-deps constraint.
+
+KV-cache model
+==============
+
+The dominant runtime cost beyond the weights is the attention KV
+cache, which grows linearly with context length:
+
+    kv_bytes ≈ 2 (K and V)
+             × n_layers
+             × n_ctx
+             × kv_dim
+             × bytes_per_element
+
+``kv_dim`` is the per-token key/value width. With grouped-query
+attention (GQA) it is ``n_embd × n_kv_heads / n_heads``; without GQA
+metadata it falls back to ``n_embd`` (conservative — over-counts, so
+we under-promise context, which is the safe direction for OOM).
+
+``bytes_per_element`` defaults to 2 (fp16 KV cache). The estimate is
+deliberately conservative; the headroom in :mod:`coderouter.hardware`
+absorbs activation/compute buffers not modelled here.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_BYTES_PER_GB: int = 1024**3
+
+#: Default bytes per KV-cache element (fp16).
+DEFAULT_KV_BYTES_PER_ELEM: int = 2
+
+#: Fraction of the post-weights budget held back for activations and
+#: the compute buffer (not modelled explicitly). The remainder is what
+#: the KV cache may consume.
+DEFAULT_COMPUTE_OVERHEAD_RATIO: float = 0.10
+
+#: Fallback layer/embedding shape when GGUF metadata is incomplete.
+#: Chosen to over-estimate KV (safe: under-promises context).
+_FALLBACK_N_LAYERS: int = 32
+_FALLBACK_N_EMBD: int = 4096
+
+FitAction = Literal["ok", "shrink", "insufficient", "unknown"]
+
+
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FitDecision:
+    """Outcome of a pre-dispatch memory-fit computation.
+
+    ``action``:
+      * ``"ok"``           — requested context fits as-is.
+      * ``"shrink"``       — fits only at ``effective_num_ctx`` < requested.
+      * ``"insufficient"`` — won't fit even at ``min_num_ctx``; the model
+                             is too big for this host (caller should warn
+                             / fall through to another provider).
+      * ``"unknown"``      — hardware undetected; guard is a no-op.
+    """
+
+    action: FitAction
+    fits: bool
+    requested_num_ctx: int
+    effective_num_ctx: int
+    weights_bytes: int
+    kv_cache_bytes: int
+    available_bytes: int
+    reason: str
+
+
+# ---------------------------------------------------------------------------
+# KV-cache math (pure)
+# ---------------------------------------------------------------------------
+
+
+def kv_dim(
+    n_embd: int | None,
+    n_heads: int | None,
+    n_kv_heads: int | None,
+) -> int:
+    """Per-token KV width in elements.
+
+    Applies the GQA reduction when both head counts are known and
+    valid; otherwise returns ``n_embd`` (over-counts → safe).
+    """
+    embd = n_embd if (n_embd and n_embd > 0) else _FALLBACK_N_EMBD
+    if (
+        n_heads
+        and n_kv_heads
+        and n_heads > 0
+        and 0 < n_kv_heads <= n_heads
+    ):
+        return max(1, int(embd * n_kv_heads / n_heads))
+    return embd
+
+
+def kv_cache_bytes(
+    n_ctx: int,
+    n_layers: int,
+    kv_width: int,
+    *,
+    bytes_per_elem: int = DEFAULT_KV_BYTES_PER_ELEM,
+) -> int:
+    """KV-cache size in bytes for a given context length (K and V)."""
+    return 2 * max(0, n_layers) * max(0, n_ctx) * max(0, kv_width) * bytes_per_elem
+
+
+def max_num_ctx_for_budget(
+    kv_budget_bytes: int,
+    n_layers: int,
+    kv_width: int,
+    *,
+    bytes_per_elem: int = DEFAULT_KV_BYTES_PER_ELEM,
+) -> int:
+    """Largest ``n_ctx`` whose KV cache fits in ``kv_budget_bytes``."""
+    per_token = 2 * max(1, n_layers) * max(1, kv_width) * bytes_per_elem
+    if per_token <= 0 or kv_budget_bytes <= 0:
+        return 0
+    return int(kv_budget_bytes // per_token)
+
+
+# ---------------------------------------------------------------------------
+# Fit decision (pure)
+# ---------------------------------------------------------------------------
+
+
+def plan_fit(
+    *,
+    available_budget_gb: float,
+    weights_bytes: int,
+    requested_num_ctx: int,
+    n_layers: int | None,
+    n_embd: int | None = None,
+    n_heads: int | None = None,
+    n_kv_heads: int | None = None,
+    min_num_ctx: int = 2048,
+    bytes_per_elem: int = DEFAULT_KV_BYTES_PER_ELEM,
+    compute_overhead_ratio: float = DEFAULT_COMPUTE_OVERHEAD_RATIO,
+) -> FitDecision:
+    """Decide whether ``requested_num_ctx`` fits, and by how much to shrink.
+
+    ``available_budget_gb`` is the net memory (after OS headroom) from
+    :func:`coderouter.hardware.available_budget_gb`. ``0.0`` means
+    hardware was undetected → returns an ``"unknown"`` no-op decision.
+    """
+    if available_budget_gb <= 0.0:
+        return FitDecision(
+            action="unknown",
+            fits=True,  # don't block when we can't measure
+            requested_num_ctx=requested_num_ctx,
+            effective_num_ctx=requested_num_ctx,
+            weights_bytes=weights_bytes,
+            kv_cache_bytes=0,
+            available_bytes=0,
+            reason="hardware undetected; guard no-op",
+        )
+
+    available_bytes = int(available_budget_gb * _BYTES_PER_GB)
+    layers = n_layers if (n_layers and n_layers > 0) else _FALLBACK_N_LAYERS
+    width = kv_dim(n_embd, n_heads, n_kv_heads)
+
+    # Memory left for the KV cache after weights, minus a compute buffer.
+    post_weights = available_bytes - max(0, weights_bytes)
+    kv_budget = int(post_weights * (1.0 - compute_overhead_ratio))
+
+    # Can we even run the minimum context?
+    min_kv = kv_cache_bytes(min_num_ctx, layers, width, bytes_per_elem=bytes_per_elem)
+    if kv_budget < min_kv:
+        return FitDecision(
+            action="insufficient",
+            fits=False,
+            requested_num_ctx=requested_num_ctx,
+            effective_num_ctx=min_num_ctx,
+            weights_bytes=weights_bytes,
+            kv_cache_bytes=min_kv,
+            available_bytes=available_bytes,
+            reason=(
+                "weights + minimum KV cache exceed available memory; "
+                "model too large for this host"
+            ),
+        )
+
+    ctx_cap = max_num_ctx_for_budget(
+        kv_budget, layers, width, bytes_per_elem=bytes_per_elem
+    )
+
+    if ctx_cap >= requested_num_ctx:
+        kv = kv_cache_bytes(
+            requested_num_ctx, layers, width, bytes_per_elem=bytes_per_elem
+        )
+        return FitDecision(
+            action="ok",
+            fits=True,
+            requested_num_ctx=requested_num_ctx,
+            effective_num_ctx=requested_num_ctx,
+            weights_bytes=weights_bytes,
+            kv_cache_bytes=kv,
+            available_bytes=available_bytes,
+            reason="requested context fits",
+        )
+
+    # Shrink to the cap, but never below the floor.
+    effective = max(min_num_ctx, ctx_cap)
+    kv = kv_cache_bytes(effective, layers, width, bytes_per_elem=bytes_per_elem)
+    return FitDecision(
+        action="shrink",
+        fits=True,
+        requested_num_ctx=requested_num_ctx,
+        effective_num_ctx=effective,
+        weights_bytes=weights_bytes,
+        kv_cache_bytes=kv,
+        available_bytes=available_bytes,
+        reason=f"context shrunk from {requested_num_ctx} to {effective} to fit memory",
+    )
+
+
+__all__ = [
+    "DEFAULT_COMPUTE_OVERHEAD_RATIO",
+    "DEFAULT_KV_BYTES_PER_ELEM",
+    "FitAction",
+    "FitDecision",
+    "kv_cache_bytes",
+    "kv_dim",
+    "max_num_ctx_for_budget",
+    "plan_fit",
+]
