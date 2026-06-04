@@ -6,6 +6,50 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.5.4] — 2026-06-05 (Gemma `<0xNN>` byte-fallback repair filter)
+
+Patch release: a new opt-in output filter that repairs Japanese (and other
+multi-byte) text corrupted by the Ollama 0.30 / llama.cpp detokenizer change.
+
+### Added
+
+- **`repair_byte_fallback` output filter.** Ollama 0.30 unified its GGUF
+  runtime onto llama.cpp (`ollama/ollama#16031`). For gemma4 the detokenizer
+  changed, and multi-byte characters it cannot assemble now leak as
+  llama.cpp's byte-fallback notation `<0xNN>`:
+  - full-width space `　` → `<0xE3><0x80><0x80>`
+  - rare kanji `躙` → `<0xE8><0xBA><0x99>`
+
+  These corrupt Japanese prose **and** tool-call JSON argument strings routed
+  through CodeRouter (a stray `<0xNN>` inside an argument breaks JSON parsing).
+  The new filter reassembles consecutive `<0xNN>` runs back into UTF-8.
+
+  - **Opt-in** per provider: `output_filters: [repair_byte_fallback]`
+    (disabled by default). Place it **before** `tool_repair` / tool-call XML
+    strip so byte-fallback inside tool-call arguments is restored before JSON
+    extraction.
+  - **Streaming-safe**: handles chunk boundaries inside a single token
+    (`<0x` | `E3>`) and inside a multi-byte run (`<0xE3>` | `<0x80><0x80>`).
+    A pending byte run is only flushed once it has definitively ended.
+  - **Lossless**: bytes that cannot form valid UTF-8 are re-emitted verbatim
+    as `<0xNN>`, so output is never made worse than llama.cpp already left it.
+  - **No new runtime dependencies** (stdlib `re` only).
+
+  Verified with 22 new unit tests (61 filter tests total pass on py3.12),
+  ruff clean, a 20,000-iteration streaming chunk-boundary fuzz (0 mismatches),
+  and a Japanese/emoji round-trip.
+
+  Ref: <https://note.com/akb428/n/n737e786f32ce>
+
+### Known mitigations (documented)
+
+- For gemma4, staying on / downgrading to Ollama 0.24 is the most reliable
+  fix (the root cause is the 0.30 llama.cpp detokenizer swap).
+- A larger `num_ctx` increases the leak rate; consider not auto-raising it for
+  gemma4 on Ollama 0.30.
+
+---
+
 ## [v2.5.2] — 2026-05-22 (Backend-aware Launcher suggestions + backend install guide)
 
 Patch release: a Launcher bug fix and documentation improvements.

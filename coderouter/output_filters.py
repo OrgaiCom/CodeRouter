@@ -43,6 +43,7 @@ Reference: plan.md §10.2 "出力クリーニング" / docs/retrospectives/v0.7.
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "KNOWN_FILTERS",
     "OutputFilter",
     "OutputFilterChain",
+    "RepairByteFallbackFilter",
     "StripStopMarkersFilter",
     "StripThinkingFilter",
     "StripToolCallXmlFilter",
@@ -383,6 +385,151 @@ class StripToolCallXmlFilter:
 
 
 # ---------------------------------------------------------------------------
+# repair_byte_fallback (v2.x)
+# ---------------------------------------------------------------------------
+
+
+# A complete byte-fallback token: ``<0x`` + exactly two hex digits + ``>``.
+_BYTE_RE = re.compile(r"<0x([0-9A-Fa-f]{2})>")
+
+# The whole remaining buffer is a *proper prefix* of some ``<0xHH>`` token,
+# i.e. it could still complete (and continue a run) on the next feed:
+# ``<`` / ``<0`` / ``<0x`` / ``<0xH`` / ``<0xHH`` (closing ``>`` not yet seen).
+_PREFIX_RE = re.compile(r"<(0(x[0-9A-Fa-f]{0,2})?)?")
+
+_BYTE_TOKEN_START = "<0x"
+
+
+def _decode_byte_run(buf: bytes) -> str:
+    """Decode a run of fallback bytes to text, losslessly.
+
+    Decodes the maximal valid UTF-8 prefix; any byte that cannot start or
+    continue a valid sequence is re-emitted as its ``<0xHH>`` token and
+    decoding resumes after it. So ``b"\\xe3\\x80\\x80"`` -> ``"　"`` while a
+    stray ``b"\\xff"`` round-trips to ``"<0xFF>"`` — we never make the stream
+    worse than llama.cpp already did.
+    """
+    parts: list[str] = []
+    i = 0
+    n = len(buf)
+    while i < n:
+        try:
+            parts.append(buf[i:].decode("utf-8"))
+            break
+        except UnicodeDecodeError as exc:
+            good_end = i + exc.start
+            if good_end > i:
+                parts.append(buf[i:good_end].decode("utf-8"))
+            parts.append(f"<0x{buf[good_end]:02X}>")
+            i = good_end + 1
+    return "".join(parts)
+
+
+class RepairByteFallbackFilter:
+    """Reassemble llama.cpp ``<0xNN>`` byte-fallback leaks into UTF-8 text.
+
+    Ollama 0.30 unified its GGUF runtime onto llama.cpp
+    (``ollama/ollama#16031``). For gemma4 the detokenizer changed, and
+    multi-byte characters it cannot assemble now leak as llama.cpp's
+    byte-fallback notation::
+
+        full-width space ``　``  -> ``<0xE3><0x80><0x80>``
+        rare kanji      ``躙``  -> ``<0xE8><0xBA><0x99>``
+
+    These corrupt Japanese prose AND tool-call JSON arguments (a stray
+    ``<0xNN>`` inside an argument string breaks JSON parsing). This filter
+    reassembles runs of consecutive ``<0xNN>`` tokens back into UTF-8.
+
+    Stateful across ``feed`` calls so a token split across SSE deltas
+    (``<0x`` | ``E3>``) and a multi-byte run split across deltas
+    (``<0xE3>`` | ``<0x80><0x80>``) both reassemble correctly. A pending byte
+    run is only flushed once we are certain it has ended (confirmed normal
+    text follows, or ``eof``) — never at a bare chunk boundary, where the run
+    might continue in the next delta. Bytes that cannot form valid UTF-8 are
+    re-emitted verbatim (lossless).
+
+    ``modified`` flips True the first time any ``<0xNN>`` token is consumed —
+    the adapter uses it to gate the log-once "output-filter-applied" line.
+
+    Ordering note: place this BEFORE ``tool_repair`` / the tool-call XML
+    strip so byte-fallback inside tool-call argument strings is restored
+    before JSON extraction.
+    """
+
+    name = "repair_byte_fallback"
+
+    def __init__(self) -> None:
+        """Initialize per-request buffer, pending byte run and state."""
+        self.modified: bool = False
+        self._buffer: str = ""
+        self._pending = bytearray()
+
+    def _flush_pending(self, out: list[str]) -> None:
+        """Decode and emit the accumulated byte run, then clear it."""
+        if self._pending:
+            out.append(_decode_byte_run(bytes(self._pending)))
+            self._pending.clear()
+
+    def feed(self, text: str, *, eof: bool = False) -> str:
+        """Consume ``text``; return the portion safe to emit now."""
+        self._buffer += text
+        out: list[str] = []
+
+        while self._buffer:
+            m = _BYTE_RE.match(self._buffer)
+            if m is not None:
+                # Complete byte token at position 0 — extend the run.
+                self._pending.append(int(m.group(1), 16))
+                self._buffer = self._buffer[m.end() :]
+                self.modified = True
+                continue
+
+            idx = self._buffer.find(_BYTE_TOKEN_START)
+            if idx == -1:
+                # No complete/started token in the buffer. Hold a trailing
+                # partial of ``<0x`` (it may complete — and CONTINUE the run —
+                # on the next feed); treat anything before it as confirmed
+                # normal text that ends the run.
+                hold = (
+                    0 if eof else _max_suffix_overlap(self._buffer, _BYTE_TOKEN_START)
+                )
+                safe = self._buffer[:-hold] if hold else self._buffer
+                if safe:
+                    self._flush_pending(out)
+                    out.append(safe)
+                    self._buffer = self._buffer[len(safe) :]
+                # else: whole buffer is a token-start prefix; keep pending
+                # (the run might continue) and wait for more input.
+                break
+
+            if idx > 0:
+                # Normal text precedes the next token start — run ended.
+                self._flush_pending(out)
+                out.append(self._buffer[:idx])
+                self._buffer = self._buffer[idx:]
+                continue
+
+            # idx == 0: buffer starts with ``<0x`` but is not a complete token.
+            if not eof and _PREFIX_RE.fullmatch(self._buffer):
+                # Could still complete next feed — hold token AND pending run.
+                break
+
+            # Malformed ``<0x..`` (non-hex, or stuck at eof). The ``<`` is
+            # ordinary text; the run (if any) has ended.
+            self._flush_pending(out)
+            out.append("<")
+            self._buffer = self._buffer[1:]
+
+        if eof:
+            self._flush_pending(out)
+            if self._buffer:
+                out.append(self._buffer)
+            self._buffer = ""
+
+        return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Registry + chain
 # ---------------------------------------------------------------------------
 
@@ -391,6 +538,7 @@ KNOWN_FILTERS: dict[str, type[OutputFilter]] = {
     StripThinkingFilter.name: StripThinkingFilter,
     StripStopMarkersFilter.name: StripStopMarkersFilter,
     StripToolCallXmlFilter.name: StripToolCallXmlFilter,
+    RepairByteFallbackFilter.name: RepairByteFallbackFilter,
 }
 """Registry of string-name → filter class.
 

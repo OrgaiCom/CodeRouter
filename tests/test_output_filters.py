@@ -61,7 +61,12 @@ def test_validate_rejects_when_mixing_known_and_unknown() -> None:
 
 def test_registry_matches_expected_set() -> None:
     """Regression: if a filter is added, this test reminds us to doc it."""
-    assert set(KNOWN_FILTERS) == {"strip_thinking", "strip_stop_markers", "strip_tool_call_xml"}
+    assert set(KNOWN_FILTERS) == {
+        "strip_thinking",
+        "strip_stop_markers",
+        "strip_tool_call_xml",
+        "repair_byte_fallback",
+    }
 
 
 # ======================================================================
