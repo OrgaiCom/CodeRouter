@@ -10,9 +10,12 @@ through unchanged if a client sends them.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Content blocks
@@ -106,6 +109,113 @@ class AnthropicTool(BaseModel):
 
 
 # ============================================================
+# Role normalization (Claude Code CLI >= 2.1.154 workaround)
+# ============================================================
+
+_SPEC_MESSAGE_ROLES = frozenset({"user", "assistant"})
+
+
+def _content_as_text(content: Any) -> str:
+    """Best-effort plain-text extraction from a message ``content`` field.
+
+    Strings pass through; block lists contribute their ``text`` blocks
+    joined with newlines; anything else yields "".
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+def normalize_message_roles(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize non-spec roles inside ``messages`` before validation.
+
+    Claude Code CLI >= 2.1.154 has a regression where it emits messages
+    with ``role: "system"`` (and reportedly ``ctx`` / ``msg``) inside the
+    ``messages`` array. The Anthropic Messages API spec allows only
+    ``user`` / ``assistant`` there, so without this hop those requests
+    die in validation with "Input should be 'user' or 'assistant'"
+    (see anthropics/claude-code#63469, vllm-project/vllm#44000).
+
+    Policy:
+        - ``role: "system"`` → text content merged into the top-level
+          ``system`` field (appended after any existing system prompt;
+          same join rule as ``convert.to_anthropic_request``).
+        - any other non-spec role (``ctx``, ``msg``, ...) → coerced to
+          ``user`` so conversation position is preserved. Anthropic
+          merges consecutive same-role turns, so this is safe.
+        - messages whose salvaged content is empty are dropped entirely
+          (Anthropic rejects empty turns).
+
+    Returns a shallow-copied payload; the caller's dict is not mutated.
+    Non-dict message entries (already-validated models) pass through.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+
+    system_texts: list[str] = []
+    messages_out: list[Any] = []
+    coerced_roles: list[str] = []
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            # Already a validated AnthropicMessage (internal construction
+            # path, e.g. convert.to_anthropic_request) — spec roles only.
+            messages_out.append(msg)
+            continue
+        role = msg.get("role")
+        if role in _SPEC_MESSAGE_ROLES:
+            messages_out.append(msg)
+            continue
+        if role == "system":
+            text = _content_as_text(msg.get("content"))
+            if text:
+                system_texts.append(text)
+            coerced_roles.append("system")
+            continue
+        # Unknown role (ctx / msg / future surprises): keep its position
+        # in the conversation as a user turn; drop if nothing salvageable.
+        text = _content_as_text(msg.get("content"))
+        coerced_roles.append(str(role))
+        if text:
+            messages_out.append({"role": "user", "content": text})
+
+    if not coerced_roles:
+        return payload
+
+    out = dict(payload)
+    out["messages"] = messages_out
+
+    if system_texts:
+        joined = "\n".join(system_texts)
+        existing = out.get("system")
+        if existing is None:
+            out["system"] = joined
+        elif isinstance(existing, str):
+            out["system"] = f"{existing}\n{joined}" if existing else joined
+        elif isinstance(existing, list):
+            out["system"] = [*existing, {"type": "text", "text": joined}]
+        else:  # unexpected shape — don't lose the client's value
+            out["system"] = existing
+
+    logger.warning(
+        "normalized-nonspec-message-roles",
+        extra={
+            "roles": coerced_roles,
+            "system_merged": bool(system_texts),
+            "hint": "client is likely Claude Code CLI >= 2.1.154 (known regression)",
+        },
+    )
+    return out
+
+
+# ============================================================
 # Request
 # ============================================================
 
@@ -146,6 +256,19 @@ class AnthropicRequest(BaseModel):
     # beta-gated body fields like `context_management`, `cache_control`,
     # `thinking` beyond what the default minor version accepts.
     anthropic_beta: str | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_roles(cls, data: Any) -> Any:
+        """Claude Code >= 2.1.154 sends system/ctx/msg roles in messages.
+
+        Normalize them before field validation so the request doesn't
+        422 at ingress (and doesn't 400 upstream at api.anthropic.com
+        via the native adapter). See ``normalize_message_roles``.
+        """
+        if isinstance(data, dict):
+            return normalize_message_roles(data)
+        return data
 
 
 # ============================================================
