@@ -6,6 +6,47 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.5.5] — 2026-06-06 (Claude Code >= 2.1.154 `system` role normalization)
+
+Patch release: ingress-side workaround for a Claude Code CLI regression.
+
+### Fixed
+
+- **Claude Code CLI >= 2.1.154 requests no longer 422 at ingress.**
+  Claude Code 2.1.154 introduced a regression where it emits messages with
+  `role: "system"` (and reportedly `ctx` / `msg`) inside the Anthropic
+  `messages` array, which the Messages API spec restricts to
+  `user` / `assistant`. CodeRouter's wire validation correctly rejected
+  these with `Input should be 'user' or 'assistant'` — breaking every
+  request from affected Claude Code versions (2.1.150 and earlier are fine).
+
+  A new `model_validator(mode="before")` on `AnthropicRequest` now
+  normalizes such payloads before validation:
+
+  - `role: "system"` → text content merged into the top-level `system`
+    field (newline-joined after any existing system prompt; text block
+    appended when `system` is a block list).
+  - Any other non-spec role (`ctx`, `msg`, ...) → coerced to `user`,
+    preserving conversation position (Anthropic merges consecutive
+    same-role turns, so this is safe).
+  - Messages with no salvageable text content are dropped (Anthropic
+    rejects empty turns).
+  - A `normalized-nonspec-message-roles` warning is logged whenever
+    normalization fires.
+
+  The strict `AnthropicMessage` role enum is **unchanged** — the wire
+  model still matches the Anthropic spec, and the native adapter forwards
+  a normalized (valid) payload to `api.anthropic.com`, avoiding the same
+  400 upstream.
+
+  Verified with 16 new unit tests (`tests/test_role_normalization.py`);
+  full suite 1191 passed / 0 failed on py3.12.
+
+  Refs: `anthropics/claude-code#63469`, `anthropics/claude-code#63473`,
+  `vllm-project/vllm#44000`
+
+---
+
 ## [v2.5.4] — 2026-06-05 (Gemma `<0xNN>` byte-fallback repair filter)
 
 Patch release: a new opt-in output filter that repairs Japanese (and other
