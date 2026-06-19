@@ -165,6 +165,26 @@ _DASHBOARD_HTML = r"""<!doctype html>
   </main>
 
   <footer class="max-w-7xl mx-auto px-4 md:px-6 pb-8">
+    <!-- Panel: Cost & Language Tax (v2.6) -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4 mb-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Cost &amp; Language Tax</h2>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Total spend</div>
+          <div class="text-2xl font-semibold tabnum" data-bind="cost_total">$0.00</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Cache savings</div>
+          <div class="text-2xl font-semibold tabnum text-green-400" data-bind="cost_savings">$0.00</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Language tax (CJK)</div>
+          <div class="text-2xl font-semibold tabnum text-amber-400" data-bind="language_tax_total">$0.00</div>
+          <div class="text-xs text-slate-500" data-bind="language_tax_hint">no tokenizer configured</div>
+        </div>
+      </div>
+      <div id="language-tax-by-provider" class="text-xs text-slate-400 tabnum mt-3"></div>
+    </section>
     <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
       <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Usage Mix</h2>
       <div id="usage-bar" class="flex h-3 rounded-full overflow-hidden bg-slate-800" role="img" aria-label="usage mix"></div>
@@ -435,6 +455,27 @@ _DASHBOARD_HTML = r"""<!doctype html>
     {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]
   ));
 
+  // v2.6: cost + language-tax panel. The collector zero-fills these, so
+  // a fresh/local-only deployment shows $0.00 across the board.
+  const renderCostTax = (snap) => {
+    const c = snap.counters || {};
+    const usd = (x) => "$" + (Number(x) || 0).toFixed(4);
+    setBind("cost_total", usd(c.cost_total_usd_aggregate));
+    setBind("cost_savings", usd(c.cost_savings_usd_aggregate));
+    const taxTotal = Number(c.language_tax_usd_aggregate) || 0;
+    setBind("language_tax_total", usd(taxTotal));
+    setBind("language_tax_hint",
+      taxTotal > 0 ? "extra paid for CJK vs char/4 baseline"
+                   : "no tax measured (set provider tokenizer_path)");
+    const byProv = c.language_tax_usd || {};
+    const el = document.getElementById("language-tax-by-provider");
+    const rows = Object.entries(byProv).filter(([, v]) => Number(v) > 0);
+    el.innerHTML = rows.length === 0 ? "" :
+      rows.map(([n, v]) =>
+        '<span class="mr-4"><span class="text-slate-500">' + escapeHTML(n) +
+        '</span> ' + usd(v) + '</span>').join("");
+  };
+
   const renderSnapshot = (snap) => {
     const startup = snap.startup || {};
     const cfg = snap.config || {};
@@ -451,6 +492,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     renderSparkline(snap);
     renderRecent(snap);
     renderUsageMix(snap);
+    renderCostTax(snap);
   };
 
   const renderError = (msg) => {

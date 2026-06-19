@@ -185,6 +185,19 @@ class ProviderConfig(BaseModel):
     )
     timeout_s: float = Field(default=30.0, ge=1.0, le=600.0)
 
+    # v2.6 language-tax track: path to a LOCAL ``tokenizer.json`` for this
+    # provider's model, used to measure the CJK over-count vs the char/4
+    # baseline (see ``coderouter.language_tax``). Loaded local-file-only —
+    # never contacts the HuggingFace Hub. When unset, language-tax falls
+    # back to char/4 (multiplier 1.0) and the feature is silently inert.
+    tokenizer_path: str | None = Field(
+        default=None,
+        description=(
+            "Local tokenizer.json for accurate (language-tax) token "
+            "counting. No network access. Requires the 'accuracy' extra."
+        ),
+    )
+
     # Provider-specific extras merged into the outbound request body.
     # Use for non-standard fields like Ollama's `think: false`, `keep_alive`,
     # `options.num_ctx`, or any vendor-specific toggle. User-supplied request
@@ -763,6 +776,16 @@ class RuleMatcher(BaseModel):
       ``request.tools`` set). The ``has_tools`` matcher is the
       profile-level lever for steering tool-laden traffic to the right
       chain entirely.
+
+    Variants (v2.6 / language-tax routing):
+
+    - ``cjk_ratio_min: 0.3`` — CJK character ratio of the latest user
+      message is ``>=`` this threshold. Routes CJK-heavy turns (which
+      pay the cloud "language tax" of ~1.2-1.5x more tokens) to a local
+      model that bills nothing per token, while ASCII/code turns fall
+      through to the cloud chain. Per-turn property like
+      ``code_fence_ratio_min``; see
+      :func:`coderouter.language_tax.cjk_char_ratio`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -773,6 +796,13 @@ class RuleMatcher(BaseModel):
     content_regex: str | None = None
     model_pattern: str | None = None
     content_token_count_min: int | None = Field(default=None, ge=1)
+    # v2.6 language-tax routing: CJK character ratio of the latest user
+    # message >= this threshold. Lets operators steer CJK-heavy traffic
+    # (which carries the cloud language tax) to a local model that bills
+    # nothing per token. Operates on the latest user message like
+    # ``code_fence_ratio_min`` (a per-turn property), not the whole
+    # request. See ``coderouter.language_tax.cjk_char_ratio``.
+    cjk_ratio_min: float | None = Field(default=None, ge=0.0, le=1.0)
     # [Unreleased]: tool-aware routing (OpenClaw + Raspberry Pi 由来).
     # See class docstring "Variants ([Unreleased] / tool-aware routing)"
     # above for the full rationale. Boolean shape mirrors ``has_image`` —
@@ -789,6 +819,7 @@ class RuleMatcher(BaseModel):
         "model_pattern",
         "content_token_count_min",
         "has_tools",
+        "cjk_ratio_min",
     )
 
     @model_validator(mode="after")

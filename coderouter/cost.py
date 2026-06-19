@@ -58,8 +58,12 @@ in the cost calc.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from coderouter.config.schemas import CostConfig
+
+if TYPE_CHECKING:  # avoid an import cycle at runtime; used only for typing
+    from coderouter.language_tax import LanguageTaxBreakdown
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,12 @@ class CostBreakdown:
             chart. ``input_usd`` is "fresh input only" (does not
             include cache buckets); cache_read_usd / cache_creation_usd
             are the post-discount / post-premium values.
+        language_tax_multiplier: ``tokens_accurate / tokens_heuristic``
+            for the request text (v2.6 language-tax track). 1.0 when no
+            tax is measurable (English/code, or no accurate tokenizer).
+        language_tax_usd: USD share of ``total_usd`` attributable to the
+            CJK over-count vs CodeRouter's char/4 English baseline.
+            0.0 for free / local providers. See :mod:`coderouter.language_tax`.
     """
 
     total_usd: float = 0.0
@@ -90,6 +100,10 @@ class CostBreakdown:
     output_usd: float = 0.0
     cache_read_usd: float = 0.0
     cache_creation_usd: float = 0.0
+    # v2.6 language-tax track (additive; defaults keep pre-v2.6 behaviour
+    # and equality with a bare ``CostBreakdown()``).
+    language_tax_multiplier: float = 1.0
+    language_tax_usd: float = 0.0
 
 
 _PER_MILLION: float = 1_000_000.0
@@ -102,6 +116,7 @@ def compute_cost_for_attempt(
     output_tokens: int,
     cache_read_input_tokens: int,
     cache_creation_input_tokens: int,
+    language_tax: LanguageTaxBreakdown | None = None,
 ) -> CostBreakdown:
     """Translate per-attempt token counts into a USD :class:`CostBreakdown`.
 
@@ -144,6 +159,21 @@ def compute_cost_for_attempt(
     full_rate_for_cache_read = safe_read * input_rate
     savings_usd = full_rate_for_cache_read - cache_read_usd
 
+    # v2.6 language tax: the share of fresh-input spend attributable to
+    # the CJK over-count vs the char/4 English baseline. Defaults to a
+    # 1.0 multiplier / $0 when no LanguageTaxBreakdown is supplied, so
+    # the pre-v2.6 call shape is unchanged.
+    lt_multiplier = 1.0
+    lt_usd = 0.0
+    if language_tax is not None:
+        lt_multiplier = language_tax.tax_multiplier
+        from coderouter.language_tax import language_tax_usd
+
+        lt_usd = language_tax_usd(
+            language_tax.extra_tokens,
+            input_tokens_per_million=cost_config.input_tokens_per_million,
+        )
+
     return CostBreakdown(
         total_usd=total_usd,
         savings_usd=max(savings_usd, 0.0),
@@ -151,4 +181,6 @@ def compute_cost_for_attempt(
         output_usd=output_usd,
         cache_read_usd=cache_read_usd,
         cache_creation_usd=cache_creation_usd,
+        language_tax_multiplier=lt_multiplier,
+        language_tax_usd=lt_usd,
     )
