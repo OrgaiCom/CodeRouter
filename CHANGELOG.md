@@ -6,6 +6,77 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.6.0] — 2026-06-20 (Language Tax: measure, route, visualize)
+
+Minor release: makes the CJK **"language tax"** — cloud tokenizers bill
+Japanese/Chinese/Korean text ~1.2–1.5× more tokens per character than
+English, while local models are unaffected — measurable, routable, and
+visible. Built entirely on existing infrastructure; **no new core
+dependency** (the accurate tokenizer is the existing optional `accuracy`
+extra), **no network** (local `tokenizer.json` only), and **fully
+backward compatible** — the feature is inert until a provider declares
+`tokenizer_path`.
+
+### Added
+
+- **Language-tax measurement (`coderouter/language_tax.py`).** A leaf
+  module exposing `cjk_char_ratio`, `estimate_language_tax`,
+  `LanguageTaxBreakdown`, and `language_tax_usd`. CJK detection is
+  stdlib-only (Unicode range checks); the accurate token count is
+  delegated to the optional `accuracy` (`tokenizers`) backend with a
+  char/4 fallback. The tax multiplier is `tokens_accurate /
+  tokens_heuristic` — ~1.0 for English/code, ~2.0–4.0 for pure CJK.
+
+- **End-to-end cost integration.** `CostBreakdown` gains
+  `language_tax_multiplier` / `language_tax_usd`;
+  `compute_cost_for_attempt` accepts an optional `language_tax=`. Both
+  `cache-observed` emit sites in `routing/fallback.py` (streaming +
+  non-streaming) build a `LanguageTaxBreakdown` **only when the provider
+  declares `tokenizer_path`**, so the hot path is untouched by default.
+  The `cache-observed` log line now carries `language_tax_usd` /
+  `language_tax_multiplier`, and `MetricsCollector` aggregates per-provider
+  + total language-tax spend (mirroring the cost-savings aggregation).
+
+- **`ProviderConfig.tokenizer_path`** — optional path to a local
+  `tokenizer.json` for accurate (language-tax) token counting. Local-file
+  only; never contacts the HuggingFace Hub. Inert when unset.
+
+- **`cjk_ratio_min` auto-route matcher.** A new `RuleMatcher` variant that
+  routes turns whose latest user message CJK ratio ≥ threshold to a
+  (typically local, tax-free) profile, while ASCII/code turns fall through
+  to the cloud chain. Per-turn property mirroring `code_fence_ratio_min`.
+
+  ```yaml
+  auto_router:
+    rules:
+      - match: { cjk_ratio_min: 0.3 }   # JA-heavy turns → local
+        profile: local
+      - match: { has_tools: true }
+        profile: cloud
+    default_rule_profile: cloud
+  ```
+
+- **Dashboard "Cost & Language Tax" panel** on `/dashboard`: total spend,
+  cache savings, and CJK language-tax spend (aggregate + per-provider).
+  Also surfaces the previously-hidden cost aggregates.
+
+- **`token_estimation.extract_text_from_anthropic_request()`** — pulls the
+  concatenated request text for the accurate tokenizer leg.
+
+### Security
+
+- **Bump starlette 1.0.1 → 1.3.1**, clearing four advisories
+  (CVE-2026-48817 / CVE-2026-48818 / CVE-2026-54282 / CVE-2026-54283) that
+  failed the `cve-audit` CI job (`pip-audit --strict`).
+
+### Notes
+
+- 38 new tests (`test_language_tax`, `test_language_tax_integration`,
+  `test_auto_router_cjk`, extended dashboard contract). Full suite:
+  **1250 passed, 8 skipped**. ruff clean. The 5-deps invariant is intact.
+
+---
+
 ## [v2.5.5] — 2026-06-06 (Claude Code >= 2.1.154 `system` role normalization)
 
 Patch release: ingress-side workaround for a Claude Code CLI regression.

@@ -56,7 +56,7 @@ wheels = [
 
 [[package]]
 name = "coderouter-cli"
-version = "2.5.5"
+version = "2.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
