@@ -39,6 +39,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from coderouter.config.schemas import AutoRouterConfig, AutoRouteRule, RuleMatcher
+from coderouter.language_tax import cjk_char_ratio
 from coderouter.token_estimation import estimate_tokens_from_body as _estimate_total_tokens
 
 if TYPE_CHECKING:
@@ -181,6 +182,12 @@ def _match_rule(
         return message is not None and _has_image(message)
     if m.code_fence_ratio_min is not None:
         return _code_fence_ratio(text) >= m.code_fence_ratio_min
+    if m.cjk_ratio_min is not None:
+        # v2.6: language-tax routing. CJK ratio of the latest user
+        # message — a per-turn property like code_fence_ratio_min, so it
+        # reuses ``text`` (latest user message) rather than walking the
+        # whole request. Steers CJK-heavy turns to a local, tax-free model.
+        return cjk_char_ratio(text) >= m.cjk_ratio_min
     if m.content_contains is not None:
         return m.content_contains in text
     if m.content_regex is not None:

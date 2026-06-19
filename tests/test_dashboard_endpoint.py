@@ -102,6 +102,11 @@ def test_dashboard_starts_with_doctype(client: TestClient) -> None:
         "rate_meta",
         # v1.5-E: TZ label in header (e.g. "Asia/Tokyo" / "UTC").
         "display_timezone",
+        # v2.6: cost + language-tax panel.
+        "cost_total",
+        "cost_savings",
+        "language_tax_total",
+        "language_tax_hint",
     ],
 )
 def test_dashboard_contains_required_data_bind_hooks(
@@ -130,6 +135,7 @@ def test_dashboard_has_all_panels(client: TestClient) -> None:
         "Requests / min",
         "Recent Events",
         "Usage Mix",
+        "Cost &amp; Language Tax",
     ):
         assert title in body, f"panel {title!r} not rendered"
 

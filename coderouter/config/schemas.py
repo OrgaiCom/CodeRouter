@@ -776,6 +776,16 @@ class RuleMatcher(BaseModel):
       ``request.tools`` set). The ``has_tools`` matcher is the
       profile-level lever for steering tool-laden traffic to the right
       chain entirely.
+
+    Variants (v2.6 / language-tax routing):
+
+    - ``cjk_ratio_min: 0.3`` — CJK character ratio of the latest user
+      message is ``>=`` this threshold. Routes CJK-heavy turns (which
+      pay the cloud "language tax" of ~1.2-1.5x more tokens) to a local
+      model that bills nothing per token, while ASCII/code turns fall
+      through to the cloud chain. Per-turn property like
+      ``code_fence_ratio_min``; see
+      :func:`coderouter.language_tax.cjk_char_ratio`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -786,6 +796,13 @@ class RuleMatcher(BaseModel):
     content_regex: str | None = None
     model_pattern: str | None = None
     content_token_count_min: int | None = Field(default=None, ge=1)
+    # v2.6 language-tax routing: CJK character ratio of the latest user
+    # message >= this threshold. Lets operators steer CJK-heavy traffic
+    # (which carries the cloud language tax) to a local model that bills
+    # nothing per token. Operates on the latest user message like
+    # ``code_fence_ratio_min`` (a per-turn property), not the whole
+    # request. See ``coderouter.language_tax.cjk_char_ratio``.
+    cjk_ratio_min: float | None = Field(default=None, ge=0.0, le=1.0)
     # [Unreleased]: tool-aware routing (OpenClaw + Raspberry Pi 由来).
     # See class docstring "Variants ([Unreleased] / tool-aware routing)"
     # above for the full rationale. Boolean shape mirrors ``has_image`` —
@@ -802,6 +819,7 @@ class RuleMatcher(BaseModel):
         "model_pattern",
         "content_token_count_min",
         "has_tools",
+        "cjk_ratio_min",
     )
 
     @model_validator(mode="after")
