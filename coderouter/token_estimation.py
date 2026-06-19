@@ -91,6 +91,21 @@ def _count_system_chars(system: Any) -> int:
     return 0
 
 
+def _extract_system_text(system: Any) -> str:
+    """Concatenate the system prompt text (str or list-of-blocks form)."""
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        pieces: list[str] = []
+        for block in system:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    pieces.append(text)
+        return "\n".join(pieces)
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -153,9 +168,41 @@ def estimate_tokens_from_anthropic_request(
     return total_chars // CHARS_PER_TOKEN_HEURISTIC
 
 
+def extract_text_from_anthropic_request(
+    *,
+    system: Any,
+    messages: list[Any],
+) -> str:
+    """Concatenate all text in an Anthropic-shaped request.
+
+    Mirrors :func:`estimate_tokens_from_anthropic_request` but returns
+    the raw text (system prompt + every message's text blocks) instead
+    of a char/4 count. Used by :mod:`coderouter.language_tax` to feed an
+    accurate tokenizer for language-tax measurement. Non-text blocks
+    (images / tool_use / tool_result) contribute nothing — same rule the
+    char/4 estimator uses.
+    """
+    pieces: list[str] = []
+    sys_text = _extract_system_text(system)
+    if sys_text:
+        pieces.append(sys_text)
+    for msg in messages:
+        if hasattr(msg, "content"):
+            content = msg.content
+        elif isinstance(msg, dict):
+            content = msg.get("content")
+        else:
+            continue
+        text = _extract_text_from_content(content)
+        if text:
+            pieces.append(text)
+    return "\n".join(pieces)
+
+
 __all__ = [
     "CHARS_PER_TOKEN_HEURISTIC",
     "DEFAULT_MAX_CONTEXT_TOKENS",
     "estimate_tokens_from_anthropic_request",
     "estimate_tokens_from_body",
+    "extract_text_from_anthropic_request",
 ]

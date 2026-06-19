@@ -15,18 +15,16 @@ import math
 
 import pytest
 
+# A tiny fake tokenizer.json is hard to ship; instead we exercise the
+# accurate path by monkeypatching count_tokens. This keeps the test
+# hermetic and backend-independent.
+import coderouter.language_tax as lt
 from coderouter.language_tax import (
     LanguageTaxBreakdown,
     cjk_char_ratio,
     estimate_language_tax,
     language_tax_usd,
 )
-
-# A tiny fake tokenizer.json is hard to ship; instead we exercise the
-# accurate path by monkeypatching count_tokens. This keeps the test
-# hermetic and backend-independent.
-import coderouter.language_tax as lt
-
 
 # ---------------------------------------------------------------------------
 # cjk_char_ratio

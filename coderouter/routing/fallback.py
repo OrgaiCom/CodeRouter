@@ -61,6 +61,10 @@ from coderouter.guards.tool_loop import (
     detect_tool_loop,
     inject_loop_break_hint,
 )
+from coderouter.language_tax import (
+    LanguageTaxBreakdown,
+    estimate_language_tax_for_request,
+)
 from coderouter.logging import (
     classify_cache_outcome,
     get_logger,
@@ -372,6 +376,7 @@ def _emit_cache_observed(
     streaming: bool,
     provider_config: ProviderConfig | None = None,
     budget: BudgetTracker | None = None,
+    language_tax: LanguageTaxBreakdown | None = None,
 ) -> None:
     """Extract usage / cache fields from an AnthropicResponse and log them.
 
@@ -432,6 +437,7 @@ def _emit_cache_observed(
         output_tokens=usage.output_tokens,
         cache_read_input_tokens=cache_read,
         cache_creation_input_tokens=cache_creation,
+        language_tax=language_tax,
     )
 
     # v1.10: feed the per-provider monthly running total. The
@@ -452,6 +458,8 @@ def _emit_cache_observed(
         streaming=streaming,
         cost_usd=cost.total_usd,
         cost_savings_usd=cost.savings_usd,
+        language_tax_usd=cost.language_tax_usd,
+        language_tax_multiplier=cost.language_tax_multiplier,
     )
 
 
@@ -629,6 +637,7 @@ def _emit_cache_observed_streaming(
     request_had_cache_control: bool,
     provider_config: ProviderConfig | None = None,
     budget: BudgetTracker | None = None,
+    language_tax: LanguageTaxBreakdown | None = None,
 ) -> None:
     """Streaming counterpart of :func:`_emit_cache_observed` (v1.9-B2).
 
@@ -661,6 +670,7 @@ def _emit_cache_observed_streaming(
         output_tokens=output_tokens,
         cache_read_input_tokens=cache_read,
         cache_creation_input_tokens=cache_creation,
+        language_tax=language_tax,
     )
 
     # v1.10: same monthly-budget bookkeeping as the non-streaming
@@ -681,6 +691,8 @@ def _emit_cache_observed_streaming(
         streaming=True,
         cost_usd=cost.total_usd,
         cost_savings_usd=cost.savings_usd,
+        language_tax_usd=cost.language_tax_usd,
+        language_tax_multiplier=cost.language_tax_multiplier,
     )
 
 
@@ -2126,6 +2138,14 @@ class FallbackEngine:
             # outcome=unknown.
             # v1.9-D: also enrich the log line with per-attempt
             # USD cost + cache savings via the provider's CostConfig.
+            # v2.6 language tax: only measured when the provider declares
+            # a local tokenizer.json (else inert — no extra work, mult=1.0).
+            _lt = None
+            _tok = getattr(adapter.config, "tokenizer_path", None)
+            if _tok:
+                _lt = estimate_language_tax_for_request(
+                    request.system, request.messages, tokenizer_path=_tok
+                )
             _emit_cache_observed(
                 resp,
                 provider=adapter.name,
@@ -2133,6 +2153,7 @@ class FallbackEngine:
                 streaming=False,
                 provider_config=adapter.config,
                 budget=self._budget,
+                language_tax=_lt,
             )
             # v2.3.0: observer plugin fanout — fire-and-forget, never
             # blocks the engine response. Latency in ms uses the same
@@ -2359,12 +2380,21 @@ class FallbackEngine:
             # both go through ``classify_cache_outcome`` /
             # ``compute_cost_for_attempt`` for symmetric outcome and
             # cost reporting.
+            # v2.6 language tax: same opt-in measurement as the
+            # non-streaming sibling (inert unless tokenizer_path is set).
+            _lt_s = None
+            _tok_s = getattr(adapter.config, "tokenizer_path", None)
+            if _tok_s:
+                _lt_s = estimate_language_tax_for_request(
+                    request.system, request.messages, tokenizer_path=_tok_s
+                )
             _emit_cache_observed_streaming(
                 acc,
                 provider=adapter.name,
                 request_had_cache_control=request_had_cache_control,
                 provider_config=adapter.config,
                 budget=self._budget,
+                language_tax=_lt_s,
             )
             # v2.3.0: streaming observer fanout fires once, after the
             # SSE terminates successfully. We hand the accumulator's

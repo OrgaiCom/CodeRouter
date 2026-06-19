@@ -58,8 +58,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from coderouter.token_estimation import CHARS_PER_TOKEN_HEURISTIC
+from coderouter.token_estimation import (
+    CHARS_PER_TOKEN_HEURISTIC,
+    extract_text_from_anthropic_request,
+)
 from coderouter.token_estimation_accurate import count_tokens
 
 # ---------------------------------------------------------------------------
@@ -88,10 +92,7 @@ _CJK_RANGES: tuple[tuple[int, int], ...] = (
 
 
 def _is_cjk(cp: int) -> bool:
-    for low, high in _CJK_RANGES:
-        if low <= cp <= high:
-            return True
-    return False
+    return any(low <= cp <= high for low, high in _CJK_RANGES)
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +216,29 @@ def language_tax_usd(
     return extra_tokens * (input_tokens_per_million / 1_000_000.0)
 
 
+def estimate_language_tax_for_request(
+    system: Any,
+    messages: list[Any],
+    *,
+    tokenizer_path: str | Path | None = None,
+) -> LanguageTaxBreakdown:
+    """Measure the language tax of a whole Anthropic-shaped request.
+
+    Convenience wrapper used by the engine's cost-emit path: pulls the
+    concatenated request text (system + message text blocks) and runs it
+    through :func:`estimate_language_tax`. With no ``tokenizer_path`` the
+    multiplier is 1.0 (inert), so calling this on every request is safe
+    and cheap — the engine only invokes it when a provider declares a
+    local ``tokenizer.json``.
+    """
+    text = extract_text_from_anthropic_request(system=system, messages=messages)
+    return estimate_language_tax(text, tokenizer_path=tokenizer_path)
+
+
 __all__ = [
-    "cjk_char_ratio",
     "LanguageTaxBreakdown",
+    "cjk_char_ratio",
     "estimate_language_tax",
+    "estimate_language_tax_for_request",
     "language_tax_usd",
 ]

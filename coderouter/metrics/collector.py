@@ -190,6 +190,13 @@ class MetricsCollector(logging.Handler):
         self._cost_total_usd_aggregate: float = 0.0
         self._cost_savings_usd_aggregate: float = 0.0
 
+        # v2.6: per-provider language-tax spend — the USD share of input
+        # cost attributable to the CJK over-count vs the char/4 baseline.
+        # Zero for English/code workloads and for providers without a
+        # configured tokenizer_path. Surfaced alongside cost_total_usd.
+        self._language_tax_usd: dict[str, float] = {}
+        self._language_tax_usd_aggregate: float = 0.0
+
         # v2.0-F (L1): context budget guard counters. Per-profile counts
         # of warnings (over warn threshold) and trims (messages removed).
         # The ``latest_usage_ratio`` dict records the most recent ratio
@@ -388,6 +395,22 @@ class MetricsCollector(logging.Handler):
                         self._cost_savings_usd.get(provider, 0.0) + savings_usd
                     )
                     self._cost_savings_usd_aggregate += savings_usd
+
+                # v2.6: language-tax spend. Same defensive coercion as the
+                # cost fields; defaults to 0.0 for pre-v2.6 log lines and
+                # English/code traffic, so the aggregate only moves on
+                # CJK-heavy requests against a tokenizer-configured provider.
+                lt_usd_raw = extras.get("language_tax_usd", 0.0)
+                lt_usd = (
+                    float(lt_usd_raw)
+                    if isinstance(lt_usd_raw, int | float)
+                    else 0.0
+                )
+                if lt_usd > 0.0:
+                    self._language_tax_usd[provider] = (
+                        self._language_tax_usd.get(provider, 0.0) + lt_usd
+                    )
+                    self._language_tax_usd_aggregate += lt_usd
             elif event == "context-budget-warning":
                 # v2.0-F (L1): context usage exceeded the warn threshold.
                 # Track per-profile and aggregate, plus latest ratio gauge.
@@ -522,6 +545,10 @@ class MetricsCollector(logging.Handler):
                         "savings_usd": round(
                             self._cost_savings_usd.get(name, 0.0), 6
                         ),
+                        # v2.6: per-provider language-tax spend.
+                        "language_tax_usd": round(
+                            self._language_tax_usd.get(name, 0.0), 6
+                        ),
                     },
                 }
                 for name in providers
@@ -588,6 +615,14 @@ class MetricsCollector(logging.Handler):
                     ),
                     "cost_savings_usd_aggregate": round(
                         self._cost_savings_usd_aggregate, 6
+                    ),
+                    # v2.6: per-provider + aggregate language-tax spend.
+                    "language_tax_usd": {
+                        n: round(v, 6)
+                        for n, v in self._language_tax_usd.items()
+                    },
+                    "language_tax_usd_aggregate": round(
+                        self._language_tax_usd_aggregate, 6
                     ),
                     # v2.0-F (L1): context budget guard aggregate counters.
                     "context_budget_warnings_total": self._context_budget_warnings_total,
@@ -682,6 +717,13 @@ class MetricsCollector(logging.Handler):
             self._cost_savings_usd_aggregate += float(
                 state.get("cost_savings_usd_aggregate", 0.0)
             )
+            for k, v in (state.get("language_tax_usd") or {}).items():
+                self._language_tax_usd[k] = (
+                    self._language_tax_usd.get(k, 0.0) + float(v)
+                )
+            self._language_tax_usd_aggregate += float(
+                state.get("language_tax_usd_aggregate", 0.0)
+            )
             self._chain_paid_gate_blocked_total += int(
                 state.get("chain_paid_gate_blocked_total", 0)
             )
@@ -737,6 +779,9 @@ class MetricsCollector(logging.Handler):
             self._cost_savings_usd.clear()
             self._cost_total_usd_aggregate = 0.0
             self._cost_savings_usd_aggregate = 0.0
+            # v2.6
+            self._language_tax_usd.clear()
+            self._language_tax_usd_aggregate = 0.0
             # v2.0-H (L6)
             self._partial_stitch_surfaced_total = 0
             # v2.0-I

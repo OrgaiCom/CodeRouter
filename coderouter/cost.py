@@ -58,7 +58,6 @@ in the cost calc.
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from typing import TYPE_CHECKING
 
 from coderouter.config.schemas import CostConfig
@@ -117,7 +116,7 @@ def compute_cost_for_attempt(
     output_tokens: int,
     cache_read_input_tokens: int,
     cache_creation_input_tokens: int,
-    language_tax: "LanguageTaxBreakdown | None" = None,
+    language_tax: LanguageTaxBreakdown | None = None,
 ) -> CostBreakdown:
     """Translate per-attempt token counts into a USD :class:`CostBreakdown`.
 

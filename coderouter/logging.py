@@ -971,6 +971,10 @@ class CacheObservedPayload(TypedDict):
     streaming: bool
     cost_usd: float
     cost_savings_usd: float
+    # v2.6 language-tax track (optional; default 0.0 / 1.0 at the emit
+    # site keeps pre-v2.6 callers and log consumers working unchanged).
+    language_tax_usd: float
+    language_tax_multiplier: float
 
 
 def log_cache_observed(
@@ -986,6 +990,8 @@ def log_cache_observed(
     streaming: bool,
     cost_usd: float = 0.0,
     cost_savings_usd: float = 0.0,
+    language_tax_usd: float = 0.0,
+    language_tax_multiplier: float = 1.0,
 ) -> None:
     """Emit a ``cache-observed`` info record with the unified shape.
 
@@ -1013,6 +1019,8 @@ def log_cache_observed(
         "streaming": streaming,
         "cost_usd": cost_usd,
         "cost_savings_usd": cost_savings_usd,
+        "language_tax_usd": language_tax_usd,
+        "language_tax_multiplier": language_tax_multiplier,
     }
     logger.info("cache-observed", extra=payload)
 
