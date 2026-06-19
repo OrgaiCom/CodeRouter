@@ -116,6 +116,36 @@ Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-cod
 | **`coderouter replay`** | Compare providers statistically (A/B analysis) / `--suggest-rules` for automated rule suggestions |
 | **Continuous Probe** | Background health monitoring even during idle |
 
+### Language Tax tracking — v2.6.0
+
+CJK text (Japanese / Chinese / Korean) costs more tokens on cloud tokenizers than the same meaning in English (**measured: ~1.6× on average with GPT-4o-era o200k, ~2.0× with GPT-4-era cl100k**). Local models bill nothing per token, so this "language tax" only bites on the cloud leg. CodeRouter v2.6.0 makes it **measurable, routable, and visible**.
+
+| Feature | What it does |
+|---|---|
+| **Language-tax measurement** | Set a provider's `tokenizer_path` (a local `tokenizer.json`) to compute the real token multiplier vs the char/4 heuristic and the extra USD. No network; inert when unset. |
+| **`cjk_ratio_min` routing** | Auto-route CJK-heavy turns to a local (tax-free) model; code/English falls through to the cloud chain. |
+| **Dashboard panel** | The `/dashboard` "Cost & Language Tax" panel shows total spend, cache savings, and language-tax spend live. |
+
+```yaml
+# providers.yaml — steer CJK-heavy turns to local
+auto_router:
+  rules:
+    - match: { cjk_ratio_min: 0.3 }   # >=30% CJK chars -> local
+      profile: local
+    - match: { has_tools: true }      # tool use -> cloud
+      profile: cloud
+  default_rule_profile: cloud
+
+providers:
+  - name: cloud-sonnet
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-6
+    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json   # accurate language-tax (optional)
+```
+
+Details → [Language Tax guide](./docs/guides/language-tax.en.md)
+
 ### Launcher — llama.cpp / vllm GUI
 
 Browser UI at `http://localhost:8088/launcher` for starting and managing local inference backends.
@@ -184,6 +214,7 @@ More detail → [Usage guide](./docs/guides/usage-guide.en.md) · [Architecture]
 | Use it well | [Usage guide](./docs/guides/usage-guide.en.md) |
 | Run for free | [Free-tier guide](./docs/guides/free-tier-guide.en.md) |
 | Launch llama.cpp / vllm via GUI | [Launcher guide](./docs/backends/launcher.md) |
+| Measure & avoid the language tax | [Language Tax guide](./docs/guides/language-tax.en.md) |
 | Stuck? | [Troubleshooting](./docs/guides/troubleshooting.en.md) |
 | Understand the design | [Architecture](./docs/concepts/architecture.md) |
 | Full release history | [CHANGELOG](./CHANGELOG.md) |

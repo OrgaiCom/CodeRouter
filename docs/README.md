@@ -16,6 +16,7 @@ Index of CodeRouter's public documentation — find the right page by what you w
 | 自分に必要か知りたい / Is it for me? | [start/when-do-i-need-coderouter](start/when-do-i-need-coderouter.md) |
 | 無料で運用したい / Run for free | [guides/free-tier-guide](guides/free-tier-guide.md) |
 | 機能を一通り知りたい / Learn the features | [guides/usage-guide](guides/usage-guide.md) |
+| 言語税を計測・回避したい / Measure & avoid the language tax | [guides/language-tax](guides/language-tax.md) |
 | エラーで詰まった / Something broke | [guides/troubleshooting](guides/troubleshooting.md) |
 | ローカル LLM を起動したい / Launch a local LLM | [backends/launcher-quickstart](backends/launcher-quickstart.md) |
 | APIキー・機密の扱い / Secrets & security | [guides/security](guides/security.md) |
@@ -55,6 +56,7 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 日常的に使いこなすためのガイド。 / Day-to-day usage.
 
 - **usage-guide** — 機能を一通り使いこなす / Full feature guide · [日本語](guides/usage-guide.md) · [English](guides/usage-guide.en.md)
+- **language-tax** — 日本語の言語税を計測・ルーティング回避・可視化 / Measure, route around, and visualize the CJK language tax · [日本語](guides/language-tax.md) · [English](guides/language-tax.en.md)
 - **free-tier-guide** — NVIDIA NIM × OpenRouter Free でコストゼロ運用 / Zero-cost operation · [日本語](guides/free-tier-guide.md) · [English](guides/free-tier-guide.en.md)
 - **troubleshooting** — つまずいたときの解決集 / Fixing problems · [日本語](guides/troubleshooting.md) · [English](guides/troubleshooting.en.md)
 - **security** — シークレット管理とセキュリティ方針 / Secrets handling & security posture · [日本語](guides/security.md) · [English](guides/security.en.md)

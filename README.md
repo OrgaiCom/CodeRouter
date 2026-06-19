@@ -116,6 +116,36 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | **`coderouter replay`** | provider 切替の効果を統計比較 (A/B 分析) / `--suggest-rules` でルール最適化提案 |
 | **Continuous Probe** | idle 時も定期的に backend を監視 |
 
+### 言語税トラッキング — v2.6.0
+
+日本語などの CJK テキストは、クラウドのトークナイザだと「同じ意味の英語」より多くのトークンを消費します（**実測: GPT-4o 系 o200k で平均 1.6 倍、GPT-4 系 cl100k で平均 2.0 倍**）。ローカル LLM は課金されないので、この「言語税」はクラウド利用時だけ効いてきます。CodeRouter v2.6.0 はこれを **計測・ルーティング回避・可視化** します。
+
+| 機能 | 何をしてくれるか |
+|---|---|
+| **言語税の計測** | プロバイダに `tokenizer_path`（ローカルの `tokenizer.json`）を指定すると、char/4 ヒューリスティック比の実トークン倍率と割増 USD を算出（ネットワーク不要・未設定なら無効） |
+| **`cjk_ratio_min` ルーティング** | CJK 比率が高いリクエストを自動でローカル LLM（課金ゼロ）へ。コードや英語はクラウドへ |
+| **ダッシュボード可視化** | `/dashboard` の「Cost & Language Tax」パネルで総支出・キャッシュ節約・言語税をリアルタイム表示 |
+
+```yaml
+# providers.yaml — CJK 多めのターンはローカルへ自動回避
+auto_router:
+  rules:
+    - match: { cjk_ratio_min: 0.3 }   # 日本語が3割以上 → ローカル
+      profile: local
+    - match: { has_tools: true }      # ツール使用 → クラウド
+      profile: cloud
+  default_rule_profile: cloud
+
+providers:
+  - name: cloud-sonnet
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-6
+    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json   # 言語税の正確計測（任意）
+```
+
+詳細 → [言語税ガイド](./docs/guides/language-tax.md)
+
 ### Launcher — llama.cpp / vllm 起動 UI
 
 `http://localhost:8088/launcher` で開けるブラウザ UI。llama.cpp や vllm を GUI で起動・管理できます。
@@ -184,6 +214,7 @@ providers:
 | 使いこなす | [利用ガイド](./docs/guides/usage-guide.md) |
 | 無料で回す | [無料枠ガイド](./docs/guides/free-tier-guide.md) |
 | llama.cpp / vllm を GUI で起動 | [Launcher ガイド](./docs/backends/launcher.md) |
+| 言語税を計測・回避する | [言語税ガイド](./docs/guides/language-tax.md) |
 | 詰まった | [トラブルシューティング](./docs/guides/troubleshooting.md) |
 | 設計を知りたい | [アーキテクチャ詳細](./docs/concepts/architecture.md) |
 | 全リリース履歴 | [CHANGELOG](./CHANGELOG.md) |
