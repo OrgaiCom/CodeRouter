@@ -185,6 +185,19 @@ class ProviderConfig(BaseModel):
     )
     timeout_s: float = Field(default=30.0, ge=1.0, le=600.0)
 
+    # v2.6 language-tax track: path to a LOCAL ``tokenizer.json`` for this
+    # provider's model, used to measure the CJK over-count vs the char/4
+    # baseline (see ``coderouter.language_tax``). Loaded local-file-only —
+    # never contacts the HuggingFace Hub. When unset, language-tax falls
+    # back to char/4 (multiplier 1.0) and the feature is silently inert.
+    tokenizer_path: str | None = Field(
+        default=None,
+        description=(
+            "Local tokenizer.json for accurate (language-tax) token "
+            "counting. No network access. Requires the 'accuracy' extra."
+        ),
+    )
+
     # Provider-specific extras merged into the outbound request body.
     # Use for non-standard fields like Ollama's `think: false`, `keep_alive`,
     # `options.num_ctx`, or any vendor-specific toggle. User-supplied request
