@@ -1,5 +1,6 @@
 # ============================================================
 # CodeRouter providers.yaml — v1.6 auto_router starter (zero-config)
+# 【カテゴリ】 Ollama 通常 / auto_router ゼロ設定スターター
 #
 # This is the beginner-first starter for v1.6's auto_router. Drop it in
 # as your ~/.coderouter/providers.yaml and every request is classified
@@ -24,7 +25,7 @@
 #
 # Advanced users:
 #   - Add `auto_router:` to override the bundled rules — see
-#     providers.auto-custom.yaml for a copy-edit starting point.
+#     providers.ollama-auto-custom.yaml for a copy-edit starting point.
 #   - Per-request overrides still work (body.profile /
 #     X-CodeRouter-Profile / X-CodeRouter-Mode) — auto only fires when
 #     none of those are set.

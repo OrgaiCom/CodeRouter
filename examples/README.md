@@ -1,0 +1,68 @@
+# examples — 設定サンプル早わかり
+
+CodeRouter の `providers.yaml` サンプル集です。**「どれを使えばいいか分からない」を解消するための索引**です。
+まず下の決定表で 1 つ選び、`~/.coderouter/providers.yaml` にコピーして使ってください。
+
+```bash
+mkdir -p ~/.coderouter
+cp examples/<選んだファイル> ~/.coderouter/providers.yaml
+coderouter serve --port 8088
+```
+
+> どのファイルも、先頭に `# 【カテゴリ】 …` 行を入れてあります。開いた瞬間に用途が分かります。
+
+---
+
+## まずこれ — あなたの状況 → 使うファイル
+
+| あなたの状況 | 使うファイル | カテゴリ |
+|---|---|---|
+| **とりあえず動かしたい / 迷っている** | `providers.yaml` | 汎用・全部入り |
+| Ollama で、**何も考えず**用途別に振り分けたい | `providers.ollama-auto.yaml` | Ollama 通常 |
+| Ollama で、**振り分けルールを自分で**書きたい | `providers.ollama-auto-custom.yaml` | Ollama 通常（上級） |
+| Ollama で、**ローカル→無料クラウド**だけで完結させたい | `providers.ollama-free-chain.yaml` | Ollama 通常 |
+| **Ollama を使わず**、手元の GGUF を llama.cpp / vLLM で | `providers.llamacpp-vllm.yaml` | llama.cpp / vLLM |
+| 無料の高品質クラウド（**NVIDIA NIM**）を足したい | `providers.nvidia-nim.yaml` | クラウド無料枠 |
+| **Raspberry Pi** など小型 SBC で動かしたい | `providers.raspberrypi.yaml` | 特殊ハード |
+| （開発者向け）Context Budget の検証をしたい | `providers.context-budget-test.yaml` | 内部検証用 |
+
+どれを選んでも、別途 `.env`（`OPENROUTER_API_KEY` など）が要る場合は `cp examples/.env.example .env` してキーを入れます。無料クラウドを使わないなら不要です。
+
+---
+
+## カテゴリ別の中身
+
+### 🟢 汎用 — 迷ったらこれ
+
+- **`providers.yaml`** … 全部入りのフルリファレンス。Ollama / llama.cpp / LM Studio / OpenRouter / Anthropic まで多数の provider と 13 プロファイル（`multi` / `coding` / `general` / `reasoning` / `claude-code` ほか）を定義済み。Claude Code 用に最適化された既定スターターでもあります。**「まず動かす」「他の設定の書き方の見本帳」**として使う。`README` の `curl` ワンライナーが取得するのもこのファイルです。
+
+### 🟦 Ollama 通常 — いちばん手軽な構成
+
+前提: `ollama pull` でモデルを落としてある（各ファイル冒頭にコマンドあり）。
+
+- **`providers.ollama-auto.yaml`** … v1.6 `auto_router` の**ゼロ設定**版。リクエスト本文を見て、画像→`multi` / コード濃→`coding` / その他→`writing` に自動で振り分け。`auto_router:` ブロックを書かなくても内蔵ルールが効く。`multi` / `coding` / `writing` の 3 プロファイルだけ用意すればよい。**最短で「賢い振り分け」を体験したい人向け。**
+- **`providers.ollama-auto-custom.yaml`** … 上の**振り分けルールを自分で書く**版。`auto_router:` ブロックを足すと内蔵ルールは丸ごと置き換わる（マージされない）。「翻訳依頼は文章モデル」等の独自ルールを入れたくなったらここから。
+- **`providers.ollama-free-chain.yaml`** … Qwen3.5 / Gemma4 を主役に、**ローカル → 無料クラウド**だけで完結する鎖。有料 API は `ALLOW_PAID=true` を明示しない限り呼ばれない。Note 記事連動のシンプル構成。
+
+### 🟨 llama.cpp / vLLM — Ollama を使わない
+
+- **`providers.llamacpp-vllm.yaml`** … 手元の `.gguf` を **llama.cpp** で、または **vLLM** で動かす最小構成。Launcher（`/launcher`）で起動したサーバーを provider として登録する形。**Ollama を入れたくない / DL 済み GGUF をそのまま使いたい人向け**（詳細は連作 note 第 22 話、`docs/backends/launcher.md`）。
+
+### 🟧 特殊 — 環境・用途が限定的
+
+- **`providers.nvidia-nim.yaml`** … `ローカル → NVIDIA NIM 無料枠 → OpenRouter 無料 →（有料）`。NIM は OpenRouter より緩いレート（~40 req/min）の高品質エスケープハッチ。
+- **`providers.raspberrypi.yaml`** … Raspberry Pi 4/5 8GB 等の CPU 推論前提。**ローカルは tool 無し**、tool が必要なリクエストだけ無料クラウドへ逃がす割り切り構成（`has_tools` matcher）。
+
+### ⚙️ 内部検証用 — 通常は使わない
+
+- **`providers.context-budget-test.yaml`** … Context Budget（L1）の動作検証用に閾値を低くした構成。**本番には使わない**。検証後は通常の `providers.yaml` に戻すこと。
+
+---
+
+## 動作確認済み
+
+このフォルダの全 `providers*.yaml` は、CodeRouter 本体の設定ローダ（`load_config`、スキーマ＋起動時バリデーション）と、`coderouter serve` の実起動で確認済みです（設定ロード → サーバ起動 → `/dashboard` 応答まで到達）。実際のルーティングには対応バックエンド（Ollama / llama.cpp など）の起動が別途必要です。
+
+---
+
+最終更新: 2026-06-24

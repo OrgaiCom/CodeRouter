@@ -1,5 +1,6 @@
 # ============================================================
 # CodeRouter providers.yaml — llama.cpp / vllm ローカル推論サンプル
+# 【カテゴリ】 llama.cpp / vLLM ＋ Launcher（Ollama 不要）
 #
 # このファイルは以下を想定した最小構成です:
 #   - llama.cpp (llama-server) でモデルを起動
@@ -7,7 +8,7 @@
 #   - Launcher UI (/launcher) で起動・管理
 #
 # 使い方:
-#   1. cp examples/providers.llama-cpp-vllm.yaml ~/.coderouter/providers.yaml
+#   1. cp examples/providers.llamacpp-vllm.yaml ~/.coderouter/providers.yaml
 #   2. 必要に応じてパス・ポートを編集
 #   3. coderouter serve
 #   4. http://localhost:8088/launcher でモデルを起動
@@ -77,33 +78,42 @@ launcher:
 
   option_profiles:
 
+    # ⚠ context size の既定について
+    #   Claude Code は毎ターン 15〜35K tokens の system prompt + 会話を送ります。
+    #   ctx-size / max-model-len が小さいと llama.cpp / vLLM が
+    #   "exceed_context_size_error (400)" を返し、CodeRouter からは provider-failed
+    #   → 502 になります。そのため Claude Code 用途では既定を 32768 以上にしています。
+    #   （4096 では Claude Code の system prompt がそもそも入りません）
+    #   モデルの素の対応長を超える場合は YaRN 等の rope 拡張が必要です。
+    #   VRAM/メモリが厳しいときだけ「VRAM 節約」プロファイルを選んでください。
+
     # ── llama.cpp オプションプロファイル ──────────────────────────────────────
     llama.cpp:
 
       - name: "GPU フル活用 (CUDA/Metal)"
         args:
           "-ngl": 99
-          "--ctx-size": 4096
+          "--ctx-size": 65536     # Claude Code(~35K)も余裕。VRAM に応じて 32768〜131072
           "--threads": 4
           "--batch-size": 512
 
       - name: "GPU 控えめ (VRAM 節約)"
         args:
           "-ngl": 20
-          "--ctx-size": 2048
+          "--ctx-size": 16384     # 小さめ。Claude Code の長い会話には不足する場合あり
           "--threads": 8
 
       - name: "CPU のみ"
         args:
           "-ngl": 0
-          "--ctx-size": 4096
+          "--ctx-size": 32768     # Claude Code 最低ライン。CPU 推論は遅いので注意
           "--threads": 12
           "--mlock": true
 
       - name: "Apple Silicon M-series"
         args:
           "-ngl": 99          # Metal: 全レイヤー GPU
-          "--ctx-size": 4096
+          "--ctx-size": 65536     # 統合メモリは余裕がある前提。足りなければ 32768 に
           "--threads": 6
 
       - name: "長コンテキスト (128K)"
@@ -119,13 +129,13 @@ launcher:
       - name: "標準 (auto dtype)"
         args:
           "--dtype": "auto"
-          "--max-model-len": 4096
+          "--max-model-len": 32768   # Claude Code 用。モデルの対応長以内で増減可
           "--gpu-memory-utilization": 0.85
 
       - name: "高速推論 (float16)"
         args:
           "--dtype": "float16"
-          "--max-model-len": 4096
+          "--max-model-len": 32768   # 同上。長い会話は 65536 以上を検討
           "--gpu-memory-utilization": 0.90
           "--max-num-batched-tokens": 8192
 
@@ -134,7 +144,7 @@ launcher:
           "--dtype": "float16"
           "--quantization": "bitsandbytes"
           "--load-format": "bitsandbytes"
-          "--max-model-len": 2048
+          "--max-model-len": 16384   # 省メモリ用に小さめ。Claude Code には不足する場合あり
           "--gpu-memory-utilization": 0.70
 
       - name: "長コンテキスト (32K)"
@@ -147,5 +157,5 @@ launcher:
         args:
           "--dtype": "auto"
           "--tensor-parallel-size": 2
-          "--max-model-len": 8192
+          "--max-model-len": 65536   # 2 GPU なら余裕。Claude Code(~35K)も収まる
           "--gpu-memory-utilization": 0.85
