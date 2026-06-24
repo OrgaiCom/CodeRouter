@@ -1,5 +1,6 @@
 # ============================================================
 # CodeRouter providers.yaml — NVIDIA NIM free-tier starter
+# 【カテゴリ】 クラウド無料枠 / NVIDIA NIM（ローカル→NIM→OpenRouter）
 #
 # Shape:
 #   local (Ollama)  →  NVIDIA NIM free  →  OpenRouter free  →  (paid)

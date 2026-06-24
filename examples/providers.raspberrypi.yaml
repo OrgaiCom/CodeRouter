@@ -1,5 +1,6 @@
 # ============================================================
 # CodeRouter providers.yaml — Raspberry Pi 8GB starter
+# 【カテゴリ】 特殊ハード / Raspberry Pi 8GB（CPU推論・tool は無料クラウドへ）
 #
 # Use case (OpenClaw + Pi 由来):
 #   小型 SBC (Raspberry Pi 4/5 8GB、Jetson Nano 等) で OpenClaw 等の

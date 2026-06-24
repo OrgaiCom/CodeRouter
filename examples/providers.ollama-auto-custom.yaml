@@ -1,19 +1,20 @@
 # ============================================================
 # CodeRouter providers.yaml — v1.6 auto_router customizer
+# 【カテゴリ】 Ollama 通常 / auto_router 上級（ルールを自分で書く）
 #
 # This is the "copy & edit" starter for users who've outgrown the
-# zero-config example (providers.auto.yaml) and want to override the
+# zero-config example (providers.ollama-auto.yaml) and want to override the
 # bundled ruleset with their own. Everything below the `auto_router:`
-# block is identical to providers.auto.yaml, so diffing the two files
+# block is identical to providers.ollama-auto.yaml, so diffing the two files
 # shows exactly what customization adds.
 #
-# Key behavior differences vs providers.auto.yaml:
+# Key behavior differences vs providers.ollama-auto.yaml:
 #
-#   - providers.auto.yaml          → no auto_router: block → the bundled
+#   - providers.ollama-auto.yaml          → no auto_router: block → the bundled
 #                                    rules apply (image → multi /
 #                                    code-fence≥0.3 → coding / else
 #                                    → writing).
-#   - providers.auto-custom.yaml   → auto_router: block REPLACES the
+#   - providers.ollama-auto-custom.yaml   → auto_router: block REPLACES the
 #                                    bundled rules (no merge). You own
 #                                    the whole list.
 #

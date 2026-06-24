@@ -1,5 +1,6 @@
 # ============================================================
 # CodeRouter providers.yaml — sample
+# 【カテゴリ】 汎用 / フルリファレンス（迷ったらこれ。Claude Code 既定スターター）
 #
 # Default behavior:
 #   - allow_paid: false  (paid providers are skipped unless ALLOW_PAID=true)
