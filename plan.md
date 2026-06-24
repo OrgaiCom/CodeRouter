@@ -3,9 +3,9 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-05-22
+最終更新: 2026-05-29 (実装照合 + 競合再調査)
 作成者: zephel01
-状態: **v2.5.0 リリース済み (2026-05-22)** / **PyPI 最新: v2.5.0**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm GUI) に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。
+状態: **v2.5.2 リリース済み (2026-05-22)** / **PyPI 最新: v2.5.2**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX GUI) に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。
 - **過去の出荷済みリリース (版履歴の正本)**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / v2.5+ ロードマップ / 市場分析 / 競合分析)**: [`docs/inside/future.md`](./docs/inside/future.md) を参照
 - **本ドキュメント**: 出荷済みマイルストーンのスコープ / 設計判断の記録 + ローカル backend 別接続マトリクス + 検討中 / やらないこと
@@ -14,7 +14,7 @@
 
 **v0.1〜v2.5 は全て出荷済み。** 各リリースの一言ゴールは §6.1 全景、版履歴は §6.2 / [`CHANGELOG.md`](./CHANGELOG.md)、出荷済みマイルストーンの設計判断は版別節 §7〜§13 を参照。
 
-到達点 (v2.5.0 時点): 6 系統障害 (L1〜L6) 全対処 + 自己修復 (self-healing) + 状態永続化 (sqlite3 StateStore) + Plugin 層 (input_filter / observer hook) + Goal モード対応 + Launcher (llama.cpp / vllm GUI)。Runtime deps は出荷以来 5 本据え置き連続。
+到達点 (v2.5.2 時点): 6 系統障害 (L1〜L6) 全対処 + 自己修復 (self-healing) + 状態永続化 (sqlite3 StateStore) + Plugin 層 (input_filter / observer hook) + Goal モード対応 + Launcher (llama.cpp / vllm / MLX GUI)。Runtime deps は出荷以来 5 本据え置き連続。
 
 - **v2.5+ の今後ロードマップ / Vision / 競合分析 / 市場分析** は [`docs/inside/future.md`](./docs/inside/future.md) を参照 (plan.md では重複させない)。
 - **Reactive 発火条件** (運用ルール、reactive but focused) も future.md §3 に集約済み。
@@ -28,8 +28,8 @@ CodeRouter は `kind: openai_compat` と `kind: anthropic` の 2 経路で **Oll
 | **Ollama** | `11434` | `http://localhost:11434` (Anthropic 互換) / `http://localhost:11434/v1` (OpenAI 互換) | **`anthropic`** (v0.23.1+) | ✅ v0.x 〜 v2.2 通して継続検証。**v0.23.1 Anthropic API 実機検証済み — Gemma 4 全サイズ Level 3 到達** ([検証記録](./docs/verify-ollama-0.23.1.md)) | [`docs/quickstart.md`](./docs/quickstart.md) / [`docs/troubleshooting.md` §4-2](./docs/troubleshooting.md) |
 | **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | `openai_compat` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/llamacpp-direct.md`](./docs/llamacpp-direct.md) |
 | **LM Studio** | `1234` | `http://localhost:1234` (Anthropic 互換) / `http://localhost:1234/v1` (OpenAI 互換) | **`anthropic`** (v0.4.12+) | ✅ v1.8.4 で実機検証 (Qwen3.5/3.6/Qwopus3.5 全動作、Anthropic prompt caching 成立) | [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md) |
-| **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | `openai_compat` | ⏳ TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外) | TBD |
-| **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | `openai_compat` | ⏳ TODO (Mac native、量子化が Apple Silicon 最適化) | TBD |
+| **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | `openai_compat` | ⏳ E2E TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外)。**Launcher (v2.5.0+) から起動・管理可能** | [`docs/backends/install-backends.md`](./docs/backends/install-backends.md) |
+| **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | `openai_compat` | ⏳ E2E TODO (Mac native、量子化が Apple Silicon 最適化)。**Launcher (v2.5.1+) から起動・管理可能** (`python -m mlx_lm.server`) | [`docs/backends/install-backends.md`](./docs/backends/install-backends.md) |
 
 ### 共通の検証手順 (どの backend にも適用可)
 
@@ -73,7 +73,7 @@ lmstudio-anthropic:
 
 ### 今後の作業 (docs / examples 整備)
 
-実装本体は v2.5.0 まで出荷完了。残るのは docs / examples 系の継続作業のみ:
+実装本体は v2.5.2 まで出荷完了。残るのは docs / examples 系の継続作業のみ:
 
 - **`docs/verification.md` の精緻化**: MoE モデルの罠・rolling-window タイミング制約・goal_mode 実機検証知見を反映
 - **`examples/providers.production-grade.yaml`**: `monthly_budget_usd` / `memory_pressure_action` / `goal_mode: true` を組み合わせた production yaml 雛形
@@ -459,6 +459,8 @@ major / minor を 1 行ずつ。**v0.1〜v2.5 は全て出荷済み (✅)**。su
 | **v2.3.0a4** | 2026-05-08 | Plugin SDK — `coderouter.plugins` (input_filter / observer hook)、entry_points discovery | ✅ |
 | **v2.4.0** | 2026-05-15 | Goal-session awareness — `goal_progress_stall` / `goal_mode` / `replay --suggest-rules` | ✅ |
 | **v2.5.0** | 2026-05-22 | Launcher — llama.cpp / vllm の起動・管理 GUI (デスクトップGUI版 + Web版) | ✅ |
+| **v2.5.1** | 2026-05-22 | MLX backend (Launcher 3 番目) + docs/ 再編 (start/guides/backends/concepts) + plan.md 再構成 + starlette CVE 修正 | ✅ |
+| **v2.5.2** | 2026-05-22 | Backend-aware Launcher 推奨値 + backend インストールガイド + Launcher docs 統合 | ✅ |
 
 > **v2.5+ の今後ロードマップ** は [`docs/inside/future.md`](./docs/inside/future.md) を参照 (plan.md では重複させない)。
 >
@@ -490,6 +492,8 @@ major / minor を 1 行ずつ。**v0.1〜v2.5 は全て出荷済み (✅)**。su
 | v2.3.0a4 | 2026-05-08 | Plugin SDK — `input_filter` / `observer` hook |
 | v2.4.0 | 2026-05-15 | Goal-session awareness — `goal_progress_stall` / `goal_mode` / `replay --suggest-rules` |
 | v2.5.0 | 2026-05-22 | Launcher — llama.cpp / vllm GUI |
+| v2.5.1 | 2026-05-22 | MLX backend + docs 再編 + starlette CVE 修正 |
+| v2.5.2 | 2026-05-22 | Backend-aware Launcher 推奨値 + backend インストールガイド |
 
 各マイルストーンの DoD・設計判断は plan.md 内の版別節 (v0.1: §7 / v0.2: §8 / v0.5: §9 / v1.0: §10 / v1.5: §11 / v1.6: §12)、振り返りは [`docs/retrospectives/`](./docs/retrospectives/) を参照。
 
@@ -606,8 +610,10 @@ v1.7 以降は実装ペースが上がり、各リリースの詳細を plan.md 
 | **v2.3.0a4** | 2026-05-08 | Plugin SDK — `coderouter.plugins` (`input_filter` / `observer` の 2 hook を engine に統合)、entry_points discovery + supply-chain defense (enabled allowlist)。Core 5 deps 据え置き |
 | **v2.4.0** | 2026-05-15 | Goal-session awareness — `goal_progress_stall` (L4 6 番目シグナル) + `goal_mode` flag (FallbackChain) + `THRESHOLDS_GOAL` preset + `coderouter replay --suggest-rules` (5 ルール統計エンジン、LLM 不要) |
 | **v2.5.0** | 2026-05-22 | Launcher — llama.cpp / vllm backend の起動・管理 GUI。デスクトップGUI版 (`launcher_gui.py`、tkinter) + Web版 (`/launcher` ルート)。YAML-driven option profile、新規依存ゼロ |
+| **v2.5.1** | 2026-05-22 | MLX backend (Launcher 3 番目、`mlx_lm.server`、Apple Silicon 向け) + docs/ をロール別フォルダ (start/guides/backends/concepts) に再編 + bilingual master index (`docs/README.md`) + plan.md 再構成 (1747→721 行) + starlette 1.0.0→1.0.1 (PYSEC-2026-161) |
+| **v2.5.2** | 2026-05-22 | Backend-aware Launcher 推奨値 (llama.cpp はフラグ / vLLM・MLX は空) + `docs/backends/install-backends.md` (llama.cpp / vLLM / MLX インストールガイド) + Launcher docs 3→2 ファイル統合 + backend venv 規約文書化 (`~/.coderouter/backends/<backend>/`) |
 
-**到達点 (v2.5.0)**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher。Runtime deps は出荷以来 5 本据え置き連続。`coderouter-plugin-memory` (別 repo、builtin JSONL + Ollama backend、stdlib only) も v0.4.0 まで並行リリース済み。
+**到達点 (v2.5.2)**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX)。Runtime deps は出荷以来 5 本据え置き連続。`coderouter-plugin-memory` (別 repo、builtin JSONL + Ollama backend、stdlib only) も v0.4.0 まで並行リリース済み。
 
 > v2.5+ の今後ロードマップ・Vision・競合分析は [`docs/inside/future.md`](./docs/inside/future.md) を参照。plan.md ではこれ以降の将来計画を重複させない。
 
@@ -675,7 +681,7 @@ v0.1〜v2.5 の item-level 実装履歴は [`CHANGELOG.md`](./CHANGELOG.md) に�
 
 ### 本当に未消化のアクション
 
-実装本体は v2.5.0 まで完了済みのため、残るのは小粒の継続作業のみ:
+実装本体は v2.5.2 まで完了済みのため、残るのは小粒の継続作業のみ:
 
 - [ ] **Anthropic ヒューリスティック表のメンテ signal** — (a) 週次 `/v1/models` diff、または (b) 未知モデル検出時に warn ログ。capability registry をモデルファミリ追加に追従させる仕組み。(b) は既存 gate 計算からほぼ無料で取れる。
 - [ ] **`docs/verification.md` の精緻化** — MoE モデルの罠 / rolling-window タイミング制約 / goal_mode 実機検証知見を反映。

@@ -21,6 +21,7 @@ Index of CodeRouter's public documentation — find the right page by what you w
 | ローカル LLM を起動したい / Launch a local LLM | [backends/launcher-quickstart](backends/launcher-quickstart.md) |
 | APIキー・機密の扱い / Secrets & security | [guides/security](guides/security.md) |
 | 仕組みを理解したい / Understand the design | [concepts/architecture](concepts/architecture.md) |
+| プラグインで拡張したい / Extend with plugins | [対応プラグイン / Plugins](#対応プラグイン--plugins) |
 
 ---
 
@@ -93,4 +94,38 @@ CodeRouter の仕組みと信頼性機構。 / How CodeRouter works and its reli
 
 ---
 
-最終更新 / Last updated: 2026-05-22
+## 対応プラグイン / Plugins
+
+CodeRouter は v2.3.0 で入った **Plugin SDK** により、別パッケージのプラグインを *opt-in* で読み込めます。`plugins.enabled` に名前を明示したときだけ作動する（サプライチェーン防御）ため、インストールしただけでは何も起きません。各プラグインは独立した PyPI パッケージなので、**コアの依存は一切増えません**。
+
+CodeRouter's **Plugin SDK** (since v2.3.0) loads out-of-tree plugins *opt-in*: a plugin runs only when its name is listed in `plugins.enabled` (supply-chain defense), so installing one does nothing by itself. Each plugin ships as a separate PyPI package, so **the core's dependencies never grow**.
+
+| プラグイン / Plugin | 何をするか / What it does | インストール / Install | リポジトリ / Repo |
+|---|---|---|---|
+| **compress** | ツール出力（JSON / ログ）を LLM に届く前に圧縮してトークンを削減。原文はローカル保持で可逆（CCR）。`cache-align` で Anthropic プロンプトキャッシュも整列。<br>Compresses tool output (JSON / logs) before it reaches the LLM to cut tokens; originals kept locally and reversible (CCR). `cache-align` also aligns Anthropic prompt caching. | `pip install coderouter-plugin-compress` | [coderouter-plugin-compress](https://github.com/zephel01/coderouter-plugin-compress) |
+| **memory** | 応答から key facts を抽出して `facts.jsonl` に蓄積し、次セッションの system prompt へ自動注入。「毎回同じ説明」を wire 層で解消。<br>Extracts key facts from responses into `facts.jsonl` and auto-injects them into the next session's system prompt — solving "explain it every time" at the wire layer. | `pip install coderouter-plugin-memory` | [coderouter-plugin-memory](https://github.com/zephel01/coderouter-plugin-memory) |
+
+有効化は `providers.yaml` に追記するだけ。起動ログに `plugin-loaded` が出れば有効です。
+Enable by adding to `providers.yaml`; a `plugin-loaded` line in the startup log confirms activation.
+
+```yaml
+plugins:
+  enabled:
+    - compress          # ツール出力を圧縮 / compress tool output
+    - compress-stats    # 圧縮率を coderouter stats に出力 / report compression ratio
+    - cache-align       # プロンプトキャッシュのブレークポイント整列 / align prompt-cache breakpoints
+    - memory            # セッション横断メモリ / cross-session memory
+  config:
+    compress:
+      mode: safe        # off | safe | aggressive
+      ccr: true         # 圧縮の可逆復元（既定 on）/ reversible re-expansion (default on)
+    memory:
+      consolidate_model: qwen3:1.7b
+```
+
+各プラグインの詳細・設定は上記リポジトリの README を参照してください。
+See each plugin's repo README for full configuration.
+
+---
+
+最終更新 / Last updated: 2026-06-24
