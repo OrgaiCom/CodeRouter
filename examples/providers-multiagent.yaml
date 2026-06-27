@@ -1,0 +1,188 @@
+# ============================================================
+# CodeRouter providers.yaml — マルチエージェント Phase 0 (テスト)
+# 【カテゴリ】 自前マルチエージェント / 役割別プロファイル骨子
+#
+# 出典: docs/inside/future.md §5 / CodeRouter_MultiAgent_Proposal.md
+# 目的: planner / coder / reviewer を別モデルに割り当て、上位の
+#       orchestrator (CodeRouter のクライアント) が役割ごとに
+#       使い分けられるようにする。Phase 0 は Ollama 小〜中モデルのみ。
+#
+# ── 2 つの使い分け経路 ──────────────────────────────────
+#  (A) orchestrator が役割を明示する【主経路・推奨】
+#      各サブ呼び出しに HTTP ヘッダを付ける:
+#         X-CodeRouter-Profile: planner   (または coder / reviewer)
+#      precedence: body.profile > X-CodeRouter-Profile
+#                  > X-CodeRouter-Mode > auto_router > default_profile
+#      → 明示した瞬間に auto_router は発火しないので確実。
+#
+#  (B) 明示なしの単発リクエスト【保険】
+#      default_profile: auto なので末尾の auto_router: ルールが
+#      本文を見て planner/coder/reviewer に自動振り分けする。
+#
+# ── 前提 (2026-06-27 時点で pull 済み、追加DL不要) ─────────
+#   ollama pull qwen3.5:9b              # planner   (6.6 GB)
+#   ollama pull qwen3-coder:30b         # coder     (18 GB)
+#   ollama pull qwen2.5-coder:7b        # reviewer  (4.7 GB)
+#   # 任意 (coder の差し替え候補):
+#   #   devstral-small-2:24b-instruct-2512-q4_K_M  (15 GB, agentic 寄り)
+#   #   qwen3.6:35b-a3b                            (23 GB, MoE active 3B, 本番候補)
+#
+# メモリ目安 (RTX 5090 32GB):
+#   planner(6.6) + coder(18) 同時常駐 ≈ 24.6GB + KV → 収まる。
+#   reviewer(4.7) は Ollama スワップで十分。
+#
+# 使い方:
+#   1. cp この file ~/.coderouter/providers.yaml
+#   2. coderouter serve --port 8088
+#   3. 動作確認 (役割明示):
+#        curl http://localhost:8088/v1/chat/completions \
+#          -H 'Content-Type: application/json' \
+#          -H 'X-CodeRouter-Profile: coder' \
+#          -d '{"model":"x","messages":[{"role":"user","content":"write a fib() in python"}]}'
+# ============================================================
+
+allow_paid: false
+default_profile: auto          # ← auto_router を有効化 (経路Bの保険)
+display_timezone: Asia/Tokyo
+
+# 短縮名で役割を選びたいとき (X-CodeRouter-Mode: plan など)
+mode_aliases:
+  plan: planner
+  code: coder
+  review: reviewer
+
+# ------------------------------------------------------------
+# providers — すべて Ollama 単一エンドポイント (localhost:11434)
+# qwen3 系は <think> を吐くので strip_thinking で除去。
+# ------------------------------------------------------------
+providers:
+  # planner / summarizer — 軽量・汎用推論
+  - name: ollama-planner-qwen35-9b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.5:9b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # coder — コード特化・tool calling 強い (primary)
+  - name: ollama-coder-qwen3coder-30b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3-coder:30b
+    paid: false
+    timeout_s: 300            # 30B は prefill が重いので長め
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # coder 代替 — Mistral devstral (agentic 挙動・tool 呼び出し向き)
+  - name: ollama-coder-devstral-24b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: devstral-small-2:24b-instruct-2512-q4_K_M
+    paid: false
+    timeout_s: 300
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # coder 本番候補 — Qwen3.6 35B MoE (active 3B、速度3B級/品質35B級)
+  # Phase 0 では fallback 末尾。Step 4 のサービング最適化で主役に。
+  - name: ollama-coder-qwen36-35b-a3b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.6:35b-a3b
+    paid: false
+    timeout_s: 300
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # reviewer — 軽量・コード理解あり。検証/レビュー役
+  - name: ollama-reviewer-qwen25coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+# ------------------------------------------------------------
+# profiles — orchestrator が役割名で直接引く【主経路】
+# ------------------------------------------------------------
+profiles:
+  # planner — 計画立案・タスク分解・要約。軽量モデルで高速に。
+  - name: planner
+    append_system_prompt: |
+      You are the PLANNER. Decompose the task into a short, ordered list of
+      concrete steps. Do not write final code. Be terse and structured.
+    providers:
+      - ollama-planner-qwen35-9b
+      - ollama-reviewer-qwen25coder-7b   # 落ちたとき用の軽量 fallback
+
+  # coder — 実装・リファクタリング。重めのモデルを fallback 連鎖で。
+  - name: coder
+    append_system_prompt: |
+      You are the CODER. Implement exactly what the plan specifies.
+      Prefer code blocks over prose. Use tools precisely; batch independent ops.
+    # 長時間 session の context overflow 自動防止 (例の coding プロファイル準拠)
+    context_budget_action: trim
+    context_budget_warn_threshold: 0.80
+    context_budget_trim_threshold: 0.90
+    context_budget_trim_target: 0.75
+    context_budget_preserve_last_n: 4
+    providers:
+      - ollama-coder-qwen3coder-30b        # primary
+      - ollama-coder-devstral-24b          # 代替 (agentic)
+      - ollama-coder-qwen36-35b-a3b        # 本番候補 (MoE)
+      - ollama-reviewer-qwen25coder-7b     # 最終 fallback (軽量)
+
+  # reviewer — 差分レビュー・検証・失敗フィードバック生成。
+  - name: reviewer
+    append_system_prompt: |
+      You are the REVIEWER. Check the code/diff for correctness, bugs, and
+      whether it satisfies the plan. Output concise, actionable findings only.
+    providers:
+      - ollama-reviewer-qwen25coder-7b
+      - ollama-planner-qwen35-9b           # fallback
+
+# ------------------------------------------------------------
+# auto_router — 経路B (役割を明示しない単発リクエストの保険)
+# orchestrator が X-CodeRouter-Profile を付ける限り発火しない。
+# ------------------------------------------------------------
+auto_router:
+  rules:
+    # レビュー/検証の意図 → reviewer
+    - id: ma:review-intent
+      profile: reviewer
+      match:
+        content_regex: "(?i)review|レビュー|検証|verify|critique"
+
+    # 密なコードブロック → coder
+    - id: ma:code-fence-dense
+      profile: coder
+      match:
+        code_fence_ratio_min: 0.15
+
+    # ツール宣言あり → coder (実装/エージェント挙動寄せ)
+    - id: ma:has-tools
+      profile: coder
+      match:
+        has_tools: true
+
+  # どのルールにも当たらなければ planner (計画から入る)
+  default_rule_profile: planner

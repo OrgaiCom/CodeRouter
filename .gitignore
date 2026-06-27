@@ -36,6 +36,7 @@ ENV/
 # _OUTPUTS
 # ============================================================
 _OUTPUTS/
+_run/
 
 # uv
 # Note: uv.lock SHOULD be committed (per plan.md §5.4)
