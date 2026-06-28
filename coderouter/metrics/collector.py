@@ -197,6 +197,16 @@ class MetricsCollector(logging.Handler):
         self._language_tax_usd: dict[str, float] = {}
         self._language_tax_usd_aggregate: float = 0.0
 
+        # token-savings accounting. Tokens that never reached the backend
+        # because a reduction mechanism shrank or dropped them. Two
+        # mechanisms feed this: ``trim`` (core context-budget guard, derived
+        # from the existing ``context-budget-trimmed`` event) and
+        # ``compress`` (the optional compress plugin, via the neutral
+        # ``tokens-saved`` event). Owned by core so the figure exists even
+        # when no plugin is installed.
+        self._tokens_saved_total: int = 0
+        self._tokens_saved_by_mechanism: Counter[str] = Counter()
+
         # v2.0-F (L1): context budget guard counters. Per-profile counts
         # of warnings (over warn threshold) and trims (messages removed).
         # The ``latest_usage_ratio`` dict records the most recent ratio
@@ -425,6 +435,41 @@ class MetricsCollector(logging.Handler):
                 profile = _str(extras.get("profile"))
                 self._context_budget_trims_total += 1
                 self._context_budget_trims_by_profile[profile] += 1
+                # token-savings: the trim already carries the estimated
+                # before/after token counts, so fold the delta into the
+                # shared savings buckets (mechanism="trim").
+                before = extras.get("estimated_tokens_before")
+                after = extras.get("estimated_tokens_after")
+                if isinstance(before, int | float) and isinstance(
+                    after, int | float
+                ):
+                    saved = max(0, int(before) - int(after))
+                    if saved:
+                        self._tokens_saved_total += saved
+                        self._tokens_saved_by_mechanism["trim"] += saved
+            elif event == "tokens-saved":
+                # Neutral token-savings event emitted by non-core reduction
+                # mechanisms (e.g. the compress plugin). Carries a
+                # ``mechanism`` label plus either a precomputed
+                # ``tokens_saved`` or a ``tokens_before`` / ``tokens_after``
+                # pair. Negative deltas clamp to zero. No core import needed
+                # by the emitter — it just logs this record name.
+                mechanism = _str(extras.get("mechanism")) or "unknown"
+                saved_raw = extras.get("tokens_saved")
+                before = extras.get("tokens_before")
+                after = extras.get("tokens_after")
+                if isinstance(saved_raw, int | float):
+                    saved = max(0, int(saved_raw))
+                elif isinstance(before, int | float) and isinstance(
+                    after, int | float
+                ):
+                    saved = max(0, int(before) - int(after))
+                else:
+                    saved = 0
+                if saved:
+                    self._tokens_saved_total += saved
+                    self._tokens_saved_by_mechanism[mechanism] += saved
+                self._push_recent(event, extras, record)
             elif event == "drift-detected":
                 # v2.0-G (L4): drift detection fired.
                 provider = _str(extras.get("provider"))
@@ -624,6 +669,11 @@ class MetricsCollector(logging.Handler):
                     "language_tax_usd_aggregate": round(
                         self._language_tax_usd_aggregate, 6
                     ),
+                    # token-savings: total + per-mechanism (trim / compress).
+                    "tokens_saved_total": self._tokens_saved_total,
+                    "tokens_saved_by_mechanism": dict(
+                        self._tokens_saved_by_mechanism
+                    ),
                     # v2.0-F (L1): context budget guard aggregate counters.
                     "context_budget_warnings_total": self._context_budget_warnings_total,
                     "context_budget_trims_total": self._context_budget_trims_total,
@@ -684,6 +734,10 @@ class MetricsCollector(logging.Handler):
                 "chain_budget_exceeded_total": self._chain_budget_exceeded_total,
                 "chain_memory_pressure_blocked_total": self._chain_memory_pressure_blocked_total,
                 "chain_uniform_auth_failure_total": self._chain_uniform_auth_failure_total,
+                "tokens_saved_total": self._tokens_saved_total,
+                "tokens_saved_by_mechanism": dict(
+                    self._tokens_saved_by_mechanism
+                ),
                 "probe_rounds_total": self._probe_rounds_total,
             }
 
@@ -724,6 +778,9 @@ class MetricsCollector(logging.Handler):
             self._language_tax_usd_aggregate += float(
                 state.get("language_tax_usd_aggregate", 0.0)
             )
+            self._tokens_saved_total += int(state.get("tokens_saved_total", 0))
+            for k, v in (state.get("tokens_saved_by_mechanism") or {}).items():
+                self._tokens_saved_by_mechanism[k] += int(v)
             self._chain_paid_gate_blocked_total += int(
                 state.get("chain_paid_gate_blocked_total", 0)
             )
@@ -782,6 +839,9 @@ class MetricsCollector(logging.Handler):
             # v2.6
             self._language_tax_usd.clear()
             self._language_tax_usd_aggregate = 0.0
+            # token-savings
+            self._tokens_saved_total = 0
+            self._tokens_saved_by_mechanism.clear()
             # v2.0-H (L6)
             self._partial_stitch_surfaced_total = 0
             # v2.0-I
