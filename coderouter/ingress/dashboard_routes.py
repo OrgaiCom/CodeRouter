@@ -184,6 +184,21 @@ _DASHBOARD_HTML = r"""<!doctype html>
         </div>
       </div>
       <div id="language-tax-by-provider" class="text-xs text-slate-400 tabnum mt-3"></div>
+      <!-- Token Savings: trim (core budget guard) + compress (plugin) -->
+      <div class="grid grid-cols-3 gap-3 mt-3">
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Tokens saved &middot; trim</div>
+          <div class="text-2xl font-semibold tabnum text-sky-400" data-bind="tokens_saved_trim">0</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Tokens saved &middot; compress</div>
+          <div class="text-2xl font-semibold tabnum text-sky-400" data-bind="tokens_saved_compress">0</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Tokens saved &middot; total</div>
+          <div class="text-2xl font-semibold tabnum text-green-400" data-bind="tokens_saved_total">0</div>
+        </div>
+      </div>
     </section>
     <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
       <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Usage Mix</h2>
@@ -474,6 +489,14 @@ _DASHBOARD_HTML = r"""<!doctype html>
       rows.map(([n, v]) =>
         '<span class="mr-4"><span class="text-slate-500">' + escapeHTML(n) +
         '</span> ' + usd(v) + '</span>').join("");
+    // token-savings tiles. trim comes from the core budget guard;
+    // compress from the optional plugin. Collector zero-fills, so an
+    // install with neither still renders "0" cleanly.
+    const ts = c.tokens_saved_by_mechanism || {};
+    const intfmt = (x) => (Number(x) || 0).toLocaleString();
+    setBind("tokens_saved_trim", intfmt(ts.trim));
+    setBind("tokens_saved_compress", intfmt(ts.compress));
+    setBind("tokens_saved_total", intfmt(c.tokens_saved_total));
   };
 
   const renderSnapshot = (snap) => {
