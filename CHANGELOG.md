@@ -6,6 +6,51 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.6.1] — 2026-06-28 (Token-savings accounting)
+
+Patch release: surfaces **token-savings accounting** in the metrics layer
+and dashboard. The figure is owned by core, so it appears even when no
+plugin is installed (trim savings from the context-budget guard), and the
+optional `compress` plugin adds to the same total via a neutral
+`tokens-saved` log event. **No new core dependency**, **no behavioral
+change** to existing paths, and **fully backward compatible** — existing
+counters and events are untouched; the new buckets are additive.
+
+### Added
+
+- **Token-savings buckets in `MetricsCollector`**
+  (`coderouter/metrics/collector.py`). `tokens_saved_total` plus a
+  per-mechanism breakdown (`tokens_saved_by_mechanism`). Two feeds
+  aggregate under one schema: `trim` (derived from the existing
+  `context-budget-trimmed` event's before/after token estimate) and
+  `compress` (the neutral `tokens-saved` event emitted by the compress
+  plugin — no core import). Wired through `snapshot()`, `save_state()`,
+  `load_state()`, and `reset()`.
+- **Dashboard Token Savings tiles**
+  (`coderouter/ingress/dashboard_routes.py`). Three tiles — trim /
+  compress / total — in the "Cost & Language Tax" panel, zero-filled so a
+  fresh or local-only deployment renders cleanly.
+
+### Docs / examples
+
+- Reorganized provider samples under `examples/` with a category index.
+- Added the language-tax guide (JA/EN) and a Claude Code +
+  llama.cpp/vllm backend guide.
+
+### Tests
+
+- `tests/test_tokens_saved_metric.py` — trim/compress accounting,
+  negative-delta clamping, combined aggregate, persistence round-trip,
+  and reset. Full suite: **1263 passed, 1 skipped**.
+
+### Companion
+
+- `coderouter-plugin-compress` emits the `tokens-saved` event (plugin
+  branch `feat/tokens-saved-emit`, v0.2.0). CodeRouter core works
+  standalone — trim savings show without the plugin.
+
+---
+
 ## [v2.6.0] — 2026-06-20 (Language Tax: measure, route, visualize)
 
 Minor release: makes the CJK **"language tax"** — cloud tokenizers bill
