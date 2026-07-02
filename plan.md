@@ -5,7 +5,7 @@
 
 最終更新: 2026-07-02 (全ソースレビュー改修マージ + 版況更新)
 作成者: zephel01
-状態: **v2.6.1 リリース済み (2026-06-28)** / **PyPI 最新: v2.6.1**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX GUI) + Language Tax 計測/ルーティング + Token-savings accounting に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。**2026-07-02: 全ソースレビュー (26,600 行) を経て高優先度 8 件 (H1〜H8) を PR #34、中優先度 14 件 (M1〜M14) を PR #35 で main にマージ済み (未リリース)。**
+状態: **v2.7.0 リリース済み (2026-07-02)**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX GUI) + Language Tax 計測/ルーティング + Token-savings accounting に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。**2026-07-02: 全ソースレビュー (26,600 行) を経て高優先度 8 件 (H1〜H8) を PR #34、中優先度 14 件 (M1〜M14) を PR #35 で main にマージし、**v2.7.0 として出荷**。**
 - **過去の出荷済みリリース (版履歴の正本)**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / v2.5+ ロードマップ / 市場分析 / 競合分析)**: [`docs/inside/future.md`](./docs/inside/future.md) を参照
 - **本ドキュメント**: 出荷済みマイルストーンのスコープ / 設計判断の記録 + ローカル backend 別接続マトリクス + 検討中 / やらないこと
@@ -16,7 +16,7 @@
 
 到達点 (v2.6.1 時点): 6 系統障害 (L1〜L6) 全対処 + 自己修復 (self-healing) + 状態永続化 (sqlite3 StateStore) + Plugin 層 (input_filter / observer hook) + Goal モード対応 + Launcher (llama.cpp / vllm / MLX GUI)。v2.5.4 で Gemma `<0xNN>` byte-fallback 修復フィルタ (Ollama 0.30 detokenizer 対策)、v2.5.5 で Claude Code CLI ≥ 2.1.154 の非仕様 `role: "system"` 正規化 (ingress 側 workaround)、v2.6.0 で **Language Tax** (CJK トークン税) の計測 / ルーティング (`cjk_ratio_min` matcher) / 可視化 + starlette 1.3.1 への CVE 更新、v2.6.1 で **Token-savings accounting** (trim / compress のトークン節約量をメトリクス・ダッシュボードに集約) を出荷。Runtime deps は出荷以来 5 本据え置き連続。
 
-- **2026-07-02 レビュー改修 (未リリース)**: 全ソース (26,600 行) レビューで検出した高優先度 8 件 (H1〜H8、PR #34) / 中優先度 14 件 (M1〜M14、PR #35) を main にマージ。テストは **1263 → 1401** (回帰テスト 139 件追加、既存非破壊)。運用に効く新要素: 環境変数 **`CODEROUTER_LAUNCHER_TOKEN`** (launcher start/stop/delete のトークン認証、opt-in・未設定は従来動作) / **`CODEROUTER_ALLOWED_HOSTS`** (Host 検証の追加許可) / **`CODEROUTER_MAX_BODY_BYTES`** (ボディ上限、既定 64MB)。挙動変更: 不正設定 (存在しない provider 名 / 重複名 / 逆転閾値 / `has_tools: false`) が起動時 fail-fast エラーに、drift 降格が adaptive 無効時も実効化、adaptive routing がストリーミングでも観測収集を実効化、request/audit ログが最大 20 件 / 2 秒の遅延書き込みに。詳細: `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) / 改修サマリ H1-H8 (`_OUTPUTS/code-review/fixes_H/`) / 改修サマリ M1-M14 (`_OUTPUTS/code-review/fixes_M/`)。
+- **2026-07-02 レビュー改修 (v2.7.0)**: 全ソース (26,600 行) レビューで検出した高優先度 8 件 (H1〜H8、PR #34) / 中優先度 14 件 (M1〜M14、PR #35) を main にマージ。テストは **1263 → 1401** (回帰テスト 139 件追加、既存非破壊)。運用に効く新要素: 環境変数 **`CODEROUTER_LAUNCHER_TOKEN`** (launcher start/stop/delete のトークン認証、opt-in・未設定は従来動作) / **`CODEROUTER_ALLOWED_HOSTS`** (Host 検証の追加許可) / **`CODEROUTER_MAX_BODY_BYTES`** (ボディ上限、既定 64MB)。挙動変更: 不正設定 (存在しない provider 名 / 重複名 / 逆転閾値 / `has_tools: false`) が起動時 fail-fast エラーに、drift 降格が adaptive 無効時も実効化、adaptive routing がストリーミングでも観測収集を実効化、request/audit ログが最大 20 件 / 2 秒の遅延書き込みに。詳細: `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) / 改修サマリ H1-H8 (`_OUTPUTS/code-review/fixes_H/`) / 改修サマリ M1-M14 (`_OUTPUTS/code-review/fixes_M/`)。
 - **v2.5+ の今後ロードマップ / Vision / 競合分析 / 市場分析** は [`docs/inside/future.md`](./docs/inside/future.md) を参照 (plan.md では重複させない)。
 - **Reactive 発火条件** (運用ルール、reactive but focused) も future.md §3 に集約済み。
 
@@ -74,7 +74,7 @@ lmstudio-anthropic:
 
 ### 今後の作業 (docs / examples 整備)
 
-実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を main にマージ済み (未リリース)。残るのは docs / examples 系の継続作業と、レビューで積み残した低優先度リファクタのみ:
+実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を **v2.7.0 (2026-07-02)** として出荷済み。残るのは docs / examples 系の継続作業と、レビューで積み残した低優先度リファクタのみ:
 
 - **新 env var の docs 反映**: `CODEROUTER_LAUNCHER_TOKEN` / `CODEROUTER_ALLOWED_HOSTS` / `CODEROUTER_MAX_BODY_BYTES` を運用ガイド・troubleshooting に追記 (レビュー改修で追加、未 doc 化)
 - **レビュー低優先度リファクタ (L1〜L5)**: バグ修正が落ち着いてから着手予定。L1 = `fallback.py` (2,416 行) の 1 試行前後処理の集約、L2 = `logging.py` (1,481 行) の汎用 `emit_event()` 化、L3 = `schemas.py` / `doctor.py` の分割、L4 = 重複コード (プロファイル解決 / adapter エラー変換 / output filter) の集約、L5 = その他小粒 (Prometheus 未出力メトリクス / `restart_command` の `shell=True` / 月次予算 TOCTOU 等)。詳細は `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) の「優先度: 低」節
@@ -632,7 +632,7 @@ v1.7 以降は実装ペースが上がり、各リリースの詳細を plan.md 
 
 **到達点 (v2.6.1)**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX) + Language Tax 計測/ルーティング + Token-savings accounting。Runtime deps は出荷以来 5 本据え置き連続。`coderouter-plugin-memory` (別 repo、builtin JSONL + Ollama backend、stdlib only) も v0.4.0 まで並行リリース済み。
 
-> 2026-07-02 の全ソースレビュー改修 (H1〜H8 / M1〜M14) は main にマージ済みだがリリース番号未採番 (未リリース)。詳細は本ドキュメント冒頭「現況サマリ」の 2026-07-02 段落を参照。
+> 2026-07-02 の全ソースレビュー改修 (H1〜H8 / M1〜M14) は main にマージ後、**v2.7.0 (2026-07-02)** として採番・リリース済み。詳細は本ドキュメント冒頭「現況サマリ」の 2026-07-02 段落を参照。
 
 > v2.5+ の今後ロードマップ・Vision・競合分析は [`docs/inside/future.md`](./docs/inside/future.md) を参照。plan.md ではこれ以降の将来計画を重複させない。
 
@@ -700,7 +700,7 @@ v0.1〜v2.6 の item-level 実装履歴は [`CHANGELOG.md`](./CHANGELOG.md) に�
 
 ### 本当に未消化のアクション
 
-実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を main にマージ済み (未リリース)。残るのは小粒の継続作業とレビュー低優先度リファクタ (L1〜L5) のみ:
+実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を **v2.7.0 (2026-07-02)** として出荷済み。残るのは小粒の継続作業とレビュー低優先度リファクタ (L1〜L5) のみ:
 
 - [ ] **新 env var の docs 反映** — `CODEROUTER_LAUNCHER_TOKEN` / `CODEROUTER_ALLOWED_HOSTS` / `CODEROUTER_MAX_BODY_BYTES` を運用ガイド・troubleshooting に追記 (レビュー改修で追加、未 doc 化)。
 - [ ] **レビュー低優先度リファクタ (L1〜L5)** — `fallback.py` / `logging.py` / `schemas.py` / `doctor.py` の分解、重複コード集約、Prometheus 未出力メトリクス等の小粒。詳細は `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管)。

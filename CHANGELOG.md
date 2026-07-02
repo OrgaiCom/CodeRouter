@@ -6,7 +6,7 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [v2.7.0] — 2026-07-02 (Reliability & security: full-source review fixes)
 
 22 reliability and security fixes from a full-source review (26,600 lines),
 landed as two sequential PRs: high-priority **PR #34** (H1–H8) and
