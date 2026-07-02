@@ -625,6 +625,16 @@ async def stream_chat_to_anthropic_events(
             if isinstance(pt, int) and pt >= 0:
                 state.upstream_input_tokens = pt
 
+    # Empty-stream guard (H6): if the upstream iterator produced no chunks,
+    # state.started is still False and no message_start was emitted. Emitting
+    # message_delta/message_stop without a preceding message_start is a wire
+    # protocol violation that breaks the Anthropic SSE parser (Claude Code
+    # aborts). Synthesize the opening event so the terminator sequence is
+    # always framed by a valid message_start.
+    if not state.started:
+        state.started = True
+        yield _start_event(state.model, state.message_id)
+
     # Terminator sequence
     for evt in _close_current_block(state):
         yield evt
