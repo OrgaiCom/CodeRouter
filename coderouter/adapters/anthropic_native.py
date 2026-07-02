@@ -35,6 +35,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from coderouter.adapters.base import (
     AdapterError,
@@ -410,7 +411,22 @@ class AnthropicAdapter(BaseAdapter):
         # (future additions like thinking blocks) pass through via
         # extra="allow" on AnthropicResponse.
         data["coderouter_provider"] = self.name
-        return AnthropicResponse.model_validate(data)
+        # M6: guard the model validation. A 200 body that isn't a valid
+        # Anthropic Messages response (missing ``content``/``id``, an
+        # error envelope returned with a 200, etc.) would otherwise raise
+        # a bare pydantic ValidationError that escapes the engine's
+        # AdapterError-based retry/fallback path. Convert to a retryable
+        # AdapterError so the chain can fall through (mirrors the
+        # invalid-JSON branch above, but retryable — a malformed shape is
+        # usually transient upstream noise rather than a config fault).
+        try:
+            return AnthropicResponse.model_validate(data)
+        except ValidationError as exc:
+            raise AdapterError(
+                f"malformed response shape from upstream: {exc}",
+                provider=self.name,
+                retryable=True,
+            ) from exc
 
     async def stream_anthropic(
         self,
