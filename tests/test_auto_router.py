@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 # Skip the whole file until v1.6-A ships. Individual sub-modules may
 # land at different sub-releases, so we guard on the main entry point.
@@ -1195,14 +1196,11 @@ def test_has_tools_false_rejected_at_load() -> None:
     means "unset" via the _exactly_one validator path.
     """
     # Note: pydantic accepts ``None`` (the default) and ``True`` cleanly.
-    # ``False`` is the ambiguous value we want to surface — currently it
-    # passes _exactly_one (since it's not None) but would never match
-    # anything, so we document expected behavior here. If we tighten the
-    # validator later to reject False explicitly, this test will flip
-    # from "matches nothing" to "rejected at load".
-    matcher = RuleMatcher(has_tools=False)
-    # _exactly_one passes (False is "set", just not True).
-    assert matcher.has_tools is False
-    # But _match_rule treats it as "no match" because we test ``is True``.
-    # That's the safety net — even if a user writes has_tools: false in
-    # YAML, the rule never fires, and traffic stays on the default path.
+    # ``False`` used to pass _exactly_one (since it's not None) while
+    # never matching anything — a silent dead rule. The validator now
+    # rejects it explicitly at load time, flipping this test from
+    # "matches nothing" to "rejected at load" as anticipated above.
+    with pytest.raises(ValidationError):
+        RuleMatcher(has_tools=False)
+    with pytest.raises(ValidationError):
+        RuleMatcher(has_image=False)
