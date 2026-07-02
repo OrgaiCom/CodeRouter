@@ -68,6 +68,26 @@ _RETRYABLE_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
 _DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 
 
+def anthropic_messages_url(base_url: str) -> str:
+    """Resolve the ``/v1/messages`` endpoint URL from a ``base_url``.
+
+    ``base_url`` may be given with or without a trailing ``/v1`` — users
+    may point it at either ``https://api.anthropic.com`` or
+    ``https://api.anthropic.com/v1`` (LM Studio and similar servers
+    commonly advertise the latter). We normalize by stripping a trailing
+    ``/v1`` so appending ``/v1/messages`` always yields a valid,
+    non-duplicated URL.
+
+    Shared by :class:`AnthropicAdapter` and the continuous-probe guard so
+    both hit the exact same endpoint (see bug H4: a mismatch made the
+    probe target ``/v1/v1/messages`` and 404 on healthy backends).
+    """
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return f"{base}/v1/messages"
+
+
 class AnthropicAdapter(BaseAdapter):
     """Native Anthropic Messages API adapter (passthrough).
 
@@ -87,15 +107,10 @@ class AnthropicAdapter(BaseAdapter):
 
         ``base_url`` may be given with or without a trailing ``/v1`` —
         we normalize by stripping it so appending ``/v1/messages``
-        always yields a valid URL.
+        always yields a valid URL. Delegates to the shared
+        :func:`anthropic_messages_url` helper.
         """
-        base = str(self.config.base_url).rstrip("/")
-        # Users may point base_url at either `https://api.anthropic.com`
-        # or `https://api.anthropic.com/v1`. We normalize to the former so
-        # we can always append /v1/messages.
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
-        return f"{base}/v1/messages"
+        return anthropic_messages_url(str(self.config.base_url))
 
     def _headers(self, request: AnthropicRequest | None = None) -> dict[str, str]:
         """Build Anthropic-native HTTP headers, including beta-header forwarding.
@@ -161,21 +176,21 @@ class AnthropicAdapter(BaseAdapter):
         that auth works and the endpoint is reachable.
         """
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    self._url(),
-                    headers=self._headers(),
-                    json={
-                        "model": self.config.model,
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "ping"}],
-                    },
-                )
-                # 200 is clearly healthy. 4xx auth errors indicate the
-                # endpoint is reachable even if the key is bad — still a
-                # "the server answered" signal for healthcheck purposes.
-                # 5xx is upstream trouble.
-                return resp.status_code < 500
+            resp = await self.client().post(
+                self._url(),
+                headers=self._headers(),
+                json={
+                    "model": self.config.model,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+                timeout=5.0,
+            )
+            # 200 is clearly healthy. 4xx auth errors indicate the
+            # endpoint is reachable even if the key is bad — still a
+            # "the server answered" signal for healthcheck purposes.
+            # 5xx is upstream trouble.
+            return resp.status_code < 500
         except httpx.HTTPError:
             return False
 
@@ -331,8 +346,9 @@ class AnthropicAdapter(BaseAdapter):
         timeout = self.effective_timeout(overrides)
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=payload, headers=self._headers(request))
+            resp = await self.client().post(
+                url, json=payload, headers=self._headers(request), timeout=timeout
+            )
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout contacting {url}", provider=self.name, retryable=True
@@ -424,10 +440,14 @@ class AnthropicAdapter(BaseAdapter):
         logged_flag: list[bool] = [False]
 
         try:
-            async with (
-                httpx.AsyncClient(timeout=timeout) as client,
-                client.stream("POST", url, json=payload, headers=self._headers(request)) as resp,
-            ):
+            # H3: stream over the shared client (pool / keep-alive / TLS
+            # reuse). Only the ``stream(...)`` context is scoped here; the
+            # client persists and is closed via ``aclose`` on shutdown. The
+            # ``async with`` releases the response's borrowed connection even
+            # if the caller abandons this generator mid-stream — no GC leak.
+            async with self.client().stream(
+                "POST", url, json=payload, headers=self._headers(request), timeout=timeout
+            ) as resp:
                 if resp.status_code >= 400:
                     body = await resp.aread()
                     raise AdapterError(

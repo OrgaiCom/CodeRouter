@@ -197,9 +197,8 @@ class OpenAICompatAdapter(BaseAdapter):
         base = str(self.config.base_url).rstrip("/")
         url = f"{base}/models"
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url, headers=self._headers())
-                return resp.status_code < 500
+            resp = await self.client().get(url, headers=self._headers(), timeout=5.0)
+            return resp.status_code < 500
         except httpx.HTTPError:
             return False
 
@@ -221,8 +220,9 @@ class OpenAICompatAdapter(BaseAdapter):
         payload = self._payload(request, stream=False, overrides=overrides)
         timeout = self.effective_timeout(overrides)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=payload, headers=self._headers())
+            resp = await self.client().post(
+                url, json=payload, headers=self._headers(), timeout=timeout
+            )
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout contacting {url}", provider=self.name, retryable=True
@@ -325,10 +325,16 @@ class OpenAICompatAdapter(BaseAdapter):
         # seen chunk's id/model so the flush emission looks native.
         last_chunk_template: dict[str, Any] | None = None
         try:
-            async with (
-                httpx.AsyncClient(timeout=timeout) as client,
-                client.stream("POST", url, json=payload, headers=self._headers()) as resp,
-            ):
+            # H3: stream over the shared client so the connection pool /
+            # keep-alive / TLS session are reused. Only the ``stream(...)``
+            # context is entered here — the client itself outlives the
+            # stream and is closed via ``aclose`` on app shutdown. The
+            # ``async with`` guarantees the response (and its borrowed
+            # connection) is released even if the consumer abandons this
+            # generator mid-stream, so no connection leaks on GC.
+            async with self.client().stream(
+                "POST", url, json=payload, headers=self._headers(), timeout=timeout
+            ) as resp:
                 if resp.status_code >= 400:
                     body = await resp.aread()
                     raise AdapterError(

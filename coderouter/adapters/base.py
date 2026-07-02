@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from coderouter.config.schemas import ProviderConfig
@@ -164,16 +165,58 @@ class BaseAdapter(ABC):
     def __init__(self, config: ProviderConfig) -> None:
         """Bind the adapter to a :class:`ProviderConfig`.
 
-        Subclasses do not need to override this; HTTP clients are
-        constructed lazily inside :meth:`generate` / :meth:`stream` so
-        each call can honor a per-call timeout override.
+        Subclasses do not need to override this. A single shared
+        :class:`httpx.AsyncClient` is created lazily on first use (see
+        :meth:`client`) and reused across every call on this adapter so
+        the connection pool, HTTP keep-alive, and TLS session are all
+        reused. Per-call timeouts are still honored by passing
+        ``timeout=`` to ``client.post`` / ``client.stream`` — they do
+        NOT require a fresh client.
         """
         self.config = config
+        # Shared client, created lazily inside the running event loop the
+        # first time an adapter method needs it (see ``client``). Kept as
+        # ``None`` until then so constructing an adapter has no I/O cost and
+        # is safe outside an event loop (e.g. at import / config time).
+        self._client: httpx.AsyncClient | None = None
 
     @property
     def name(self) -> str:
         """Shortcut for ``self.config.name`` — used in log trails and errors."""
         return self.config.name
+
+    # ---- H3: shared HTTP client (connection-pool / keep-alive reuse) ----
+    def client(self) -> httpx.AsyncClient:
+        """Return the shared :class:`httpx.AsyncClient`, creating it lazily.
+
+        The client is created on first use so construction happens inside
+        the running event loop and carries no I/O cost at adapter-build
+        time. Subsequent calls return the same instance, which is what
+        lets httpx reuse pooled connections, keep-alive, and the TLS
+        session across requests.
+
+        No default timeout is baked in here: every call site passes an
+        explicit per-call ``timeout=`` (resolved from the active profile
+        via :meth:`effective_timeout`), so leaving the client timeout
+        unset avoids a surprising default clamping long-running calls.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=None)
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client and drop the reference.
+
+        Idempotent: safe to call when no client was ever created, and
+        safe to call more than once. Invoked from the app lifespan
+        shutdown path so pooled connections are released cleanly rather
+        than left to garbage collection. After ``aclose`` a later call
+        re-creates the client on demand via :meth:`client`.
+        """
+        client = self._client
+        self._client = None
+        if client is not None:
+            await client.aclose()
 
     # ---- v0.6-B override resolution helpers -----------------------------
     def effective_timeout(self, overrides: ProviderCallOverrides | None) -> float:
