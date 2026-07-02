@@ -98,6 +98,11 @@ async def probe_one(
     """
     import os
 
+    # Local import: keeps the module-level import graph free of the
+    # convert ↔ anthropic_native circular dependency (adapters pull in
+    # translation.convert, which pulls back in this adapter).
+    from coderouter.adapters.anthropic_native import anthropic_messages_url
+
     start = time.monotonic()
     provider_name = provider.name
     base_url = str(provider.base_url).rstrip("/")
@@ -116,7 +121,10 @@ async def probe_one(
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             if provider.kind == "anthropic":
-                url = f"{base_url}/v1/messages"
+                # Use the shared normalizer so the probe hits the exact
+                # same endpoint the adapter does — base_url ending in
+                # `/v1` must not produce `/v1/v1/messages` (bug H4).
+                url = anthropic_messages_url(base_url)
                 body: dict[str, Any] = {
                     "model": provider.model,
                     "max_tokens": 1,
