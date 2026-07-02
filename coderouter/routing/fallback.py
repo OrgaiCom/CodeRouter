@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -101,6 +103,71 @@ from coderouter.translation import (
 )
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# M1: request-scoped drift verdict
+#
+# The drift verdict produced while serving one request is per-request
+# state, not engine-global state. A single ``ContextVar`` isolates the
+# verdict per-request: FastAPI/Starlette runs each request handler in its
+# own asyncio task, so the value set inside ``generate_anthropic`` /
+# ``stream_anthropic`` is only visible to the same request's ingress
+# handler, and concurrent requests never observe each other's verdict.
+#
+# Prior to M1 the verdict was stored on a shared engine attribute
+# (``_last_drift_verdict``), which two problems: (1) concurrent requests
+# clobbered each other's verdict, and (2) the cooldown early-return never
+# cleared it, so the ingress header went stale. Both are fixed by scoping
+# the value to the request.
+#
+# Default ``None`` means "no drift observed for this request".
+# ---------------------------------------------------------------------------
+
+_drift_verdict_ctx: ContextVar[DriftVerdict | None] = ContextVar(
+    "coderouter_drift_verdict", default=None
+)
+
+
+# ---------------------------------------------------------------------------
+# M11: request-scoped prepared-dispatch cache
+#
+# The ingress calls ``apply_context_budget`` before dispatching, which
+# resolves the Anthropic chain (including adaptive / drift reordering)
+# and runs the token-count estimate for the budget guard. Then it calls
+# ``generate_anthropic`` / ``stream_anthropic``, which — pre-M11 — re-ran
+# BOTH the chain resolution and the estimate a second time.
+#
+# ``apply_context_budget`` now stashes the resolved chain + the
+# (possibly-trimmed) request + budget status in this request-scoped
+# ContextVar. The engine entry points pick it up and skip the redundant
+# work. The ContextVar is per-request (same isolation rationale as the
+# drift verdict), so concurrent requests never share a prepared chain.
+#
+# Backward compatible: when the ingress did NOT pre-call
+# ``apply_context_budget`` (direct engine callers, unit tests, mock
+# engines), the ContextVar is empty and the entry points resolve + trim
+# as before.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _PreparedDispatch:
+    """Cached result of the pre-dispatch chain resolution + budget guard.
+
+    ``request`` is the possibly-trimmed request that
+    ``apply_context_budget`` returned; reusing it means the budget guard
+    (and its token estimate) does not run again on the second pass.
+    """
+
+    request: AnthropicRequest
+    chain: list[tuple[BaseAdapter, bool]]
+    budget_status: str | None
+
+
+_prepared_dispatch_ctx: ContextVar[_PreparedDispatch | None] = ContextVar(
+    "coderouter_prepared_dispatch", default=None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -904,7 +971,13 @@ class FallbackEngine:
         # Track which providers are currently in drift-demoted state
         # and when their cooldown expires (monotonic timestamp).
         self._drift_demoted: dict[str, float] = {}
-        # Last drift verdict (set by _observe_drift_signal for ingress header).
+        # M1: DEPRECATED shared drift verdict. Retained only so legacy
+        # callers / tests that read ``engine._last_drift_verdict`` do not
+        # break. The authoritative, request-scoped verdict now lives in
+        # the ``_drift_verdict_ctx`` ContextVar (see module docstring).
+        # This attribute mirrors the last verdict written by
+        # ``_observe_drift_signal`` but MUST NOT be relied on for the
+        # ingress header under concurrency — use ``last_drift_severity``.
         self._last_drift_verdict: DriftVerdict | None = None
         # v2.0-J: active recovery probe tasks (one per excluded provider).
         self._recovery_tasks: dict[str, asyncio.Task[None]] = {}
@@ -940,13 +1013,18 @@ class FallbackEngine:
 
     @property
     def last_drift_severity(self) -> str | None:
-        """Return the severity string of the most recent drift verdict, or None.
+        """Return the severity of *this request's* drift verdict, or None.
 
-        The ingress reads this after generate_anthropic / stream_anthropic to
-        set the ``X-CodeRouter-Drift`` response header.  Returns ``"mild"`` or
-        ``"severe"`` when drift was detected, ``None`` otherwise.
+        M1: reads the request-scoped ``_drift_verdict_ctx`` ContextVar so
+        the value reflects only the verdict produced while serving the
+        current request. The ingress reads this after generate_anthropic /
+        stream_anthropic to set the ``X-CodeRouter-Drift`` response header.
+        Returns ``"mild"`` or ``"severe"`` when drift was detected,
+        ``None`` otherwise (including when this request is in a provider's
+        drift cooldown — the ContextVar defaults to None per-request, so
+        the header never goes stale across requests).
         """
-        v = self._last_drift_verdict
+        v = _drift_verdict_ctx.get()
         if v is None or not v.drifted:
             return None
         return v.severity
@@ -1452,10 +1530,15 @@ class FallbackEngine:
         verdict = detect_drift(window, thresholds)
 
         if not verdict.drifted:
+            # M1: leave the request-scoped ContextVar at its default
+            # (None) — do not clear it to a shared value. Mirror onto the
+            # deprecated attribute for legacy readers only.
             self._last_drift_verdict = None
             return None
 
-        # Store for ingress response header.
+        # M1: store request-scoped for the ingress header (authoritative),
+        # and mirror onto the deprecated shared attribute for compat.
+        _drift_verdict_ctx.set(verdict)
         self._last_drift_verdict = verdict
 
         # Emit log
@@ -1725,6 +1808,17 @@ class FallbackEngine:
         if self._profile_is_adaptive(request.profile) and base:
             base = self._adaptive.compute_effective_order(base)
 
+        # M3: drift demotion is applied here, independent of the adaptive
+        # flag. Prior to M3, drift only demoted via
+        # ``AdaptiveAdjuster.demote`` (synthetic failures), which had no
+        # effect unless the profile opted into ``adaptive: true`` AND
+        # enough samples accumulated. Now a drift-demoted provider whose
+        # cooldown is still active is pushed to the back of the chain
+        # deterministically, so the logged "demoted" action matches the
+        # real try-order regardless of profile settings.
+        if base:
+            base = self._apply_drift_demotion(base)
+
         if not anthropic_request_requires_thinking(request):
             return [(a, False) for a in base]
 
@@ -1752,6 +1846,49 @@ class FallbackEngine:
             return False
         return profile.adaptive
 
+    def _apply_drift_demotion(
+        self, adapters: list[BaseAdapter]
+    ) -> list[BaseAdapter]:
+        """M3: push drift-demoted providers to the back of the chain.
+
+        Drift demotion is a mechanism independent of adaptive routing:
+        ``_observe_drift_signal`` records a per-provider cooldown-expiry
+        timestamp in ``self._drift_demoted`` when it detects drift and the
+        profile action is ``promote`` / ``reload``. Here we honor that
+        state by moving still-in-cooldown providers behind the
+        non-demoted ones, preserving relative order within each bucket
+        (stable partition). Expired entries are pruned lazily so a
+        recovered provider returns to its declared position.
+
+        This runs regardless of ``profile.adaptive`` so the "drift
+        demoted" log emitted at detection time matches the actual
+        try-order — the previous behavior only affected order when
+        ``adaptive: true`` and enough synthetic-failure samples had
+        accumulated in the adaptive window.
+        """
+        demoted_map = getattr(self, "_drift_demoted", None)
+        if not demoted_map:
+            return adapters
+
+        now = time.monotonic()
+        # Lazily prune expired cooldowns so recovered providers restore.
+        expired = [p for p, until in demoted_map.items() if now >= until]
+        for provider in expired:
+            demoted_map.pop(provider, None)
+        if not demoted_map:
+            return adapters
+
+        kept: list[BaseAdapter] = []
+        demoted: list[BaseAdapter] = []
+        for adapter in adapters:
+            if adapter.name in demoted_map:
+                demoted.append(adapter)
+            else:
+                kept.append(adapter)
+        if not demoted:
+            return adapters
+        return kept + demoted
+
     async def generate(self, request: ChatRequest) -> ChatResponse:
         """Non-streaming OpenAI-shaped generation with sequential fallback.
 
@@ -1771,8 +1908,19 @@ class FallbackEngine:
                 "try-provider",
                 extra={"provider": adapter.name, "stream": False},
             )
+            # M2: time the attempt so the OpenAI-shaped non-streaming path
+            # feeds the adaptive rolling window too (previously only
+            # generate_anthropic recorded, so OpenAI clients got no
+            # adaptive routing signal).
+            attempt_started = time.monotonic()
             try:
                 response = await adapter.generate(request, overrides=overrides)
+                # M2: record the successful attempt latency.
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                    success=True,
+                )
                 logger.info(
                     "provider-ok",
                     extra={"provider": adapter.name, "stream": False},
@@ -1785,6 +1933,17 @@ class FallbackEngine:
                 )
                 return response
             except AdapterError as exc:
+                # M2: record the failed attempt. Auth failures carry no
+                # useful latency signal (mirrors generate_anthropic).
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(
+                        None
+                        if exc.status_code in {401, 403}
+                        else (time.monotonic() - attempt_started) * 1000.0
+                    ),
+                    success=False,
+                )
                 logger.warning(
                     "provider-failed",
                     extra={
@@ -1821,14 +1980,35 @@ class FallbackEngine:
                 "try-provider",
                 extra={"provider": adapter.name, "stream": True},
             )
+            # M2: measure latency to the first streamed event so the
+            # OpenAI streaming path feeds the adaptive window. Claude Code
+            # and most agents stream, so without this adaptive routing was
+            # effectively inert on the busiest path.
+            attempt_started = time.monotonic()
             stream_iter = adapter.stream(request, overrides=overrides)
             try:
                 first = await anext(stream_iter)
             except StopAsyncIteration:
                 # Adapter produced zero chunks — treat as failure, try next
+                # M2: record the empty-stream failure.
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                    success=False,
+                )
                 errors.append(AdapterError("empty stream", provider=adapter.name, retryable=True))
                 continue
             except AdapterError as exc:
+                # M2: record the pre-first-event failure.
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(
+                        None
+                        if exc.status_code in {401, 403}
+                        else (time.monotonic() - attempt_started) * 1000.0
+                    ),
+                    success=False,
+                )
                 logger.warning(
                     "provider-failed",
                     extra={
@@ -1847,6 +2027,13 @@ class FallbackEngine:
                     break
                 continue
 
+            # M2: first event landed → record success with the
+            # time-to-first-event latency.
+            self._adaptive.record_attempt(
+                adapter.name,
+                latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                success=True,
+            )
             logger.info(
                 "provider-ok",
                 extra={"provider": adapter.name, "stream": True},
@@ -1867,6 +2054,13 @@ class FallbackEngine:
                 async for chunk in stream_iter:
                     yield chunk
             except AdapterError as exc:
+                # M2: a mid-stream failure is a partial failure for
+                # adaptive purposes. We already recorded the success at
+                # first-event; add an error-only observation (no latency)
+                # so the error rate reflects the mid-stream breakage.
+                self._adaptive.record_attempt(
+                    adapter.name, latency_ms=None, success=False
+                )
                 logger.warning(
                     "provider-failed-midstream",
                     extra={
@@ -1922,12 +2116,52 @@ class FallbackEngine:
         The returned request (possibly trimmed) should be passed to the
         engine method; the engine will skip the guard on the second pass
         since the request is already under threshold.
+
+        M11: the resolved chain + trimmed request + status are cached in a
+        request-scoped ContextVar so the immediately-following
+        ``generate_anthropic`` / ``stream_anthropic`` call can skip a
+        second chain resolution AND a second token estimate. See
+        ``_prepared_dispatch_ctx``.
         """
         chain = self._resolve_anthropic_chain(request)
         first_provider_config = chain[0][0].config if chain else None
-        return _apply_context_budget_guard(
+        trimmed_request, status = _apply_context_budget_guard(
             request, config=self.config, first_provider_config=first_provider_config,
         )
+        # M11: stash for the engine entry point to reuse. Keyed to the
+        # request identity so a stale cache from an earlier request on the
+        # same context can't be mistaken for this one.
+        _prepared_dispatch_ctx.set(
+            _PreparedDispatch(
+                request=trimmed_request,
+                chain=chain,
+                budget_status=status,
+            )
+        )
+        return trimmed_request, status
+
+    def _take_prepared_dispatch(
+        self, request: AnthropicRequest
+    ) -> _PreparedDispatch | None:
+        """M11: return + consume the cached prepared dispatch, if valid.
+
+        Returns the ``_PreparedDispatch`` stashed by
+        ``apply_context_budget`` iff it corresponds to ``request`` (identity
+        match — the ingress passes the exact object the guard returned).
+        The cache is cleared on read so a subsequent direct engine call in
+        the same context does not accidentally reuse it.
+        """
+        prepared = _prepared_dispatch_ctx.get()
+        if prepared is None:
+            return None
+        # Clear immediately — single-use per request.
+        _prepared_dispatch_ctx.set(None)
+        if prepared.request is not request:
+            # The engine was handed a different request object than the one
+            # the guard prepared (e.g. a plugin replaced it, or a direct
+            # caller). Fall back to a fresh resolution to stay correct.
+            return None
+        return prepared
 
     # ====================================================================
     # v2.3.0: Plugin SDK hook helpers
@@ -2042,18 +2276,28 @@ class FallbackEngine:
         # grow ``request.system`` without bypassing the budget cap —
         # the budget guard sees the post-filter payload.
         request = await self._apply_input_filters(request)
-        chain = self._resolve_anthropic_chain(request)
 
-        # v2.0-F (L1): context budget guard runs after chain resolution
-        # (needs the first provider's max_context_tokens). May trim the
-        # request's messages if over the trim threshold.
-        # NOTE: When called from the ingress via apply_context_budget()
-        # first, the request is already under threshold — this is a
-        # cheap no-op re-check (estimate < threshold → returns None).
-        first_provider_config = chain[0][0].config if chain else None
-        request, _ctx_status = _apply_context_budget_guard(
-            request, config=self.config, first_provider_config=first_provider_config,
-        )
+        # M11: reuse the chain + trimmed request the ingress already
+        # resolved in ``apply_context_budget`` when neither the tool-loop
+        # guard nor the input filters replaced the request object (the
+        # common no-plugin path). This avoids a second chain resolution
+        # (incl. adaptive/drift reorder) and a second full token estimate.
+        prepared = self._take_prepared_dispatch(request)
+        if prepared is not None:
+            chain = prepared.chain
+            request = prepared.request
+        else:
+            chain = self._resolve_anthropic_chain(request)
+            # v2.0-F (L1): context budget guard runs after chain resolution
+            # (needs the first provider's max_context_tokens). May trim the
+            # request's messages if over the trim threshold.
+            # NOTE: When called from the ingress via apply_context_budget()
+            # first, the request is already under threshold — this is a
+            # cheap no-op re-check (estimate < threshold → returns None).
+            first_provider_config = chain[0][0].config if chain else None
+            request, _ctx_status = _apply_context_budget_guard(
+                request, config=self.config, first_provider_config=first_provider_config,
+            )
 
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
@@ -2267,14 +2511,22 @@ class FallbackEngine:
         # before chain resolution, and the budget guard below sees
         # the post-filter payload.
         request = await self._apply_input_filters(request)
-        chain = self._resolve_anthropic_chain(request)
 
-        # v2.0-F (L1): context budget guard mirrors the non-streaming path.
-        # See apply_context_budget() note — usually a no-op re-check here.
-        first_provider_config = chain[0][0].config if chain else None
-        request, _ctx_status = _apply_context_budget_guard(
-            request, config=self.config, first_provider_config=first_provider_config,
-        )
+        # M11: reuse the ingress-prepared chain + trimmed request when the
+        # guard / filters were no-ops (identity match). Mirrors the
+        # non-streaming path — avoids a redundant resolution + estimate.
+        prepared = self._take_prepared_dispatch(request)
+        if prepared is not None:
+            chain = prepared.chain
+            request = prepared.request
+        else:
+            chain = self._resolve_anthropic_chain(request)
+            # v2.0-F (L1): context budget guard mirrors the non-streaming
+            # path. See apply_context_budget() — usually a no-op re-check.
+            first_provider_config = chain[0][0].config if chain else None
+            request, _ctx_status = _apply_context_budget_guard(
+                request, config=self.config, first_provider_config=first_provider_config,
+            )
 
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
@@ -2326,6 +2578,11 @@ class FallbackEngine:
             # Stage 1: acquire an AnthropicStreamEvent iterator. Failures
             # here are candidates for fallback (no bytes have been sent to
             # the client yet).
+            # M2: time to first event feeds the adaptive window on the
+            # Anthropic streaming path (Claude Code's default). Previously
+            # only the non-streaming generate_anthropic recorded, so the
+            # busiest path produced no adaptive signal.
+            attempt_started = time.monotonic()
             event_iter: AsyncIterator[AnthropicStreamEvent]
             first: AnthropicStreamEvent
             try:
@@ -2351,9 +2608,26 @@ class FallbackEngine:
                     )
                     first = await anext(event_iter)
             except StopAsyncIteration:
+                # M2: record the empty-stream failure.
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                    success=False,
+                )
                 errors.append(AdapterError("empty stream", provider=adapter.name, retryable=True))
                 continue
             except AdapterError as exc:
+                # M2: record the pre-first-event failure. Auth failures
+                # carry no useful latency signal (mirrors generate_anthropic).
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(
+                        None
+                        if exc.status_code in {401, 403}
+                        else (time.monotonic() - attempt_started) * 1000.0
+                    ),
+                    success=False,
+                )
                 logger.warning(
                     "provider-failed",
                     extra={
@@ -2390,6 +2664,13 @@ class FallbackEngine:
                     "downgrade": downgrading,
                 },
             )
+            # M2: first event landed → record success with the
+            # time-to-first-event latency on the Anthropic streaming path.
+            self._adaptive.record_attempt(
+                adapter.name,
+                latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                success=True,
+            )
             # v1.9-E phase 2 (L5): first chunk landed → success for
             # the L5 health monitor on the Anthropic streaming path.
             self._observe_provider_success(
@@ -2404,6 +2685,12 @@ class FallbackEngine:
                     acc.observe(ev)
                     yield ev
             except AdapterError as exc:
+                # M2: mid-stream failure — record an error-only
+                # observation (no latency; first-event success already
+                # recorded) so adaptive error rate reflects the breakage.
+                self._adaptive.record_attempt(
+                    adapter.name, latency_ms=None, success=False
+                )
                 logger.warning(
                     "provider-failed-midstream",
                     extra={

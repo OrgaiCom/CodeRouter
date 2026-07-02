@@ -21,6 +21,8 @@ through to the engine, which applies ``config.default_profile``.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import time
 from collections.abc import AsyncIterator
@@ -39,6 +41,41 @@ logger = get_logger(__name__)
 
 _PROFILE_HEADER = "x-coderouter-profile"
 _MODE_HEADER = "x-coderouter-mode"
+
+# M14: overall SSE stream ceiling — see anthropic_routes for rationale.
+_STREAM_TIMEOUT_MULTIPLIER = 20.0
+_STREAM_TIMEOUT_DEFAULT_S = 900.0
+_STREAM_TIMEOUT_MIN_S = 60.0
+
+
+def _resolve_stream_timeout_s(engine: FallbackEngine, profile: str | None) -> float:
+    """M14: derive the overall stream ceiling (seconds) for a profile.
+
+    Mirrors the Anthropic route. Uses the profile's per-call ``timeout_s``
+    (or the first provider's, or the default) scaled up. Never below
+    ``_STREAM_TIMEOUT_MIN_S``; any resolution failure falls back to
+    ``_STREAM_TIMEOUT_DEFAULT_S``. Does not change the config schema.
+    """
+    per_call: float | None = None
+    try:
+        config = engine.config
+        chosen = profile or config.default_profile
+        chain_cfg = config.profile_by_name(chosen)
+        per_call = getattr(chain_cfg, "timeout_s", None)
+        if per_call is None:
+            for pname in getattr(chain_cfg, "providers", []) or []:
+                pconf = next(
+                    (p for p in config.providers if p.name == pname), None
+                )
+                if pconf is not None:
+                    per_call = getattr(pconf, "timeout_s", None)
+                    break
+    except (AttributeError, KeyError, ValueError):
+        per_call = None
+
+    if per_call is None:
+        return _STREAM_TIMEOUT_DEFAULT_S
+    return max(_STREAM_TIMEOUT_MIN_S, float(per_call) * _STREAM_TIMEOUT_MULTIPLIER)
 
 
 @router.get("/models")
@@ -125,8 +162,10 @@ async def chat_completions(
             ) from exc
 
     if chat_req.stream:
+        # M14: overall stream timeout + client-disconnect cleanup.
+        timeout_s = _resolve_stream_timeout_s(engine, chat_req.profile)
         return StreamingResponse(
-            _sse_iterator(engine, chat_req),
+            _sse_iterator(engine, chat_req, timeout_s=timeout_s),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -139,15 +178,46 @@ async def chat_completions(
     return response.model_dump(exclude_none=True)
 
 
-async def _sse_iterator(engine: FallbackEngine, chat_req: ChatRequest) -> AsyncIterator[str]:
-    """Wrap the engine's stream into SSE wire format."""
+async def _sse_iterator(
+    engine: FallbackEngine,
+    chat_req: ChatRequest,
+    *,
+    timeout_s: float = _STREAM_TIMEOUT_DEFAULT_S,
+) -> AsyncIterator[str]:
+    """Wrap the engine's stream into SSE wire format.
+
+    M14: bounded by an overall ``timeout_s`` ceiling and guarantees the
+    upstream engine generator is finalized on client disconnect
+    (``CancelledError``) or timeout, so the upstream connection is
+    released instead of leaking.
+    """
+    source = engine.stream(chat_req)
     try:
-        async for chunk in engine.stream(chat_req):
-            data = chunk.model_dump(exclude_none=True)
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
+        async with asyncio.timeout(timeout_s):
+            async for chunk in source:
+                data = chunk.model_dump(exclude_none=True)
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
     except NoProvidersAvailableError as exc:
         # Encode the error inside the SSE channel — OpenAI clients handle this
         err = {"error": {"message": str(exc), "type": "no_providers_available"}}
         yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
+    except TimeoutError:
+        # M14: overall ceiling hit — surface a terminal error frame.
+        logger.warning("sse-stream-timeout", extra={"timeout_s": timeout_s})
+        err = {"error": {"message": f"stream exceeded {timeout_s:.0f}s ceiling", "type": "timeout"}}
+        yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+    except asyncio.CancelledError:
+        # M14: client disconnected — re-raise after finalizing the source.
+        logger.info("sse-client-disconnect")
+        raise
+    finally:
+        # M14: ensure the engine generator's finally blocks run so the
+        # adapter's httpx streaming context releases the upstream socket.
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            # Best-effort cleanup; never mask the original exit reason.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await aclose()
