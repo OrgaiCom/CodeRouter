@@ -910,6 +910,14 @@ class FallbackEngine:
         self._recovery_tasks: dict[str, asyncio.Task[None]] = {}
         # v2.0-J: shutdown event shared with recovery probe tasks.
         self._recovery_shutdown: asyncio.Event | None = None
+        # H7: providers restored as *excluded* from persisted state that
+        # still need a recovery probe armed.  Populated by
+        # ``_load_all_state`` when it runs before an event loop exists
+        # (e.g. sync ``attach_state_store``); drained by
+        # ``rearm_pending_recovery_probes``.  Without this, an excluded
+        # provider is filtered out of the chain, never observed, and so
+        # never gets a recovery probe -> permanent exclusion.
+        self._pending_recovery_rearm: dict[str, str] = {}
         # v2.0-K: persistent state store (None = in-memory only).
         self._state_store: StateStore | None = None
 
@@ -1283,6 +1291,71 @@ class FallbackEngine:
             sh_state = store.get("self_healing", "state")
             if sh_state is not None:
                 self.self_healing.load_state(sh_state)  # type: ignore[arg-type]
+                # H7: providers restored as excluded are dropped from the
+                # chain, so they are never re-attempted and thus never
+                # observed failing again -- the only path that arms a
+                # recovery probe.  Re-arm one probe per restored provider
+                # here so exclusions can eventually be lifted.
+                self._rearm_recovery_probes()
+
+    def _rearm_recovery_probes(self) -> None:
+        """Arm a recovery probe for every currently-excluded provider.
+
+        Called after ``_load_all_state`` restores the self-healing set on
+        startup.  Mirrors the per-provider ``_spawn_recovery_probe`` path
+        that ``_observe_provider_failure`` takes on a fresh UNHEALTHY
+        transition, but drives it from the persisted exclusion set.
+
+        When no event loop is running yet (sync ``attach_state_store`` in
+        tests, or startup before the loop is live) the pending providers
+        are stashed in ``_pending_recovery_rearm`` for
+        ``rearm_pending_recovery_probes`` to flush once the loop exists.
+        """
+        import asyncio
+
+        excluded = self.self_healing.excluded_profiles()
+        if not excluded:
+            return
+
+        try:
+            asyncio.get_running_loop()
+            loop_running = True
+        except RuntimeError:
+            loop_running = False
+
+        for provider, profile in excluded.items():
+            if loop_running:
+                self._arm_probe_for(provider, profile)
+            else:
+                # Defer until a loop is available.
+                self._pending_recovery_rearm[provider] = profile
+
+    def _arm_probe_for(self, provider: str, profile: str) -> None:
+        """Resolve the owning chain and spawn a recovery probe.
+
+        No-op when the profile can no longer be resolved (e.g. the
+        provider/profile was removed from config across the restart).
+        """
+        chosen = profile or self.config.default_profile
+        try:
+            chain = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return
+        self._spawn_recovery_probe(provider, chain=chain)
+
+    async def rearm_pending_recovery_probes(self) -> None:
+        """Flush recovery probes deferred while no event loop was running.
+
+        Intended to be awaited from the app lifespan startup path (which
+        runs inside the event loop) after ``attach_state_store``.  Idempotent
+        and safe to call when nothing is pending.
+        """
+        if not self._pending_recovery_rearm:
+            return
+        pending = dict(self._pending_recovery_rearm)
+        self._pending_recovery_rearm.clear()
+        for provider, profile in pending.items():
+            self._arm_probe_for(provider, profile)
 
     def _observe_drift_signal(
         self,

@@ -181,6 +181,20 @@ class SelfHealingOrchestrator:
         with self._lock:
             return set(self._excluded.keys())
 
+    def excluded_profiles(self) -> dict[str, str]:
+        """Return a snapshot mapping excluded provider -> owning profile.
+
+        Used by the engine to re-arm recovery probes after a restart:
+        each excluded provider must be probed under the profile whose
+        ``backend_health_threshold`` / ``recovery_probe_*`` settings
+        drove its exclusion. See :meth:`excluded_providers` for the
+        name-only variant.
+        """
+        with self._lock:
+            return {
+                name: entry.profile for name, entry in self._excluded.items()
+            }
+
     def reset(self) -> None:
         """Drop all state. Mainly for tests."""
         with self._lock:
