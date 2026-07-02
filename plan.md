@@ -3,19 +3,20 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-05-29 (実装照合 + 競合再調査)
+最終更新: 2026-07-02 (全ソースレビュー改修マージ + 版況更新)
 作成者: zephel01
-状態: **v2.5.2 リリース済み (2026-05-22)** / **PyPI 最新: v2.5.2**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX GUI) に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。
+状態: **v2.6.1 リリース済み (2026-06-28)** / **PyPI 最新: v2.6.1**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX GUI) + Language Tax 計測/ルーティング + Token-savings accounting に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。**2026-07-02: 全ソースレビュー (26,600 行) を経て高優先度 8 件 (H1〜H8) を PR #34、中優先度 14 件 (M1〜M14) を PR #35 で main にマージ済み (未リリース)。**
 - **過去の出荷済みリリース (版履歴の正本)**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / v2.5+ ロードマップ / 市場分析 / 競合分析)**: [`docs/inside/future.md`](./docs/inside/future.md) を参照
 - **本ドキュメント**: 出荷済みマイルストーンのスコープ / 設計判断の記録 + ローカル backend 別接続マトリクス + 検討中 / やらないこと
 
 ### 現況サマリ
 
-**v0.1〜v2.5 は全て出荷済み。** 各リリースの一言ゴールは §6.1 全景、版履歴は §6.2 / [`CHANGELOG.md`](./CHANGELOG.md)、出荷済みマイルストーンの設計判断は版別節 §7〜§13 を参照。
+**v0.1〜v2.6 は全て出荷済み。** 各リリースの一言ゴールは §6.1 全景、版履歴は §6.2 / [`CHANGELOG.md`](./CHANGELOG.md)、出荷済みマイルストーンの設計判断は版別節 §7〜§13 を参照。
 
-到達点 (v2.5.2 時点): 6 系統障害 (L1〜L6) 全対処 + 自己修復 (self-healing) + 状態永続化 (sqlite3 StateStore) + Plugin 層 (input_filter / observer hook) + Goal モード対応 + Launcher (llama.cpp / vllm / MLX GUI)。Runtime deps は出荷以来 5 本据え置き連続。
+到達点 (v2.6.1 時点): 6 系統障害 (L1〜L6) 全対処 + 自己修復 (self-healing) + 状態永続化 (sqlite3 StateStore) + Plugin 層 (input_filter / observer hook) + Goal モード対応 + Launcher (llama.cpp / vllm / MLX GUI)。v2.5.4 で Gemma `<0xNN>` byte-fallback 修復フィルタ (Ollama 0.30 detokenizer 対策)、v2.5.5 で Claude Code CLI ≥ 2.1.154 の非仕様 `role: "system"` 正規化 (ingress 側 workaround)、v2.6.0 で **Language Tax** (CJK トークン税) の計測 / ルーティング (`cjk_ratio_min` matcher) / 可視化 + starlette 1.3.1 への CVE 更新、v2.6.1 で **Token-savings accounting** (trim / compress のトークン節約量をメトリクス・ダッシュボードに集約) を出荷。Runtime deps は出荷以来 5 本据え置き連続。
 
+- **2026-07-02 レビュー改修 (未リリース)**: 全ソース (26,600 行) レビューで検出した高優先度 8 件 (H1〜H8、PR #34) / 中優先度 14 件 (M1〜M14、PR #35) を main にマージ。テストは **1263 → 1401** (回帰テスト 139 件追加、既存非破壊)。運用に効く新要素: 環境変数 **`CODEROUTER_LAUNCHER_TOKEN`** (launcher start/stop/delete のトークン認証、opt-in・未設定は従来動作) / **`CODEROUTER_ALLOWED_HOSTS`** (Host 検証の追加許可) / **`CODEROUTER_MAX_BODY_BYTES`** (ボディ上限、既定 64MB)。挙動変更: 不正設定 (存在しない provider 名 / 重複名 / 逆転閾値 / `has_tools: false`) が起動時 fail-fast エラーに、drift 降格が adaptive 無効時も実効化、adaptive routing がストリーミングでも観測収集を実効化、request/audit ログが最大 20 件 / 2 秒の遅延書き込みに。詳細: `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) / 改修サマリ H1-H8 (`_OUTPUTS/code-review/fixes_H/`) / 改修サマリ M1-M14 (`_OUTPUTS/code-review/fixes_M/`)。
 - **v2.5+ の今後ロードマップ / Vision / 競合分析 / 市場分析** は [`docs/inside/future.md`](./docs/inside/future.md) を参照 (plan.md では重複させない)。
 - **Reactive 発火条件** (運用ルール、reactive but focused) も future.md §3 に集約済み。
 
@@ -73,8 +74,10 @@ lmstudio-anthropic:
 
 ### 今後の作業 (docs / examples 整備)
 
-実装本体は v2.5.2 まで出荷完了。残るのは docs / examples 系の継続作業のみ:
+実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を main にマージ済み (未リリース)。残るのは docs / examples 系の継続作業と、レビューで積み残した低優先度リファクタのみ:
 
+- **新 env var の docs 反映**: `CODEROUTER_LAUNCHER_TOKEN` / `CODEROUTER_ALLOWED_HOSTS` / `CODEROUTER_MAX_BODY_BYTES` を運用ガイド・troubleshooting に追記 (レビュー改修で追加、未 doc 化)
+- **レビュー低優先度リファクタ (L1〜L5)**: バグ修正が落ち着いてから着手予定。L1 = `fallback.py` (2,416 行) の 1 試行前後処理の集約、L2 = `logging.py` (1,481 行) の汎用 `emit_event()` 化、L3 = `schemas.py` / `doctor.py` の分割、L4 = 重複コード (プロファイル解決 / adapter エラー変換 / output filter) の集約、L5 = その他小粒 (Prometheus 未出力メトリクス / `restart_command` の `shell=True` / 月次予算 TOCTOU 等)。詳細は `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) の「優先度: 低」節
 - **`docs/verification.md` の精緻化**: MoE モデルの罠・rolling-window タイミング制約・goal_mode 実機検証知見を反映
 - **`examples/providers.production-grade.yaml`**: `monthly_budget_usd` / `memory_pressure_action` / `goal_mode: true` を組み合わせた production yaml 雛形
 - **Unsloth Studio プロバイダー検証**: E2E 手動テスト (~2h、安定版確認後)
@@ -122,7 +125,7 @@ lmstudio-anthropic:
 - [10. v1.0 — Tool-Call 信頼性 + Code Mode ✅](#10-v10--tool-call-信頼性--code-mode-)
 - [11. v1.5 — 計測ダッシュボード ✅](#11-v15--計測ダッシュボード-)
 - [12. v1.6 — auto_router (task-aware routing) ✅](#12-v16--auto_router-task-aware-routing-)
-- [13. v1.7〜v2.5 — 出荷済みマイルストーン (要約)](#13-v17v25--出荷済みマイルストーン-要約)
+- [13. v1.7〜v2.6 — 出荷済みマイルストーン (要約)](#13-v17v26--出荷済みマイルストーン-要約)
 - [14. 横断タスク (どのバージョンでも継続)](#14-横断タスク-どのバージョンでも継続)
 - [15. やらないこと (Out of Scope)](#15-やらないこと-out-of-scope)
 - [16. 想定リスクと対応](#16-想定リスクと対応)
@@ -136,10 +139,10 @@ lmstudio-anthropic:
 ## 0. このドキュメントの目的
 
 - CodeRouter で「何を作るか」「なぜ作るか」「どう作るか」を1枚に集約する
-- 各マイルストーン (v0.1 〜 v2.5) のスコープ・完了条件・設計判断を記録する
+- 各マイルストーン (v0.1 〜 v2.6) のスコープ・完了条件・設計判断を記録する
 - 技術スタック選定の判断材料を残す
 - リリース後は振り返り (`docs/retrospectives/*.md`) と実装ログ (§18) に反映する
-- **v0.1〜v2.5 は全て出荷済み**。版履歴の正本は [`CHANGELOG.md`](./CHANGELOG.md)、v2.5+ の今後ロードマップは [`docs/inside/future.md`](./docs/inside/future.md) を参照
+- **v0.1〜v2.6 は全て出荷済み**。版履歴の正本は [`CHANGELOG.md`](./CHANGELOG.md)、v2.5+ の今後ロードマップは [`docs/inside/future.md`](./docs/inside/future.md) を参照
 
 ---
 
@@ -390,7 +393,7 @@ memo.txt の方針 (OpenAI互換土台 + Anthropic専用アダプタ + capabilit
 
 ### 5.3 結論 (2026-04-19 確定)
 
-> **本体: Python 3.12+ / uv / FastAPI / httpx 直叩き** (v0.1〜v2.5 全て Python single-language で出荷)。
+> **本体: Python 3.12+ / uv / FastAPI / httpx 直叩き** (v0.1〜v2.6 全て Python single-language で出荷)。
 > 配布は v1.7 で PyPI `coderouter-cli` + `uvx` 経路に確定。当初検討した Go 製配布専用 CLI 案は不採用 (詳細は `docs/inside/future.md`)。
 
 #### 採用理由 (確定版)
@@ -435,7 +438,7 @@ LiteLLM がサプライチェーン懸念で claude-code-local から剥がさ�
 
 ### 6.1 全景
 
-major / minor を 1 行ずつ。**v0.1〜v2.5 は全て出荷済み (✅)**。sub-release / patch-level の粒度・commit hash・テスト数は [`CHANGELOG.md`](./CHANGELOG.md) が正本。
+major / minor を 1 行ずつ。**v0.1〜v2.6 は全て出荷済み (✅)**。sub-release / patch-level の粒度・commit hash・テスト数は [`CHANGELOG.md`](./CHANGELOG.md) が正本。
 
 | Ver | 日付 | 一言ゴール | 状態 |
 | --- | --- | --- | --- |
@@ -461,6 +464,10 @@ major / minor を 1 行ずつ。**v0.1〜v2.5 は全て出荷済み (✅)**。su
 | **v2.5.0** | 2026-05-22 | Launcher — llama.cpp / vllm の起動・管理 GUI (デスクトップGUI版 + Web版) | ✅ |
 | **v2.5.1** | 2026-05-22 | MLX backend (Launcher 3 番目) + docs/ 再編 (start/guides/backends/concepts) + plan.md 再構成 + starlette CVE 修正 | ✅ |
 | **v2.5.2** | 2026-05-22 | Backend-aware Launcher 推奨値 + backend インストールガイド + Launcher docs 統合 | ✅ |
+| **v2.5.4** | 2026-06-05 | Gemma `<0xNN>` byte-fallback 修復フィルタ (Ollama 0.30 detokenizer 対策、opt-in・streaming-safe) | ✅ |
+| **v2.5.5** | 2026-06-06 | Claude Code CLI ≥ 2.1.154 の非仕様 `role: "system"` を ingress で正規化 (422 回避) | ✅ |
+| **v2.6.0** | 2026-06-20 | Language Tax — CJK トークン税の計測 / `cjk_ratio_min` ルーティング / 可視化 + starlette 1.3.1 (CVE 4 件) | ✅ |
+| **v2.6.1** | 2026-06-28 | Token-savings accounting — trim / compress のトークン節約量をメトリクス + ダッシュボードに集約 | ✅ |
 
 > **v2.5+ の今後ロードマップ** は [`docs/inside/future.md`](./docs/inside/future.md) を参照 (plan.md では重複させない)。
 >
@@ -494,6 +501,12 @@ major / minor を 1 行ずつ。**v0.1〜v2.5 は全て出荷済み (✅)**。su
 | v2.5.0 | 2026-05-22 | Launcher — llama.cpp / vllm GUI |
 | v2.5.1 | 2026-05-22 | MLX backend + docs 再編 + starlette CVE 修正 |
 | v2.5.2 | 2026-05-22 | Backend-aware Launcher 推奨値 + backend インストールガイド |
+| v2.5.4 | 2026-06-05 | Gemma `<0xNN>` byte-fallback 修復フィルタ (Ollama 0.30 対策) |
+| v2.5.5 | 2026-06-06 | Claude Code CLI ≥ 2.1.154 `role: "system"` ingress 正規化 |
+| v2.6.0 | 2026-06-20 | Language Tax — CJK トークン税 計測 / ルーティング / 可視化 |
+| v2.6.1 | 2026-06-28 | Token-savings accounting — trim / compress 節約量の集約 |
+
+> v2.5.3 は欠番 (v2.5.2 の次は v2.5.4)。詳細は [`CHANGELOG.md`](./CHANGELOG.md)。
 
 各マイルストーンの DoD・設計判断は plan.md 内の版別節 (v0.1: §7 / v0.2: §8 / v0.5: §9 / v1.0: §10 / v1.5: §11 / v1.6: §12)、振り返りは [`docs/retrospectives/`](./docs/retrospectives/) を参照。
 
@@ -594,7 +607,7 @@ precedence: `body.profile > X-CodeRouter-Profile > X-CodeRouter-Mode > auto_rout
 
 ---
 
-## 13. v1.7〜v2.5 — 出荷済みマイルストーン (要約)
+## 13. v1.7〜v2.6 — 出荷済みマイルストーン (要約)
 
 v1.7 以降は実装ペースが上がり、各リリースの詳細を plan.md に転記すると CHANGELOG.md と完全重複するため、ここでは一言サマリのみ。**詳細は [`CHANGELOG.md`](./CHANGELOG.md) が正本**、v1.8-v2.5 のアーキテクチャ事実は [`docs/inside/future.md`](./docs/inside/future.md) §4 timeline / §6 を参照。
 
@@ -612,8 +625,14 @@ v1.7 以降は実装ペースが上がり、各リリースの詳細を plan.md 
 | **v2.5.0** | 2026-05-22 | Launcher — llama.cpp / vllm backend の起動・管理 GUI。デスクトップGUI版 (`launcher_gui.py`、tkinter) + Web版 (`/launcher` ルート)。YAML-driven option profile、新規依存ゼロ |
 | **v2.5.1** | 2026-05-22 | MLX backend (Launcher 3 番目、`mlx_lm.server`、Apple Silicon 向け) + docs/ をロール別フォルダ (start/guides/backends/concepts) に再編 + bilingual master index (`docs/README.md`) + plan.md 再構成 (1747→721 行) + starlette 1.0.0→1.0.1 (PYSEC-2026-161) |
 | **v2.5.2** | 2026-05-22 | Backend-aware Launcher 推奨値 (llama.cpp はフラグ / vLLM・MLX は空) + `docs/backends/install-backends.md` (llama.cpp / vLLM / MLX インストールガイド) + Launcher docs 3→2 ファイル統合 + backend venv 規約文書化 (`~/.coderouter/backends/<backend>/`) |
+| **v2.5.4** | 2026-06-05 | `repair_byte_fallback` output filter — Ollama 0.30 / llama.cpp detokenizer が漏らす `<0xNN>` byte-fallback を UTF-8 に再構成 (Gemma 日本語・tool-call JSON 対策)。opt-in / streaming-safe / lossless、新規依存ゼロ |
+| **v2.5.5** | 2026-06-06 | Claude Code CLI ≥ 2.1.154 が `messages` 配列に混入させる非仕様 `role: "system"` (他 `ctx`/`msg`) を ingress の `model_validator(mode="before")` で正規化し 422 を回避。wire model の role enum は不変 |
+| **v2.6.0** | 2026-06-20 | Language Tax — CJK トークン税 (`coderouter/language_tax.py`) の計測 + cost 統合 + `ProviderConfig.tokenizer_path` + `cjk_ratio_min` auto-route matcher + `/dashboard` "Cost & Language Tax" パネル。starlette 1.0.1→1.3.1 (CVE 4 件解消)。新規依存ゼロ |
+| **v2.6.1** | 2026-06-28 | Token-savings accounting — `MetricsCollector` に `tokens_saved_total` + 機構別 (trim / compress) 内訳バケット、`/dashboard` に 3 タイル追加。core owns した数値で plugin 無しでも trim 節約が可視化。新規依存ゼロ・後方互換 |
 
-**到達点 (v2.5.2)**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX)。Runtime deps は出荷以来 5 本据え置き連続。`coderouter-plugin-memory` (別 repo、builtin JSONL + Ollama backend、stdlib only) も v0.4.0 まで並行リリース済み。
+**到達点 (v2.6.1)**: 6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX) + Language Tax 計測/ルーティング + Token-savings accounting。Runtime deps は出荷以来 5 本据え置き連続。`coderouter-plugin-memory` (別 repo、builtin JSONL + Ollama backend、stdlib only) も v0.4.0 まで並行リリース済み。
+
+> 2026-07-02 の全ソースレビュー改修 (H1〜H8 / M1〜M14) は main にマージ済みだがリリース番号未採番 (未リリース)。詳細は本ドキュメント冒頭「現況サマリ」の 2026-07-02 段落を参照。
 
 > v2.5+ の今後ロードマップ・Vision・競合分析は [`docs/inside/future.md`](./docs/inside/future.md) を参照。plan.md ではこれ以降の将来計画を重複させない。
 
@@ -677,12 +696,14 @@ v1.7 以降は実装ペースが上がり、各リリースの詳細を plan.md 
 
 ## 18. 実装ログ & 残アクション
 
-v0.1〜v2.5 の item-level 実装履歴は [`CHANGELOG.md`](./CHANGELOG.md) に集約済み (各リリースの `Added` / `Changed` / `Files touched`)。各マイルストーンの設計判断は §7〜§13、振り返りは [`docs/retrospectives/`](./docs/retrospectives/) を参照。
+v0.1〜v2.6 の item-level 実装履歴は [`CHANGELOG.md`](./CHANGELOG.md) に集約済み (各リリースの `Added` / `Changed` / `Files touched`)。各マイルストーンの設計判断は §7〜§13、振り返りは [`docs/retrospectives/`](./docs/retrospectives/) を参照。
 
 ### 本当に未消化のアクション
 
-実装本体は v2.5.2 まで完了済みのため、残るのは小粒の継続作業のみ:
+実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を main にマージ済み (未リリース)。残るのは小粒の継続作業とレビュー低優先度リファクタ (L1〜L5) のみ:
 
+- [ ] **新 env var の docs 反映** — `CODEROUTER_LAUNCHER_TOKEN` / `CODEROUTER_ALLOWED_HOSTS` / `CODEROUTER_MAX_BODY_BYTES` を運用ガイド・troubleshooting に追記 (レビュー改修で追加、未 doc 化)。
+- [ ] **レビュー低優先度リファクタ (L1〜L5)** — `fallback.py` / `logging.py` / `schemas.py` / `doctor.py` の分解、重複コード集約、Prometheus 未出力メトリクス等の小粒。詳細は `_OUTPUTS/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管)。
 - [ ] **Anthropic ヒューリスティック表のメンテ signal** — (a) 週次 `/v1/models` diff、または (b) 未知モデル検出時に warn ログ。capability registry をモデルファミリ追加に追従させる仕組み。(b) は既存 gate 計算からほぼ無料で取れる。
 - [ ] **`docs/verification.md` の精緻化** — MoE モデルの罠 / rolling-window タイミング制約 / goal_mode 実機検証知見を反映。
 - [ ] **`examples/providers.production-grade.yaml`** — `monthly_budget_usd` / `memory_pressure_action` / `goal_mode: true` を組み合わせた production yaml 雛形。

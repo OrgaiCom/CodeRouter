@@ -118,13 +118,27 @@ Dependabot keeps SHA-pinned entries up to date as well.
 
 CodeRouter binds to `127.0.0.1` by default (`coderouter serve --host`).
 It does not expose itself on `0.0.0.0` unless the operator explicitly
-opts in. There is no authentication on the HTTP ingress — the trust
-boundary is "loopback only."
+opts in. The trust boundary is "loopback only", and every route
+validates the Host header (DNS-rebinding protection): requests whose
+Host is not a loopback name are rejected with 403; deliberate external
+exposure requires listing the extra hostnames in
+`CODEROUTER_ALLOWED_HOSTS` (comma-separated). There is no
+authentication on the chat ingress (`/v1/messages` /
+`/v1/chat/completions`). The launcher API's state-changing endpoints
+(start / stop / delete) support opt-in token auth: when
+`CODEROUTER_LAUNCHER_TOKEN` is set, clients must send a matching
+`X-CodeRouter-Token` header (unset = unauthenticated, as before).
+Request bodies are capped at 64 MB by default (413 on overflow),
+tunable via `CODEROUTER_MAX_BODY_BYTES`.
 
 **Operator checklist.**
 
 - Do not bind to `0.0.0.0` on a multi-user host without a separate
-  reverse proxy that enforces auth.
+  reverse proxy that enforces auth. When serving under a non-loopback
+  hostname, add it to `CODEROUTER_ALLOWED_HOSTS` — otherwise Host
+  validation rejects the requests with 403.
+- Set `CODEROUTER_LAUNCHER_TOKEN` whenever the launcher is reachable
+  from beyond loopback.
 - If exposing over the network (e.g. remote dev), tunnel over SSH
   or a VPN rather than opening a port.
 - Upstream provider URLs are checked at config-load time; a typo
