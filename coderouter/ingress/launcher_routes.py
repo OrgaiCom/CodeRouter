@@ -26,6 +26,7 @@ import asyncio
 import contextlib
 import os
 import platform
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -39,10 +40,56 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from coderouter.logging import get_logger
+
+logger = get_logger(__name__)
+
 router = APIRouter()
 
 # 背景タスクへの強参照を保持する (create_task の戻り値が GC されるのを防ぐ)
 _background_tasks: set[asyncio.Task[Any]] = set()
+
+# ---------------------------------------------------------------------------
+# H8: token auth for state-changing endpoints (start / stop / delete)
+# ---------------------------------------------------------------------------
+
+# Env var holding the shared secret. When unset, auth is disabled and the
+# launcher behaves exactly as before (local-only assumption). When set, every
+# state-changing request must carry a matching X-CodeRouter-Token header.
+_LAUNCHER_TOKEN_ENV = "CODEROUTER_LAUNCHER_TOKEN"
+_LAUNCHER_TOKEN_HEADER = "X-CodeRouter-Token"
+
+# Guard so the "no token configured" warning is only logged once per process.
+_token_warning_emitted = False
+
+
+def _require_launcher_token(request: Request) -> None:
+    """Enforce the launcher shared-secret on state-changing endpoints.
+
+    If ``CODEROUTER_LAUNCHER_TOKEN`` is unset the launcher stays open (its
+    historical local-only behaviour) and a one-time warning is logged. When
+    the env var is set, the ``X-CodeRouter-Token`` header must match it using
+    a constant-time comparison, otherwise a 401 is raised.
+    """
+    global _token_warning_emitted
+    expected = os.environ.get(_LAUNCHER_TOKEN_ENV, "")
+    if not expected:
+        if not _token_warning_emitted:
+            logger.warning(
+                "launcher-auth-disabled",
+                extra={
+                    "hint": (
+                        f"{_LAUNCHER_TOKEN_ENV} is not set; launcher "
+                        "start/stop/delete endpoints are unauthenticated. "
+                        "Set it when binding to anything other than loopback."
+                    ),
+                },
+            )
+            _token_warning_emitted = True
+        return
+    provided = request.headers.get(_LAUNCHER_TOKEN_HEADER, "")
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing launcher token.")
 
 # ---------------------------------------------------------------------------
 # Model file extensions to scan
@@ -152,6 +199,38 @@ _BACKEND_DEFAULTS: dict[str, str] = {
     "vllm": "python",
     "mlx": "python",          # mlx_lm.server (Apple Silicon 向け)
 }
+
+# H8: flags that re-specify the model path. Allowing these through
+# ``options`` / ``extra_args`` would let a caller override the vetted
+# ``model_path`` and load an arbitrary file (or, for vllm/mlx, swap the
+# ``-m`` module target). We reject them per backend so the model is only
+# ever set by the ``model_path`` field.
+#   - llama.cpp: ``-m`` / ``--model`` select the GGUF file.
+#   - vllm / mlx: ``--model`` selects the model; ``-m`` selects the python
+#     module that ``_build_cmd`` pins, so it must not be re-specified either.
+_MODEL_FLAGS: dict[str, frozenset[str]] = {
+    "llama.cpp": frozenset({"-m", "--model"}),
+    "vllm": frozenset({"-m", "--model"}),
+    "mlx": frozenset({"-m", "--model"}),
+}
+
+
+def _assert_no_model_override(backend: str, tokens: list[str]) -> None:
+    """Raise ValueError if ``tokens`` contain a model-selecting flag.
+
+    ``tokens`` is the flat list of argument tokens sourced from ``options``
+    keys or ``shlex.split(extra_args)``. Matching is exact on the flag name;
+    ``--model=foo`` style is caught by comparing the part before ``=``.
+    """
+    banned = _MODEL_FLAGS.get(backend, frozenset())
+    for token in tokens:
+        name = token.split("=", 1)[0]
+        if name in banned:
+            raise ValueError(
+                f"Flag {name!r} is not allowed: the model is set by "
+                "'model_path' and cannot be re-specified via options or "
+                "extra_args."
+            )
 
 
 def _resolve_binary(backend: str, configured: str | None) -> str:
@@ -343,6 +422,9 @@ def _build_cmd(
             "Expected 'llama.cpp', 'vllm' or 'mlx'."
         )
 
+    # H8: reject model-path re-specification via options keys.
+    _assert_no_model_override(backend, list(options.keys()))
+
     for flag, val in options.items():
         if isinstance(val, bool):
             if val:
@@ -351,7 +433,10 @@ def _build_cmd(
             cmd.extend([flag, str(val)])
 
     if extra_args.strip():
-        cmd.extend(shlex.split(extra_args))
+        extra_tokens = shlex.split(extra_args)
+        # H8: reject model-path re-specification via free-form extra_args.
+        _assert_no_model_override(backend, extra_tokens)
+        cmd.extend(extra_tokens)
 
     return cmd
 
@@ -529,6 +614,7 @@ async def api_backends(request: Request) -> dict[str, Any]:
 @router.post("/api/launcher/start")
 async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     """Start a new backend process."""
+    _require_launcher_token(request)
     # Resolve binary path from providers.yaml launcher.backends
     cfg = request.app.state.config
     launcher_cfg = getattr(cfg, "launcher", None)
@@ -590,6 +676,7 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
 @router.post("/api/launcher/stop/{proc_id}")
 async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
     """Terminate a running process (SIGTERM, then SIGKILL after 5s)."""
+    _require_launcher_token(request)
     try:
         proc = _registry(request).get(proc_id)
     except KeyError:
@@ -613,6 +700,7 @@ async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
 @router.delete("/api/launcher/processes/{proc_id}")
 async def api_delete(proc_id: str, request: Request) -> dict[str, Any]:
     """Remove a stopped process from the registry."""
+    _require_launcher_token(request)
     reg = _registry(request)
     try:
         proc = reg.get(proc_id)
@@ -828,6 +916,15 @@ _LAUNCHER_HTML = r"""<!doctype html>
   "use strict";
 
   const POLL_MS = 3000;
+  // H8: launcher shared-secret. The server substitutes __LAUNCHER_TOKEN__
+  // with the configured token (or an empty string when auth is disabled).
+  const LAUNCHER_TOKEN = "__LAUNCHER_TOKEN__";
+  // Build headers for state-changing requests, adding the token only when set.
+  const authHeaders = (base) => {
+    const h = Object.assign({}, base || {});
+    if (LAUNCHER_TOKEN) h["X-CodeRouter-Token"] = LAUNCHER_TOKEN;
+    return h;
+  };
   let allProfiles = {};      // backend → [{name, args}]
   const _modelCache = {};    // index → {path, name, dir, size_gb}
   let selectedLogId = null;
@@ -1093,7 +1190,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
     try {
       const res = await fetch("/api/launcher/start", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: authHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({name, backend, model_path: model, port,
                               options: selectedProfileArgs(), extra_args: extra}),
       });
@@ -1150,7 +1247,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
   window.stopProc = async (id) => {
     if (!confirm("プロセスを停止しますか?")) return;
-    const r = await fetch(`/api/launcher/stop/${id}`, {method:"POST"});
+    const r = await fetch(`/api/launcher/stop/${id}`, {method:"POST", headers: authHeaders()});
     const d = await r.json();
     statusMsg(`停止: ${d.status}`);
     await fetchProcesses();
@@ -1159,7 +1256,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
   window.deleteProc = async (id) => {
     if (!confirm("レジストリから削除しますか?")) return;
-    await fetch(`/api/launcher/processes/${id}`, {method:"DELETE"});
+    await fetch(`/api/launcher/processes/${id}`, {method:"DELETE", headers: authHeaders()});
     if (selectedLogId === id) closeLog();
     await fetchProcesses();
   };
@@ -1214,5 +1311,20 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
 @router.get("/launcher", response_class=HTMLResponse)
 async def launcher_page() -> HTMLResponse:
-    """Serve the launcher single-page UI."""
-    return HTMLResponse(content=_LAUNCHER_HTML)
+    """Serve the launcher single-page UI.
+
+    H8: inject the configured launcher token so the inline JS can attach it
+    to state-changing requests. When the env var is unset the placeholder
+    becomes an empty string and the UI keeps working unauthenticated (the
+    historical local-only default). The token is escaped for a JS string
+    context to avoid breaking out of the double-quoted literal.
+    """
+    token = os.environ.get(_LAUNCHER_TOKEN_ENV, "")
+    safe_token = (
+        token.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
+    html = _LAUNCHER_HTML.replace("__LAUNCHER_TOKEN__", safe_token)
+    return HTMLResponse(content=html)

@@ -7,7 +7,10 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
 
 from coderouter import __version__
 from coderouter.config import load_config
@@ -23,6 +26,77 @@ from coderouter.routing import FallbackEngine
 from coderouter.routing.capability import check_claude_code_chain_suitability
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# H8: DNS-rebinding protection via Host-header validation
+# ---------------------------------------------------------------------------
+
+# Loopback hosts that are always allowed. ``testserver`` is the default Host
+# that Starlette's TestClient sends, so it is whitelisted to keep the existing
+# suite (and any local integration tests) working without extra configuration.
+_DEFAULT_ALLOWED_HOSTS: frozenset[str] = frozenset(
+    {"localhost", "127.0.0.1", "[::1]", "::1", "testserver"}
+)
+
+
+def _parse_allowed_hosts(raw: str | None) -> frozenset[str]:
+    """Merge the built-in loopback set with ``CODEROUTER_ALLOWED_HOSTS``.
+
+    The env var is a comma-separated list of extra hostnames (no port) that
+    should be accepted — the escape hatch for deliberate external exposure.
+    """
+    extra = {
+        part.strip().lower()
+        for part in (raw or "").split(",")
+        if part.strip()
+    }
+    return _DEFAULT_ALLOWED_HOSTS | frozenset(extra)
+
+
+def _host_without_port(host_header: str) -> str:
+    """Strip the optional ``:port`` suffix from a Host header value.
+
+    Handles bracketed IPv6 literals (``[::1]:8080`` → ``[::1]``) as well as
+    the common ``host:port`` form. A bare ``[::1]`` or ``host`` is returned
+    unchanged.
+    """
+    value = host_header.strip().lower()
+    if value.startswith("["):
+        # IPv6 literal: keep everything up to and including the closing bracket.
+        end = value.find("]")
+        if end != -1:
+            return value[: end + 1]
+        return value
+    # IPv4 / hostname: split off a trailing :port if present.
+    if ":" in value:
+        return value.rsplit(":", 1)[0]
+    return value
+
+
+class HostValidationMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose Host header is not an allow-listed hostname.
+
+    This blocks DNS-rebinding attacks: even when CodeRouter is bound to
+    ``127.0.0.1``, a malicious page can point a hostname it controls at the
+    loopback address and drive the local API from the victim's browser. By
+    pinning the accepted Host values we make such cross-origin requests fail
+    closed with 403.
+    """
+
+    def __init__(self, app: ASGIApp, allowed_hosts: frozenset[str]) -> None:
+        super().__init__(app)
+        self._allowed = allowed_hosts
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
+        host_header = request.headers.get("host", "")
+        host = _host_without_port(host_header)
+        if host not in self._allowed:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": f"Host {host_header!r} is not allowed."},
+            )
+        return await call_next(request)
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
@@ -189,6 +263,15 @@ def create_app(config_path: str | None = None) -> FastAPI:
         with contextlib.suppress(Exception):
             await engine.shutdown_recovery_probes()
 
+        # H3: close each adapter's shared httpx.AsyncClient so pooled
+        # connections / keep-alive sockets are released cleanly instead of
+        # being left to garbage collection. Adapters are cached on the
+        # engine (one per provider); ``aclose`` is idempotent and a no-op
+        # when the adapter never issued a request.
+        for _adapter in engine._adapters.values():
+            with contextlib.suppress(Exception):
+                await _adapter.aclose()
+
         # v2.0-K: persist state and close audit log on shutdown.
         if state_store is not None:
             with contextlib.suppress(Exception):
@@ -227,6 +310,15 @@ def create_app(config_path: str | None = None) -> FastAPI:
     # Inject engine + config so route handlers can reach them via app.state
     app.state.engine = engine
     app.state.config = config
+
+    # H8: DNS-rebinding protection. Applied to every route so a hostname an
+    # attacker controls cannot be pointed at loopback and used to drive the
+    # local API from a victim's browser. Extra hostnames for deliberate
+    # external exposure come from CODEROUTER_ALLOWED_HOSTS (comma-separated).
+    allowed_hosts = _parse_allowed_hosts(
+        os.environ.get("CODEROUTER_ALLOWED_HOSTS")
+    )
+    app.add_middleware(HostValidationMiddleware, allowed_hosts=allowed_hosts)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
