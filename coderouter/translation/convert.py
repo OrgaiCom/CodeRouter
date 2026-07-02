@@ -44,6 +44,14 @@ from coderouter.translation.tool_repair import repair_tool_calls_in_text
 # ============================================================
 
 
+# OpenAI's role=tool message has no structured error flag, so a failed
+# tool_result is conventionally surfaced by prefixing the content with an
+# "Error: " marker. We add it on the Anthropic→OpenAI leg when is_error is
+# true and detect it on the reverse leg to restore is_error, so a round-trip
+# preserves the flag without double-prefixing.
+_TOOL_ERROR_MARKER = "Error: "
+
+
 def _system_as_text(system: str | list[dict[str, Any]] | None) -> str | None:
     """Anthropic's `system` can be a string or a list of content blocks.
 
@@ -142,11 +150,20 @@ def _convert_anthropic_message(
         elif btype == "tool_use":
             tool_calls.append(_tool_use_to_openai_tool_call(block))
         elif btype == "tool_result":
+            result_str = _tool_result_content_to_str(block.get("content"))
+            # Preserve Anthropic's is_error flag: OpenAI's role=tool message
+            # has no structured error field, so mark failures with an
+            # "Error: " prefix (skip if already prefixed to avoid doubling on
+            # a round-trip) (M8).
+            if block.get("is_error") and not result_str.startswith(
+                _TOOL_ERROR_MARKER
+            ):
+                result_str = f"{_TOOL_ERROR_MARKER}{result_str}"
             tool_result_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": block.get("tool_use_id", ""),
-                    "content": _tool_result_content_to_str(block.get("content")),
+                    "content": result_str,
                 }
             )
         # Unknown block types (thinking, document, …) are skipped in v0.2.
@@ -396,8 +413,19 @@ class _StreamState:
         self.current_block_index: int = -1
         self.current_block_type: str | None = None  # "text" | "tool_use"
         # openai tool_call index (from delta.tool_calls[i].index) →
-        # anthropic content block index we allocated for it
+        # anthropic content block index we allocated for it. Note: this maps
+        # to the MOST RECENT anthropic index; a single openai tool index may
+        # be re-opened under a new anthropic index if a text delta (or another
+        # tool call) forced its block closed mid-stream (M7).
         self.tool_call_block_map: dict[int, int] = {}
+        # Original tool_use metadata (id, name) keyed by openai tool_call
+        # index. Needed to re-open a tool_use block with the correct id/name
+        # after an interleaving delta closed it — id/name arrive only on the
+        # first fragment, so placeholders are not acceptable (M7).
+        self.tool_call_meta: dict[int, tuple[str, str]] = {}
+        # The openai tool_call index whose anthropic block is currently open
+        # (None when the open block is a text block or nothing is open).
+        self.current_tool_call_index: int | None = None
         self.message_id: str = f"msg_{uuid.uuid4().hex[:24]}"
         self.model: str = "unknown"
         # Usage accounting (v0.3-C). The translator's job is to make sure
@@ -446,12 +474,14 @@ def _close_current_block(state: _StreamState) -> list[AnthropicStreamEvent]:
         {"index": state.current_block_index},
     )
     state.current_block_type = None
+    state.current_tool_call_index = None
     return [evt]
 
 
 def _open_text_block(state: _StreamState) -> list[AnthropicStreamEvent]:
     state.current_block_index += 1
     state.current_block_type = "text"
+    state.current_tool_call_index = None
     return [
         _event(
             "content_block_start",
@@ -471,6 +501,7 @@ def _open_tool_use_block(
 ) -> list[AnthropicStreamEvent]:
     state.current_block_index += 1
     state.current_block_type = "tool_use"
+    state.current_tool_call_index = openai_tc_index
     state.tool_call_block_map[openai_tc_index] = state.current_block_index
     return [
         _event(
@@ -515,21 +546,50 @@ def _handle_delta(state: _StreamState, delta: dict[str, Any]) -> list[AnthropicS
         fn = tc.get("function", {}) or {}
         args_fragment = fn.get("arguments", "") or ""
 
-        if tc_index not in state.tool_call_block_map:
-            # First time we see this tool_call — close any prior block and open a new tool_use block.
+        # Record / refresh the tool metadata (id, name) as it arrives. id and
+        # name normally ride only the first fragment for a given tool index;
+        # keep whatever non-empty values we've seen so a later re-open uses the
+        # real id/name rather than placeholders (M7).
+        prev_id, prev_name = state.tool_call_meta.get(tc_index, ("", ""))
+        tool_id = tc.get("id", "") or prev_id
+        tool_name = fn.get("name", "") or prev_name
+        state.tool_call_meta[tc_index] = (tool_id, tool_name)
+
+        first_sight = tc_index not in state.tool_call_block_map
+        if first_sight:
+            # First time we see this tool_call — close any prior block and open
+            # a new tool_use block.
             out.extend(_close_current_block(state))
             out.extend(
                 _open_tool_use_block(
                     state,
                     openai_tc_index=tc_index,
-                    tool_id=tc.get("id", ""),
-                    tool_name=fn.get("name", ""),
+                    tool_id=tool_id,
+                    tool_name=tool_name,
                 )
             )
             # Function name itself is generated output even though it rides on
             # content_block_start, not on a delta. Include it in the estimate
             # so we don't under-count tool-heavy responses.
-            state.emitted_chars += len(fn.get("name", "") or "")
+            state.emitted_chars += len(tool_name)
+        elif state.current_tool_call_index != tc_index:
+            # We've seen this tool index before, but its anthropic block is no
+            # longer the open one — an interleaving text delta or a different
+            # tool call closed it. Sending an input_json_delta to the stale
+            # (closed) index is a wire-protocol violation, so re-open the tool
+            # under a fresh anthropic index, preserving its original id/name
+            # (placeholders are not acceptable). Downstream reassembles all
+            # fragments for the same tool id, so a split block is safe (M7).
+            out.extend(_close_current_block(state))
+            out.extend(
+                _open_tool_use_block(
+                    state,
+                    openai_tc_index=tc_index,
+                    tool_id=tool_id,
+                    tool_name=tool_name,
+                )
+            )
+
         block_idx = state.tool_call_block_map[tc_index]
         if args_fragment:
             out.append(
@@ -907,11 +967,19 @@ def _openai_tool_message_to_block(msg: Message) -> dict[str, Any]:
         content_str = content
     else:
         content_str = ""
-    return {
+    # Restore Anthropic's is_error flag from the OpenAI "Error: " convention
+    # (mirror of the forward leg). Strip the marker so a round-trip yields the
+    # original content plus is_error, with no marker doubling (M8).
+    block: dict[str, Any] = {
         "type": "tool_result",
         "tool_use_id": msg.tool_call_id or "",
-        "content": content_str,
     }
+    if content_str.startswith(_TOOL_ERROR_MARKER):
+        block["content"] = content_str[len(_TOOL_ERROR_MARKER) :]
+        block["is_error"] = True
+    else:
+        block["content"] = content_str
+    return block
 
 
 def _openai_tools_to_anthropic(
@@ -1299,3 +1367,28 @@ async def stream_anthropic_to_chat_chunks(
             )
 
         # Unknown event types are skipped silently (forward-compat).
+
+    # Truncated-stream guard (M9): the upstream iterator ended without a
+    # message_stop (dropped connection, truncated SSE, provider that omits the
+    # terminator). The normal terminator path returns from inside the loop, so
+    # reaching here means we never emitted a finish_reason chunk or a usage
+    # chunk. OpenAI clients that requested a stream treat the absence of a
+    # finish_reason as an incomplete/hung response, so synthesize both from the
+    # state accumulated so far. Mirrors the forward-direction terminator
+    # synthesis (H6). If we never even saw a message_start, nothing was
+    # streamed at all — still emit a clean finish so the client doesn't hang.
+    finish = _REVERSE_FINISH_REASON_MAP.get(
+        state.stop_reason_anthropic or "end_turn", "stop"
+    )
+    yield _make_chunk(state, {}, finish_reason=finish)
+    yield StreamChunk(
+        id=state.message_id,
+        created=state.created,
+        model=state.model,
+        choices=[],
+        usage={
+            "prompt_tokens": state.usage_in,
+            "completion_tokens": state.usage_out,
+            "total_tokens": state.usage_in + state.usage_out,
+        },
+    )
