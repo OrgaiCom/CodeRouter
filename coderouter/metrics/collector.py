@@ -69,11 +69,52 @@ import os
 import threading
 import time
 from collections import Counter, deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from coderouter.logging import JsonLineFormatter
+
+# M12(1): the complete set of log-event names the collector reacts to.
+# ``_dispatch`` tests membership here BEFORE acquiring ``self._lock`` so
+# unrecognized (typically high-volume DEBUG) records bail out with a
+# single frozenset lookup and never contend on the lock. Kept in lockstep
+# with ``MetricsCollector._dispatch_table`` (built per-instance in
+# ``__init__``); a mismatch is caught by the M12 early-exit test.
+_KNOWN_EVENTS: Final[frozenset[str]] = frozenset(
+    {
+        "try-provider",
+        "provider-ok",
+        "provider-failed",
+        "provider-failed-midstream",
+        "skip-paid-provider",
+        "skip-unknown-provider",
+        "skip-budget-exceeded",
+        "chain-budget-exceeded",
+        "skip-memory-pressure",
+        "chain-memory-pressure-blocked",
+        "backend-health-changed",
+        "demote-unhealthy-provider",
+        "capability-degraded",
+        "output-filter-applied",
+        "chain-paid-gate-blocked",
+        "chain-uniform-auth-failure",
+        "auto-router-fallthrough",
+        "cache-observed",
+        "context-budget-warning",
+        "context-budget-trimmed",
+        "tokens-saved",
+        "drift-detected",
+        "drift-promoted",
+        "drift-reload-attempted",
+        "partial-stitch-surfaced",
+        "probe-completed",
+        "probe-round-completed",
+        "probe-capabilities-drift",
+        "coderouter-startup",
+    }
+)
 
 # Default ring-buffer size. Chosen to match a ~2-second refresh at 100 RPS
 # without blowing memory; overridable via the :class:`MetricsCollector`
@@ -253,6 +294,47 @@ class MetricsCollector(logging.Handler):
         # YAML.
         self._startup_info: dict[str, Any] = {}
 
+        # M12(1): event name -> bound handler method. Built once per
+        # instance (handlers are bound methods, so they must be built here
+        # rather than as a class attribute). Replaces the former
+        # ~30-branch if/elif chain in ``_dispatch``. The key set is kept
+        # in lockstep with the module-level ``_KNOWN_EVENTS`` frozenset,
+        # which ``_dispatch`` uses for a lock-free early bail-out on
+        # unrecognized (typically DEBUG) log records.
+        self._dispatch_table: dict[
+            str, Callable[[dict[str, Any], logging.LogRecord], None]
+        ] = {
+            "try-provider": self._on_try_provider,
+            "provider-ok": self._on_provider_ok,
+            "provider-failed": self._on_provider_failed,
+            "provider-failed-midstream": self._on_provider_failed_midstream,
+            "skip-paid-provider": self._on_skip_paid_provider,
+            "skip-unknown-provider": self._on_skip_unknown_provider,
+            "skip-budget-exceeded": self._on_skip_budget_exceeded,
+            "chain-budget-exceeded": self._on_chain_budget_exceeded,
+            "skip-memory-pressure": self._on_skip_memory_pressure,
+            "chain-memory-pressure-blocked": self._on_chain_memory_pressure_blocked,
+            "backend-health-changed": self._on_backend_health_changed,
+            "demote-unhealthy-provider": self._on_demote_unhealthy_provider,
+            "capability-degraded": self._on_capability_degraded,
+            "output-filter-applied": self._on_output_filter_applied,
+            "chain-paid-gate-blocked": self._on_chain_paid_gate_blocked,
+            "chain-uniform-auth-failure": self._on_chain_uniform_auth_failure,
+            "auto-router-fallthrough": self._on_auto_router_fallthrough,
+            "cache-observed": self._on_cache_observed,
+            "context-budget-warning": self._on_context_budget_warning,
+            "context-budget-trimmed": self._on_context_budget_trimmed,
+            "tokens-saved": self._on_tokens_saved,
+            "drift-detected": self._on_drift_detected,
+            "drift-promoted": self._on_drift_promoted,
+            "drift-reload-attempted": self._on_drift_reload_attempted,
+            "partial-stitch-surfaced": self._on_partial_stitch_surfaced,
+            "probe-completed": self._on_probe_completed,
+            "probe-round-completed": self._on_probe_round_completed,
+            "probe-capabilities-drift": self._on_probe_capabilities_drift,
+            "coderouter-startup": self._on_coderouter_startup,
+        }
+
     # ------------------------------------------------------------------
     # Handler API
     # ------------------------------------------------------------------
@@ -271,254 +353,364 @@ class MetricsCollector(logging.Handler):
             self.handleError(record)
 
     def _dispatch(self, record: logging.LogRecord) -> None:
-        """Event name → counter/ring mutation. Called under ``self._lock``."""
+        """Event name → counter/ring mutation.
+
+        M12(1) performance fix: the hot path is invoked for *every* log
+        record on the root logger, including high-volume DEBUG lines that
+        are never metrics events. Two cheap gates run before we touch the
+        lock:
+
+        1. ``event`` must be a ``str`` (skips records whose ``msg`` is a
+           format object / non-string).
+        2. ``event`` must be in :data:`_KNOWN_EVENTS` — a ``frozenset``
+           membership test — which lets an unrecognized event bail out
+           before acquiring ``self._lock`` and before running any of the
+           per-event handlers.
+
+        Recognized events dispatch through :data:`_DISPATCH` (a
+        ``dict[str, method]`` built once per instance in ``__init__``),
+        replacing the former ~30-branch ``if/elif`` chain. Behavior is
+        identical to the chain — each handler body is the verbatim former
+        branch — but recognized-event dispatch is now O(1) and unknown
+        events never take the lock.
+        """
         event = record.msg
-        if not isinstance(event, str):
+        if not isinstance(event, str) or event not in _KNOWN_EVENTS:
+            return
+        handler = self._dispatch_table.get(event)
+        if handler is None:  # pragma: no cover - _KNOWN_EVENTS/table in sync
             return
         extras = record.__dict__
         with self._lock:
-            if event == "try-provider":
-                self._requests_total += 1
-                provider = _str(extras.get("provider"))
-                self._provider_attempts[provider] += 1
-                self._push_recent(event, extras, record)
-            elif event == "provider-ok":
-                provider = _str(extras.get("provider"))
-                self._provider_outcomes.setdefault(provider, Counter())["ok"] += 1
-                self._push_recent(event, extras, record)
-            elif event == "provider-failed":
-                provider = _str(extras.get("provider"))
-                self._provider_outcomes.setdefault(provider, Counter())["failed"] += 1
-                self._last_error[provider] = _make_last_error(extras, record)
-                self._push_recent(event, extras, record)
-            elif event == "provider-failed-midstream":
-                provider = _str(extras.get("provider"))
-                self._provider_outcomes.setdefault(provider, Counter())[
-                    "failed_midstream"
-                ] += 1
-                self._last_error[provider] = _make_last_error(extras, record)
-                self._push_recent(event, extras, record)
-            elif event == "skip-paid-provider":
-                provider = _str(extras.get("provider"))
-                self._provider_skipped_paid[provider] += 1
-            elif event == "skip-unknown-provider":
-                provider = _str(extras.get("provider"))
-                self._provider_skipped_unknown[provider] += 1
-            elif event == "skip-budget-exceeded":
-                # v1.10: per-provider budget-gate filter count.
-                provider = _str(extras.get("provider"))
-                self._provider_skipped_budget[provider] += 1
-            elif event == "chain-budget-exceeded":
-                # v1.10: chain-level aggregate (whole chain blocked
-                # by the budget gate). Symmetric with
-                # ``chain-paid-gate-blocked``.
-                self._chain_budget_exceeded_total += 1
-            elif event == "skip-memory-pressure":
-                # v1.9-E phase 2 (L2): per-provider OOM-cooldown
-                # filter count. Same shape as the paid / budget
-                # skip counters.
-                provider = _str(extras.get("provider"))
-                self._provider_skipped_memory_pressure[provider] += 1
-            elif event == "chain-memory-pressure-blocked":
-                # v1.9-E phase 2 (L2): chain-level aggregate.
-                self._chain_memory_pressure_blocked_total += 1
-            elif event == "backend-health-changed":
-                # v1.9-E phase 2 (L5): per-provider state-transition
-                # counter, keyed on the new state. Lets dashboards
-                # render a "providers degraded right now" panel by
-                # comparing transition counts to recovery counts.
-                provider = _str(extras.get("provider"))
-                new_state = _str(extras.get("new_state"))
-                if new_state:
-                    self._backend_health_transitions.setdefault(
-                        provider, Counter()
-                    )[new_state] += 1
-            elif event == "demote-unhealthy-provider":
-                # v1.9-E phase 2 (L5): per-provider demote count.
-                provider = _str(extras.get("provider"))
-                self._provider_demoted_unhealthy[provider] += 1
-            elif event == "capability-degraded":
-                dropped = extras.get("dropped") or []
-                if isinstance(dropped, list):
-                    for cap in dropped:
-                        if isinstance(cap, str):
-                            self._capability_degraded[cap] += 1
-            elif event == "output-filter-applied":
-                filters = extras.get("filters") or []
-                if isinstance(filters, list):
-                    for name in filters:
-                        if isinstance(name, str):
-                            self._output_filter_applied[name] += 1
-            elif event == "chain-paid-gate-blocked":
-                self._chain_paid_gate_blocked_total += 1
-            elif event == "chain-uniform-auth-failure":
-                self._chain_uniform_auth_failure_total += 1
-            elif event == "auto-router-fallthrough":
-                # Every call into ``classify()`` that exits via the
-                # default-rule branch (no user/bundled rule matched, or
-                # ``auto_router.disabled: true``) bumps this counter.
-                self._auto_router_fallthrough_total += 1
-            elif event == "cache-observed":
-                # v1.9-A: per-provider cache token + 4-class outcome.
-                # Defensive int-coerce — log extras are typed via
-                # CacheObservedPayload at the source but the handler
-                # contract still lets us receive anything, and we never
-                # want a malformed log line to crash the metrics tap.
-                provider = _str(extras.get("provider"))
-                read_raw = extras.get("cache_read_input_tokens", 0)
-                creation_raw = extras.get("cache_creation_input_tokens", 0)
-                read = read_raw if isinstance(read_raw, int) else 0
-                creation = creation_raw if isinstance(creation_raw, int) else 0
-                outcome = _str(extras.get("outcome"))
-                self._cache_read_tokens[provider] += read
-                self._cache_creation_tokens[provider] += creation
-                self._cache_read_tokens_total += read
-                self._cache_creation_tokens_total += creation
-                if outcome:
-                    self._cache_outcomes.setdefault(provider, Counter())[outcome] += 1
+            handler(extras, record)
 
-                # v1.9-D: cost aggregation. Same defensive coercion —
-                # malformed cost values default to 0.0 rather than
-                # crashing the metrics handler. The fields are typed
-                # ``float`` in CacheObservedPayload but JSON parsers
-                # downstream can sometimes hand us ``int`` for whole
-                # numbers, so we accept both.
-                cost_usd_raw = extras.get("cost_usd", 0.0)
-                savings_usd_raw = extras.get("cost_savings_usd", 0.0)
-                cost_usd = (
-                    float(cost_usd_raw)
-                    if isinstance(cost_usd_raw, int | float)
-                    else 0.0
-                )
-                savings_usd = (
-                    float(savings_usd_raw)
-                    if isinstance(savings_usd_raw, int | float)
-                    else 0.0
-                )
-                if cost_usd > 0.0:
-                    self._cost_total_usd[provider] = (
-                        self._cost_total_usd.get(provider, 0.0) + cost_usd
-                    )
-                    self._cost_total_usd_aggregate += cost_usd
-                if savings_usd > 0.0:
-                    self._cost_savings_usd[provider] = (
-                        self._cost_savings_usd.get(provider, 0.0) + savings_usd
-                    )
-                    self._cost_savings_usd_aggregate += savings_usd
+    # ------------------------------------------------------------------
+    # Per-event handlers (M12: extracted verbatim from the former
+    # if/elif chain in _dispatch). Each is called under ``self._lock``.
+    # ------------------------------------------------------------------
 
-                # v2.6: language-tax spend. Same defensive coercion as the
-                # cost fields; defaults to 0.0 for pre-v2.6 log lines and
-                # English/code traffic, so the aggregate only moves on
-                # CJK-heavy requests against a tokenizer-configured provider.
-                lt_usd_raw = extras.get("language_tax_usd", 0.0)
-                lt_usd = (
-                    float(lt_usd_raw)
-                    if isinstance(lt_usd_raw, int | float)
-                    else 0.0
-                )
-                if lt_usd > 0.0:
-                    self._language_tax_usd[provider] = (
-                        self._language_tax_usd.get(provider, 0.0) + lt_usd
-                    )
-                    self._language_tax_usd_aggregate += lt_usd
-            elif event == "context-budget-warning":
-                # v2.0-F (L1): context usage exceeded the warn threshold.
-                # Track per-profile and aggregate, plus latest ratio gauge.
-                profile = _str(extras.get("profile"))
-                self._context_budget_warnings_total += 1
-                self._context_budget_warnings_by_profile[profile] += 1
-                ratio_raw = extras.get("usage_ratio")
-                if isinstance(ratio_raw, int | float):
-                    self._context_budget_latest_ratio[profile] = float(ratio_raw)
-            elif event == "context-budget-trimmed":
-                # v2.0-F (L1): messages were removed to fit the budget.
-                profile = _str(extras.get("profile"))
-                self._context_budget_trims_total += 1
-                self._context_budget_trims_by_profile[profile] += 1
-                # token-savings: the trim already carries the estimated
-                # before/after token counts, so fold the delta into the
-                # shared savings buckets (mechanism="trim").
-                before = extras.get("estimated_tokens_before")
-                after = extras.get("estimated_tokens_after")
-                if isinstance(before, int | float) and isinstance(
-                    after, int | float
-                ):
-                    saved = max(0, int(before) - int(after))
-                    if saved:
-                        self._tokens_saved_total += saved
-                        self._tokens_saved_by_mechanism["trim"] += saved
-            elif event == "tokens-saved":
-                # Neutral token-savings event emitted by non-core reduction
-                # mechanisms (e.g. the compress plugin). Carries a
-                # ``mechanism`` label plus either a precomputed
-                # ``tokens_saved`` or a ``tokens_before`` / ``tokens_after``
-                # pair. Negative deltas clamp to zero. No core import needed
-                # by the emitter — it just logs this record name.
-                mechanism = _str(extras.get("mechanism")) or "unknown"
-                saved_raw = extras.get("tokens_saved")
-                before = extras.get("tokens_before")
-                after = extras.get("tokens_after")
-                if isinstance(saved_raw, int | float):
-                    saved = max(0, int(saved_raw))
-                elif isinstance(before, int | float) and isinstance(
-                    after, int | float
-                ):
-                    saved = max(0, int(before) - int(after))
-                else:
-                    saved = 0
-                if saved:
-                    self._tokens_saved_total += saved
-                    self._tokens_saved_by_mechanism[mechanism] += saved
-                self._push_recent(event, extras, record)
-            elif event == "drift-detected":
-                # v2.0-G (L4): drift detection fired.
-                provider = _str(extras.get("provider"))
-                self._drift_detected_total += 1
-                self._drift_detected_by_provider[provider] += 1
-                self._push_recent(event, extras, record)
-            elif event == "drift-promoted":
-                # v2.0-G (L4): drifted provider was demoted.
-                self._drift_promoted_total += 1
-                self._push_recent(event, extras, record)
-            elif event == "drift-reload-attempted":
-                # v2.0-G (L4): Ollama KV cache flush attempted.
-                self._drift_reload_total += 1
-                if extras.get("success"):
-                    self._drift_reload_success_total += 1
-            elif event == "partial-stitch-surfaced":
-                # v2.0-H (L6): mid-stream failure gracefully surfaced.
-                self._partial_stitch_surfaced_total += 1
-                self._push_recent(event, extras, record)
-            elif event == "probe-completed":
-                # v2.0-I: per-provider probe outcome.
-                provider = _str(extras.get("provider"))
-                self._probe_total[provider] += 1
-                if extras.get("success"):
-                    self._probe_success[provider] += 1
-                else:
-                    self._probe_failure[provider] += 1
-                latency_raw = extras.get("latency_ms")
-                if isinstance(latency_raw, int | float):
-                    self._probe_latency_ms[provider] = float(latency_raw)
-            elif event == "probe-round-completed":
-                # v2.0-I: round counter for the dashboard.
-                self._probe_rounds_total += 1
-            elif event == "probe-capabilities-drift":
-                # v2.0-I: model mismatch detected by probe.
-                provider = _str(extras.get("provider"))
-                self._probe_drift_detected[provider] += 1
-            elif event == "coderouter-startup":
-                # Snapshot a subset — startup payload contains lists that are
-                # safe to surface to /metrics.json. Version / providers /
-                # profiles / default_profile is all the dashboard needs.
-                self._startup_info = {
-                    "version": _str(extras.get("version")),
-                    "providers": list(extras.get("providers") or []),
-                    "profiles": list(extras.get("profiles") or []),
-                    "default_profile": _str(extras.get("default_profile")),
-                    "allow_paid": bool(extras.get("allow_paid")),
-                    "mode_source": _str(extras.get("mode_source")),
-                }
+    def _on_try_provider(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        self._requests_total += 1
+        provider = _str(extras.get("provider"))
+        self._provider_attempts[provider] += 1
+        self._push_recent("try-provider", extras, record)
+
+    def _on_provider_ok(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        provider = _str(extras.get("provider"))
+        self._provider_outcomes.setdefault(provider, Counter())["ok"] += 1
+        self._push_recent("provider-ok", extras, record)
+
+    def _on_provider_failed(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        provider = _str(extras.get("provider"))
+        self._provider_outcomes.setdefault(provider, Counter())["failed"] += 1
+        self._last_error[provider] = _make_last_error(extras, record)
+        self._push_recent("provider-failed", extras, record)
+
+    def _on_provider_failed_midstream(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        provider = _str(extras.get("provider"))
+        self._provider_outcomes.setdefault(provider, Counter())[
+            "failed_midstream"
+        ] += 1
+        self._last_error[provider] = _make_last_error(extras, record)
+        self._push_recent("provider-failed-midstream", extras, record)
+
+    def _on_skip_paid_provider(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        provider = _str(extras.get("provider"))
+        self._provider_skipped_paid[provider] += 1
+
+    def _on_skip_unknown_provider(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        provider = _str(extras.get("provider"))
+        self._provider_skipped_unknown[provider] += 1
+
+    def _on_skip_budget_exceeded(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.10: per-provider budget-gate filter count.
+        provider = _str(extras.get("provider"))
+        self._provider_skipped_budget[provider] += 1
+
+    def _on_chain_budget_exceeded(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.10: chain-level aggregate (whole chain blocked by the
+        # budget gate). Symmetric with ``chain-paid-gate-blocked``.
+        self._chain_budget_exceeded_total += 1
+
+    def _on_skip_memory_pressure(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.9-E phase 2 (L2): per-provider OOM-cooldown filter count.
+        # Same shape as the paid / budget skip counters.
+        provider = _str(extras.get("provider"))
+        self._provider_skipped_memory_pressure[provider] += 1
+
+    def _on_chain_memory_pressure_blocked(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.9-E phase 2 (L2): chain-level aggregate.
+        self._chain_memory_pressure_blocked_total += 1
+
+    def _on_backend_health_changed(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.9-E phase 2 (L5): per-provider state-transition counter,
+        # keyed on the new state. Lets dashboards render a "providers
+        # degraded right now" panel by comparing transition counts to
+        # recovery counts.
+        provider = _str(extras.get("provider"))
+        new_state = _str(extras.get("new_state"))
+        if new_state:
+            self._backend_health_transitions.setdefault(
+                provider, Counter()
+            )[new_state] += 1
+
+    def _on_demote_unhealthy_provider(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.9-E phase 2 (L5): per-provider demote count.
+        provider = _str(extras.get("provider"))
+        self._provider_demoted_unhealthy[provider] += 1
+
+    def _on_capability_degraded(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        dropped = extras.get("dropped") or []
+        if isinstance(dropped, list):
+            for cap in dropped:
+                if isinstance(cap, str):
+                    self._capability_degraded[cap] += 1
+
+    def _on_output_filter_applied(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        filters = extras.get("filters") or []
+        if isinstance(filters, list):
+            for name in filters:
+                if isinstance(name, str):
+                    self._output_filter_applied[name] += 1
+
+    def _on_chain_paid_gate_blocked(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        self._chain_paid_gate_blocked_total += 1
+
+    def _on_chain_uniform_auth_failure(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        self._chain_uniform_auth_failure_total += 1
+
+    def _on_auto_router_fallthrough(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # Every call into ``classify()`` that exits via the default-rule
+        # branch (no user/bundled rule matched, or
+        # ``auto_router.disabled: true``) bumps this counter.
+        self._auto_router_fallthrough_total += 1
+
+    def _on_cache_observed(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v1.9-A: per-provider cache token + 4-class outcome.
+        # Defensive int-coerce — log extras are typed via
+        # CacheObservedPayload at the source but the handler
+        # contract still lets us receive anything, and we never
+        # want a malformed log line to crash the metrics tap.
+        provider = _str(extras.get("provider"))
+        read_raw = extras.get("cache_read_input_tokens", 0)
+        creation_raw = extras.get("cache_creation_input_tokens", 0)
+        read = read_raw if isinstance(read_raw, int) else 0
+        creation = creation_raw if isinstance(creation_raw, int) else 0
+        outcome = _str(extras.get("outcome"))
+        self._cache_read_tokens[provider] += read
+        self._cache_creation_tokens[provider] += creation
+        self._cache_read_tokens_total += read
+        self._cache_creation_tokens_total += creation
+        if outcome:
+            self._cache_outcomes.setdefault(provider, Counter())[outcome] += 1
+
+        # v1.9-D: cost aggregation. Same defensive coercion —
+        # malformed cost values default to 0.0 rather than
+        # crashing the metrics handler. The fields are typed
+        # ``float`` in CacheObservedPayload but JSON parsers
+        # downstream can sometimes hand us ``int`` for whole
+        # numbers, so we accept both.
+        cost_usd_raw = extras.get("cost_usd", 0.0)
+        savings_usd_raw = extras.get("cost_savings_usd", 0.0)
+        cost_usd = (
+            float(cost_usd_raw)
+            if isinstance(cost_usd_raw, int | float)
+            else 0.0
+        )
+        savings_usd = (
+            float(savings_usd_raw)
+            if isinstance(savings_usd_raw, int | float)
+            else 0.0
+        )
+        if cost_usd > 0.0:
+            self._cost_total_usd[provider] = (
+                self._cost_total_usd.get(provider, 0.0) + cost_usd
+            )
+            self._cost_total_usd_aggregate += cost_usd
+        if savings_usd > 0.0:
+            self._cost_savings_usd[provider] = (
+                self._cost_savings_usd.get(provider, 0.0) + savings_usd
+            )
+            self._cost_savings_usd_aggregate += savings_usd
+
+        # v2.6: language-tax spend. Same defensive coercion as the
+        # cost fields; defaults to 0.0 for pre-v2.6 log lines and
+        # English/code traffic, so the aggregate only moves on
+        # CJK-heavy requests against a tokenizer-configured provider.
+        lt_usd_raw = extras.get("language_tax_usd", 0.0)
+        lt_usd = (
+            float(lt_usd_raw)
+            if isinstance(lt_usd_raw, int | float)
+            else 0.0
+        )
+        if lt_usd > 0.0:
+            self._language_tax_usd[provider] = (
+                self._language_tax_usd.get(provider, 0.0) + lt_usd
+            )
+            self._language_tax_usd_aggregate += lt_usd
+
+    def _on_context_budget_warning(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-F (L1): context usage exceeded the warn threshold.
+        # Track per-profile and aggregate, plus latest ratio gauge.
+        profile = _str(extras.get("profile"))
+        self._context_budget_warnings_total += 1
+        self._context_budget_warnings_by_profile[profile] += 1
+        ratio_raw = extras.get("usage_ratio")
+        if isinstance(ratio_raw, int | float):
+            self._context_budget_latest_ratio[profile] = float(ratio_raw)
+
+    def _on_context_budget_trimmed(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-F (L1): messages were removed to fit the budget.
+        profile = _str(extras.get("profile"))
+        self._context_budget_trims_total += 1
+        self._context_budget_trims_by_profile[profile] += 1
+        # token-savings: the trim already carries the estimated
+        # before/after token counts, so fold the delta into the
+        # shared savings buckets (mechanism="trim").
+        before = extras.get("estimated_tokens_before")
+        after = extras.get("estimated_tokens_after")
+        if isinstance(before, int | float) and isinstance(after, int | float):
+            saved = max(0, int(before) - int(after))
+            if saved:
+                self._tokens_saved_total += saved
+                self._tokens_saved_by_mechanism["trim"] += saved
+
+    def _on_tokens_saved(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # Neutral token-savings event emitted by non-core reduction
+        # mechanisms (e.g. the compress plugin). Carries a
+        # ``mechanism`` label plus either a precomputed
+        # ``tokens_saved`` or a ``tokens_before`` / ``tokens_after``
+        # pair. Negative deltas clamp to zero. No core import needed
+        # by the emitter — it just logs this record name.
+        mechanism = _str(extras.get("mechanism")) or "unknown"
+        saved_raw = extras.get("tokens_saved")
+        before = extras.get("tokens_before")
+        after = extras.get("tokens_after")
+        if isinstance(saved_raw, int | float):
+            saved = max(0, int(saved_raw))
+        elif isinstance(before, int | float) and isinstance(after, int | float):
+            saved = max(0, int(before) - int(after))
+        else:
+            saved = 0
+        if saved:
+            self._tokens_saved_total += saved
+            self._tokens_saved_by_mechanism[mechanism] += saved
+        self._push_recent("tokens-saved", extras, record)
+
+    def _on_drift_detected(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-G (L4): drift detection fired.
+        provider = _str(extras.get("provider"))
+        self._drift_detected_total += 1
+        self._drift_detected_by_provider[provider] += 1
+        self._push_recent("drift-detected", extras, record)
+
+    def _on_drift_promoted(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-G (L4): drifted provider was demoted.
+        self._drift_promoted_total += 1
+        self._push_recent("drift-promoted", extras, record)
+
+    def _on_drift_reload_attempted(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-G (L4): Ollama KV cache flush attempted.
+        self._drift_reload_total += 1
+        if extras.get("success"):
+            self._drift_reload_success_total += 1
+
+    def _on_partial_stitch_surfaced(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-H (L6): mid-stream failure gracefully surfaced.
+        self._partial_stitch_surfaced_total += 1
+        self._push_recent("partial-stitch-surfaced", extras, record)
+
+    def _on_probe_completed(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-I: per-provider probe outcome.
+        provider = _str(extras.get("provider"))
+        self._probe_total[provider] += 1
+        if extras.get("success"):
+            self._probe_success[provider] += 1
+        else:
+            self._probe_failure[provider] += 1
+        latency_raw = extras.get("latency_ms")
+        if isinstance(latency_raw, int | float):
+            self._probe_latency_ms[provider] = float(latency_raw)
+
+    def _on_probe_round_completed(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-I: round counter for the dashboard.
+        self._probe_rounds_total += 1
+
+    def _on_probe_capabilities_drift(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.0-I: model mismatch detected by probe.
+        provider = _str(extras.get("provider"))
+        self._probe_drift_detected[provider] += 1
+
+    def _on_coderouter_startup(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # Snapshot a subset — startup payload contains lists that are
+        # safe to surface to /metrics.json. Version / providers /
+        # profiles / default_profile is all the dashboard needs.
+        self._startup_info = {
+            "version": _str(extras.get("version")),
+            "providers": list(extras.get("providers") or []),
+            "profiles": list(extras.get("profiles") or []),
+            "default_profile": _str(extras.get("default_profile")),
+            "allow_paid": bool(extras.get("allow_paid")),
+            "mode_source": _str(extras.get("mode_source")),
+        }
 
     def _push_recent(
         self, event: str, extras: dict[str, Any], record: logging.LogRecord
@@ -730,6 +922,12 @@ class MetricsCollector(logging.Handler):
                 "cost_savings_usd": dict(self._cost_savings_usd),
                 "cost_total_usd_aggregate": self._cost_total_usd_aggregate,
                 "cost_savings_usd_aggregate": self._cost_savings_usd_aggregate,
+                # v2.6: language-tax spend. M5 fix — load_state already
+                # reads these two keys, so save_state must emit them or the
+                # CJK language-tax running totals silently zero-reset on
+                # every restart.
+                "language_tax_usd": dict(self._language_tax_usd),
+                "language_tax_usd_aggregate": self._language_tax_usd_aggregate,
                 "chain_paid_gate_blocked_total": self._chain_paid_gate_blocked_total,
                 "chain_budget_exceeded_total": self._chain_budget_exceeded_total,
                 "chain_memory_pressure_blocked_total": self._chain_memory_pressure_blocked_total,
@@ -896,10 +1094,21 @@ def install_collector(*, ring_size: int = _DEFAULT_RING_SIZE) -> MetricsCollecto
     """
     global _collector
     with _collector_lock:
+        root = logging.getLogger()
         if _collector is None:
             _collector = MetricsCollector(ring_size=ring_size)
-            logging.getLogger().addHandler(_collector)
+            root.addHandler(_collector)
             _install_jsonl_mirror()
+        elif _collector not in root.handlers:
+            # M4: the collector instance already exists but was detached
+            # from the root logger — most commonly because a second
+            # create_app() in the same process re-ran configure_logging.
+            # Historically configure_logging removed every root handler;
+            # even with that fixed, a caller that manually cleared the
+            # root handlers would leave the collector orphaned and metrics
+            # would silently stop. Re-attach the existing instance so its
+            # accumulated counters survive the reconfigure.
+            root.addHandler(_collector)
         return _collector
 
 
