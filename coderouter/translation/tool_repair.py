@@ -101,16 +101,41 @@ _FENCED_RE = re.compile(
 )
 
 
-def _extract_fenced_blocks(text: str) -> tuple[str, list[str]]:
-    """Pull ```...``` blocks out of text. Returns (text_without_fences, bodies)."""
-    bodies: list[str] = []
+def _extract_tool_call_fenced_blocks(
+    text: str,
+    allowed: set[str] | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Pull tool-call-shaped ```...``` blocks out of text.
 
-    def _collect(match: re.Match[str]) -> str:
-        bodies.append(match.group(1))
-        return ""  # remove the fenced block from the text entirely
+    Only fenced blocks whose body parses to a recognised tool-call shape are
+    removed from the text and returned as normalised OpenAI tool_calls. Any
+    other fenced block (prose, real source code, non-tool JSON) is preserved
+    verbatim in the returned text — the removal decision and the extraction
+    decision use the exact same predicate, so a fenced block is never dropped
+    without also being surfaced as a tool call (bug H2: data loss when a
+    response mixed a code example with a tool-call block).
 
-    cleaned = _FENCED_RE.sub(_collect, text)
-    return cleaned, bodies
+    Returns (text_without_tool_fences, tool_calls).
+    """
+    tool_calls: list[dict[str, Any]] = []
+
+    def _repair(match: re.Match[str]) -> str:
+        body = match.group(1).strip()
+        if not body.startswith("{"):
+            return match.group(0)  # keep non-JSON fenced blocks (e.g. code)
+        try:
+            obj = json.loads(body)
+        except json.JSONDecodeError:
+            return match.group(0)  # keep unparseable fenced blocks
+        hit = _looks_like_tool_call(obj, allowed)
+        if hit is None:
+            return match.group(0)  # keep non-tool-call JSON blocks
+        name, args = hit
+        tool_calls.append(_normalise_to_openai_tool_call(name, args))
+        return ""  # remove only recognised tool-call blocks
+
+    cleaned = _FENCED_RE.sub(_repair, text)
+    return cleaned, tool_calls
 
 
 def _find_balanced_json_objects(text: str) -> list[tuple[int, int, str]]:
@@ -188,21 +213,12 @@ def repair_tool_calls_in_text(
 
     extracted: list[dict[str, Any]] = []
 
-    # 1. Pull fenced code blocks out first — they're the most common shape
-    #    when a chat-tuned model explains what it's doing.
-    cleaned, fenced_bodies = _extract_fenced_blocks(text)
-    for body in fenced_bodies:
-        body = body.strip()
-        if not body.startswith("{"):
-            continue
-        try:
-            obj = json.loads(body)
-        except json.JSONDecodeError:
-            continue
-        hit = _looks_like_tool_call(obj, allowed)
-        if hit is not None:
-            name, args = hit
-            extracted.append(_normalise_to_openai_tool_call(name, args))
+    # 1. Pull tool-call-shaped fenced code blocks out first — they're the most
+    #    common shape when a chat-tuned model explains what it's doing. Fenced
+    #    blocks that are NOT tool calls (prose, real source code, plain JSON
+    #    examples) are left in place so we never drop legitimate content (H2).
+    cleaned, fenced_tool_calls = _extract_tool_call_fenced_blocks(text, allowed)
+    extracted.extend(fenced_tool_calls)
 
     # 2. Scan remaining text for bare JSON objects.
     #    We walk from back to front so removals by slicing don't shift

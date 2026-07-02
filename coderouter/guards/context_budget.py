@@ -339,33 +339,128 @@ def _compute_preserve_set(
     return preserved
 
 
+def _group_removable_units(
+    messages: list[Any],
+    removable: list[int],
+) -> list[list[int]]:
+    """Group removable message indices into atomic tool-pair units.
+
+    ``removable`` is the sorted list of indices eligible for removal
+    (i.e. not in the preserve set). A tool_use assistant message and the
+    user message carrying its matching tool_result must be removed
+    together so we never leave an orphaned tool_use or tool_result in the
+    trimmed history (Anthropic rejects both with a 400). Because the
+    preserve-set computation already keeps pairs atomic, both halves of a
+    pair are always either both preserved or both removable — here we just
+    coalesce the removable halves into a single unit so the incremental
+    loop drops them in one step.
+
+    Returns a list of units (each a sorted list of indices), ordered by
+    the position of the unit's earliest message so the caller can peel
+    them off the front oldest-first.
+    """
+    removable_set = set(removable)
+
+    # Map every tool_use_id to the indices of the message(s) that emit the
+    # tool_use and the message that carries the matching tool_result.
+    partner: dict[int, set[int]] = {idx: set() for idx in removable}
+    use_index: dict[str, int] = {}
+    result_index: dict[str, int] = {}
+    for idx in removable:
+        for tid in _extract_tool_use_ids(messages[idx]):
+            use_index[tid] = idx
+        for tid in _extract_tool_result_ids(messages[idx]):
+            result_index[tid] = idx
+    for tid, use_idx in use_index.items():
+        res_idx = result_index.get(tid)
+        if res_idx is not None and res_idx in removable_set:
+            partner[use_idx].add(res_idx)
+            partner[res_idx].add(use_idx)
+
+    # Union-find style grouping over the partner graph.
+    seen: set[int] = set()
+    units: list[list[int]] = []
+    for idx in removable:
+        if idx in seen:
+            continue
+        stack = [idx]
+        group: set[int] = set()
+        while stack:
+            cur = stack.pop()
+            if cur in group:
+                continue
+            group.add(cur)
+            seen.add(cur)
+            stack.extend(p for p in partner[cur] if p not in group)
+        units.append(sorted(group))
+
+    units.sort(key=lambda unit: unit[0])
+    return units
+
+
+def _normalize_head(messages: list[Any]) -> list[Any]:
+    """Drop leading messages until the first is a clean ``user`` message.
+
+    Anthropic requires the first message to be a ``user`` message, and a
+    leading user message must not open with a dangling ``tool_result``
+    (its ``tool_use`` was trimmed away). We therefore drop from the front
+    any assistant message and any user message that contains a
+    tool_result, stopping at the first ``user`` message with no
+    tool_result block.
+    """
+    start = 0
+    n = len(messages)
+    while start < n:
+        msg = messages[start]
+        role = msg.role if hasattr(msg, "role") else (
+            msg.get("role") if isinstance(msg, dict) else None
+        )
+        if role == "user" and not _has_tool_result(msg):
+            break
+        start += 1
+    return messages[start:]
+
+
 def _do_trim(
     messages: list[Any],
     system: Any,
     target_tokens: int,
     preserve_last_n: int,
 ) -> list[Any]:
-    """Core trim loop. Reduces preserve_last_n if needed (floor: 2)."""
-    current_preserve = preserve_last_n
+    """Incrementally drop oldest messages until under ``target_tokens``.
 
-    while current_preserve >= 2:
-        preserved_indices = _compute_preserve_set(messages, current_preserve)
-        # Keep only preserved messages (maintain order)
-        trimmed = [messages[i] for i in sorted(preserved_indices)]
+    Unlike the previous implementation (which deleted every non-preserved
+    message in one shot the moment the threshold was crossed), this peels
+    messages off the front one atomic unit at a time and re-estimates
+    after each removal, stopping as soon as the estimate is at or below
+    the target. The preserve set (last N messages + their tool pairs) is a
+    hard floor that is never removed. After trimming, the head is
+    normalized so the first surviving message is a ``user`` message
+    without a leading ``tool_result`` (avoids upstream 400s). Bug H5.
+    """
+    if not messages:
+        return messages
 
-        estimated = estimate_tokens_from_anthropic_request(
-            system=system,
-            messages=trimmed,
-        )
+    already = estimate_tokens_from_anthropic_request(system=system, messages=messages)
+    if already <= target_tokens:
+        # Nothing to do — return the input unchanged.
+        return messages
+
+    preserved_indices = _compute_preserve_set(messages, preserve_last_n)
+    removable = [i for i in range(len(messages)) if i not in preserved_indices]
+    units = _group_removable_units(messages, removable)
+
+    # Indices we have decided to drop; peel atomic units from the front.
+    dropped: set[int] = set()
+    for unit in units:
+        kept = [messages[i] for i in range(len(messages)) if i not in dropped]
+        estimated = estimate_tokens_from_anthropic_request(system=system, messages=kept)
         if estimated <= target_tokens:
-            return trimmed
+            break
+        dropped.update(unit)
 
-        # Still over target — reduce preserve count and retry
-        current_preserve -= 1
-
-    # Floor reached — return with minimum preservation (last 2)
-    preserved_indices = _compute_preserve_set(messages, 2)
-    return [messages[i] for i in sorted(preserved_indices)]
+    trimmed = [messages[i] for i in range(len(messages)) if i not in dropped]
+    return _normalize_head(trimmed)
 
 
 __all__ = [

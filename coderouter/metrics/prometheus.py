@@ -407,7 +407,7 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
                     "Number of times a drifted provider was demoted "
                     "(promote/reload action fired)."
                 ),
-                samples=[(((),), drift_promoted)],
+                samples=[((), drift_promoted)],
             )
         )
     drift_reload = counters.get("drift_reload_total", 0)
@@ -416,7 +416,7 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             _counter(
                 name="drift_reload_total",
                 help_text="Ollama KV cache flush attempts (reload action).",
-                samples=[(((),), drift_reload)],
+                samples=[((), drift_reload)],
             )
         )
     drift_reload_ok = counters.get("drift_reload_success_total", 0)
@@ -425,7 +425,7 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             _counter(
                 name="drift_reload_success_total",
                 help_text="Successful Ollama KV cache flush attempts.",
-                samples=[(((),), drift_reload_ok)],
+                samples=[((), drift_reload_ok)],
             )
         )
 
