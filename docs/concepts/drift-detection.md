@@ -65,13 +65,14 @@ profiles:
 ## Response Header
 
 `X-CodeRouter-Drift: mild` または `X-CodeRouter-Drift: severe` が response header に付与されます。
-Streaming の場合は既存の drift 状態 (直前の detection 結果) を反映します。
+verdict はリクエスト単位 (request-scoped) で管理され、他の並行リクエストの検知結果がヘッダに混ざることはありません。
+Streaming ではヘッダ送出後に検知が走るため、原則ヘッダは付与されません — 検知結果はログ / metrics で確認してください。
 
 ## Cooldown & Recovery
 
 `promote` / `reload` action が発火すると:
 
-1. 対象 provider の adaptive rank が +2 降格される
+1. 対象 provider が cooldown 中はチェーン末尾へ降格される (profile の `adaptive` 設定に関係なく実際の試行順に反映)
 2. `reload` の場合は追加で Ollama KV cache flush を試行 (best-effort)
 3. `drift_detection_cooldown_s` 秒間は再検知をスキップ
 4. cooldown 満了後、次の observation 記録時に rank 復帰 + window クリア

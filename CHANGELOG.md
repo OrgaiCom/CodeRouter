@@ -6,6 +6,143 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+22 reliability and security fixes from a full-source review (26,600 lines),
+landed as two sequential PRs: high-priority **PR #34** (H1–H8) and
+medium-priority **PR #35** (M1–M14), both merged to `main`. No API or
+config-schema breaking changes. Backward compatibility highlights: the new
+launcher token auth is **opt-in** (`CODEROUTER_LAUNCHER_TOKEN` unset ⇒
+unchanged behavior + a startup warning), and the Host-validation middleware
+allows loopback by default with `CODEROUTER_ALLOWED_HOSTS` to extend it.
+
+### Fixed
+
+- **`/metrics` 500 when drift counters are non-zero** — three malformed
+  Prometheus label tuples (`(((),), v)` → `((), v)`) (`coderouter/metrics/prometheus.py`, PR #34/H1).
+- **`tool_repair` deleted unrelated fenced code blocks** while stripping
+  tool-call-shaped ones, losing user content
+  (`coderouter/translation/tool_repair.py`, PR #34/H2).
+- **Probe URL mismatch (`/v1/v1` duplication)** between the continuous probe
+  and the adapters caused healthy backends to be wrongly demoted; URL
+  normalization is now shared
+  (`coderouter/adapters/anthropic_native.py`, `coderouter/guards/continuous_probe.py`, PR #34/H4).
+- **`context_budget` dropped entire history at once** on threshold breach;
+  trimming is now sequential per tool-pair with re-estimation after each
+  step, and the new head turn is renormalized to a plain user turn
+  (`coderouter/guards/context_budget.py`, PR #34/H5).
+- **Empty-stream termination violated the SSE protocol** by sending a
+  terminator with no preceding `message_start`; one is now synthesized
+  first (`coderouter/translation/convert.py`, PR #34/H6).
+- **Excluded providers never recovered after a restart** — restored
+  self-healing state didn't re-arm recovery probes (only the live
+  UNHEALTHY-transition path did); probes are now re-spawned after state
+  restore, queued if the event loop isn't running yet
+  (`coderouter/routing/fallback.py`, `coderouter/guards/self_healing.py`, PR #34/H7).
+- **Malformed upstream responses bypassed retry/fallback** — an uncaught
+  pydantic `ValidationError` on missing/misshaped fields now converts to a
+  retryable `AdapterError` on non-stream paths, and stream paths skip the
+  malformed chunk with a once-per-stream warning
+  (`coderouter/adapters/anthropic_native.py`, `coderouter/adapters/openai_compat.py`, PR #35/M6).
+- **`"oom"` substring matched inside `"room"` / `"zoom"` / `"bloom"`** in
+  upstream error bodies, cooling down healthy providers; the memory-pressure
+  guard now matches the token on word boundaries
+  (`coderouter/guards/memory_pressure.py`, PR #35/M10).
+- **Interleaved text/tool-call deltas sent `input_json_delta` to
+  already-closed block indices** — blocks are now reopened at a fresh index
+  with their original `id`/`name` preserved
+  (`coderouter/translation/convert.py`, PR #35/M7).
+- **`tool_result.is_error` was dropped in both translation directions** — an
+  `"Error: "` content marker now round-trips the flag without
+  double-prefixing (`coderouter/translation/convert.py`, PR #35/M8).
+- **Streams ending without `message_stop` sent no terminal chunk**, hanging
+  OpenAI-compatible clients; a `finish_reason` + usage chunk is now
+  synthesized on abnormal termination (mirrors the H6 fix in the other
+  direction) (`coderouter/translation/convert.py`, PR #35/M9).
+- **`configure_logging` permanently detached the metrics collector** on a
+  second `create_app()` call by removing every root handler;
+  `install_collector` now re-attaches when missing, and
+  `configure_logging` removes only its own marked handlers
+  (`coderouter/logging.py`, PR #35/M4).
+- **Metrics persistence save/load asymmetry** zeroed language-tax
+  accounting on every restart — `save_state` was missing
+  `language_tax_usd` / `language_tax_usd_aggregate`, which `load_state`
+  expects (`coderouter/metrics/collector.py`, PR #35/M5).
+
+### Changed
+
+- **Config validation now fails fast at load time.** Previously-silent
+  misconfiguration is now rejected: profile chains referencing unknown
+  provider names, duplicate provider/profile names, inverted thresholds
+  (e.g. `context_budget` warn > trim, `trim_target` ≥ `trim_threshold`,
+  `recovery_probe_initial_s` > `recovery_probe_max_s`), and
+  `has_tools: false` / `has_image: false` matchers (which could never
+  match) (`coderouter/config/schemas.py`, PR #35/M13).
+- **Drift-based chain demotion now applies regardless of the `adaptive`
+  flag.** A dedicated cooldown-based demotion map is applied in
+  `_resolve_anthropic_chain` unconditionally; previously demotion only
+  affected ordering when `profile.adaptive` was true (and did nothing
+  under five samples) (`coderouter/routing/fallback.py`, PR #35/M3).
+- **Adaptive routing now observes streaming paths.** `record_attempt` was
+  only called from `generate_anthropic`; all four entry points
+  (`stream_anthropic` / `stream` / `generate` and non-stream) now record
+  first-event latency and outcomes, including Claude Code's default
+  streaming path (`coderouter/routing/fallback.py`, PR #35/M2).
+- **Drift verdicts are now request-scoped (`ContextVar`)** instead of
+  stored on the shared engine, eliminating a race where concurrent
+  requests could read another request's drift header or a stale verdict
+  during cooldown; the engine attribute remains as a deprecated mirror
+  (`coderouter/routing/fallback.py`, PR #35/M1).
+- **Chain resolution and context estimation no longer run twice per
+  request** — the resolved dispatch is cached per request and reused when
+  the request object is unchanged (`coderouter/routing/fallback.py`, PR #35/M11).
+- **Request/audit logs are now buffered** (20 records or 2 seconds,
+  flushed on close/`atexit`; `flush_every_n=1` restores write-through)
+  instead of synchronous per-request writes
+  (`coderouter/state/audit_log.py`, `coderouter/state/request_log.py`, PR #35/M12).
+- **The metrics collector hot path exits early** for unrecognized events
+  before acquiring the lock, and known events are dispatched via a dict
+  table instead of a ~30-branch `if`/`elif` chain
+  (`coderouter/metrics/collector.py`, PR #35/M12).
+- **Adapters now share a single `httpx.AsyncClient`** (lazily created,
+  per-call timeout override, closed on shutdown) instead of creating one
+  per request, enabling keep-alive/TLS session reuse
+  (`coderouter/adapters/base.py`, `coderouter/adapters/openai_compat.py`,
+  `coderouter/adapters/anthropic_native.py`, `coderouter/ingress/app.py`, PR #34/H3).
+
+### Security
+
+- **Host-validation middleware** on all routes rejects non-loopback `Host`
+  headers as a DNS-rebinding defense; loopback
+  (`localhost` / `127.0.0.1` / `[::1]`) is allowed by default and
+  `CODEROUTER_ALLOWED_HOSTS` (comma-separated) extends the allowlist
+  (`coderouter/ingress/app.py`, PR #34/H8).
+- **Opt-in launcher token authentication.** `launcher start/stop/delete`
+  require the `X-CodeRouter-Token` header (constant-time compare) when
+  `CODEROUTER_LAUNCHER_TOKEN` is set; unset behaves exactly as before, with
+  a one-time startup warning (`coderouter/ingress/launcher_routes.py`, PR #34/H8).
+- **`-m`/`--model` re-specification rejected** in launcher `extra_args`/
+  `options` to block arbitrary model-path injection
+  (`coderouter/ingress/launcher_routes.py`, PR #34/H8).
+- **Request body size cap** (64 MB default, `CODEROUTER_MAX_BODY_BYTES`
+  override) returns 413; SSE responses are unaffected
+  (`coderouter/ingress/app.py`, PR #35/M14).
+- **`/api/launcher/suggest` path confinement** — resolved paths must now
+  fall inside the configured `model_dirs`, closing an arbitrary-path
+  existence/size probe (`coderouter/ingress/launcher_routes.py`, PR #35/M14).
+
+### Tests
+
+- Full suite grew from **1263 → 1401 passed** (1 skipped, environment-only)
+  across the two PRs: 139 new regression tests in 12 new test files
+  (`tests/test_fix_h*.py` ×6, `tests/test_fix_m*.py` ×6). One existing test,
+  `tests/test_auto_router.py::test_has_tools_false_rejected_at_load`, was
+  flipped to expect `ValidationError` — its own docstring had anticipated
+  this once the new config validator (M13) landed; it is the only existing
+  test changed by either PR.
+
+---
+
 ## [v2.6.1] — 2026-06-28 (Token-savings accounting)
 
 Patch release: surfaces **token-savings accounting** in the metrics layer
