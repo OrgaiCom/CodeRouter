@@ -386,6 +386,27 @@ def _model_size_gb(path: str) -> float:
         return 0.0
 
 
+def _resolve_within_model_dirs(model_path: str, model_dirs: list[str]) -> Path:
+    """Resolve ``model_path`` and assert it lives under a configured model dir.
+
+    M14: ``/api/launcher/suggest`` accepts an arbitrary ``model_path`` query
+    param that was previously fed straight into ``expanduser().stat()``. That
+    let a caller probe the existence and size of any file on disk (a path
+    traversal / information-disclosure primitive). We now resolve the path
+    (following ``~`` and ``..``) and require it to be contained in one of the
+    resolved ``model_dirs``. Anything outside — or a request when no
+    ``model_dirs`` are configured — raises ``ValueError`` (mapped to 400).
+    """
+    if not model_dirs:
+        raise ValueError("No model_dirs configured; model_path cannot be validated.")
+    candidate = Path(model_path).expanduser().resolve()
+    for raw in model_dirs:
+        base = Path(raw).expanduser().resolve()
+        if candidate == base or base in candidate.parents:
+            return candidate
+    raise ValueError("model_path is not under any configured model_dirs.")
+
+
 def _build_cmd(
     backend: str,
     model_path: str,
@@ -446,6 +467,14 @@ def _build_cmd(
 # ---------------------------------------------------------------------------
 
 
+# M14: cap the StreamReader buffer for launched processes. A backend that
+# emits a huge amount of output without a newline (e.g. a progress bar that
+# only writes ``\r``) would otherwise make ``readline()`` buffer without
+# bound. asyncio raises ``LimitOverrunError`` once the limit is exceeded; we
+# recover by reading the buffered chunk and continuing so log tailing survives.
+_LOG_STREAM_LIMIT = 256 * 1024  # 256 KB
+
+
 async def _tail_logs(proc: ManagedProcess) -> None:
     """Read stdout+stderr into proc.log_tail until the process exits."""
     p = proc._proc
@@ -456,7 +485,22 @@ async def _tail_logs(proc: ManagedProcess) -> None:
         if stream is None:
             return
         while True:
-            line = await stream.readline()
+            try:
+                line = await stream.readline()
+            except (asyncio.LimitOverrunError, ValueError):
+                # M14: a single line exceeded the buffer limit (no newline in
+                # sight). Drain the currently buffered bytes so the reader can
+                # make progress instead of raising forever, then continue.
+                try:
+                    chunk = await stream.read(_LOG_STREAM_LIMIT)
+                except (asyncio.LimitOverrunError, ValueError):
+                    chunk = b""
+                if not chunk:
+                    if stream.at_eof():
+                        break
+                    continue
+                proc.log_tail.append(chunk.decode(errors="replace").rstrip())
+                continue
             if not line:
                 break
             proc.log_tail.append(line.decode(errors="replace").rstrip())
@@ -651,6 +695,9 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # M14: bound the per-stream StreamReader buffer so a newline-less
+            # flood from the child cannot grow it without limit.
+            limit=_LOG_STREAM_LIMIT,
         )
     except FileNotFoundError:
         raise HTTPException(
@@ -684,12 +731,18 @@ async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
             status_code=404, detail=f"Process {proc_id!r} not found.") from None
 
     if proc._proc and proc.status == "running":
-        proc._proc.terminate()
+        # M14: the child may already be gone (crashed / reaped) between the
+        # status check and the signal. terminate()/kill() then raise
+        # ProcessLookupError, which previously escaped as a 500. Suppress it
+        # (mirroring shutdown_launcher) so stop is idempotent.
+        with contextlib.suppress(ProcessLookupError):
+            proc._proc.terminate()
         proc.log_tail.append("[launcher] SIGTERM sent")
         try:
             await asyncio.wait_for(proc._proc.wait(), timeout=5.0)
         except TimeoutError:
-            proc._proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc._proc.kill()
             proc.log_tail.append("[launcher] SIGKILL sent (timeout)")
         proc.status = "stopped"
         proc.pid = None
@@ -726,17 +779,28 @@ async def api_logs(proc_id: str, request: Request, n: int = 100) -> dict[str, An
 
 
 @router.get("/api/launcher/suggest")
-async def api_suggest(model_path: str = "",
+async def api_suggest(request: Request, model_path: str = "",
                       backend: str = "llama.cpp") -> dict[str, Any]:
     """Suggest launch flags for the given model based on detected hardware.
 
     クライアントの「推奨値」ボタンから呼ばれる。値はあくまで目安。
     バックエンドごとにフラグ体系が違うため backend も受け取る。
+
+    M14: ``model_path`` is validated against the configured ``model_dirs``
+    before it is ``stat``-ed, so this endpoint can no longer be used to probe
+    the existence/size of arbitrary filesystem paths.
     """
     hw = await asyncio.to_thread(_detect_hardware)
     size_gb = 0.0
     if model_path:
-        size_gb = await asyncio.to_thread(_model_size_gb, model_path)
+        cfg = request.app.state.config
+        launcher_cfg = getattr(cfg, "launcher", None)
+        model_dirs: list[str] = launcher_cfg.model_dirs if launcher_cfg else []
+        try:
+            resolved = _resolve_within_model_dirs(model_path, model_dirs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        size_gb = await asyncio.to_thread(_model_size_gb, str(resolved))
     return {
         "extra_args": _suggest_launch_flags(backend, size_gb, hw),
         "backend": backend,

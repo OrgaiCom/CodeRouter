@@ -706,6 +706,63 @@ class FallbackChain(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _check_context_budget_thresholds_ordered(self) -> FallbackChain:
+        """v2.0-F (mE): cross-field sanity of the context-budget ratios.
+
+        The three ratios describe a strict staircase: a warning fires
+        first, then trimming kicks in at a higher usage, and trimming
+        reclaims space down to a target below the trim point. If they are
+        mis-ordered the guard is either a dead knob (warn above trim never
+        fires) or an infinite trim loop (target >= trim never converges).
+        Same fast-fail philosophy as ``_check_default_profile_exists`` —
+        surface the mistake at load with a concrete pointer to the fix
+        rather than at the first request that trips the guard.
+
+        Required invariants:
+          * ``context_budget_warn_threshold`` <= ``context_budget_trim_threshold``
+          * ``context_budget_trim_target``    <  ``context_budget_trim_threshold``
+        """
+        if self.context_budget_warn_threshold > self.context_budget_trim_threshold:
+            raise ValueError(
+                f"profile {self.name!r}: context_budget_warn_threshold "
+                f"({self.context_budget_warn_threshold}) must be <= "
+                f"context_budget_trim_threshold "
+                f"({self.context_budget_trim_threshold}) — the warning has to "
+                f"fire at or before trimming, otherwise it can never fire. "
+                f"Lower warn_threshold or raise trim_threshold."
+            )
+        if self.context_budget_trim_target >= self.context_budget_trim_threshold:
+            raise ValueError(
+                f"profile {self.name!r}: context_budget_trim_target "
+                f"({self.context_budget_trim_target}) must be < "
+                f"context_budget_trim_threshold "
+                f"({self.context_budget_trim_threshold}) — trimming must "
+                f"reclaim space *below* the trigger point, otherwise trim "
+                f"never converges. Lower trim_target below trim_threshold."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_recovery_probe_interval_ordered(self) -> FallbackChain:
+        """v2.0-J (mE): the recovery-probe backoff floor must not exceed its cap.
+
+        ``recovery_probe_initial_s`` is the first probe interval and each
+        failed probe doubles it up to ``recovery_probe_max_s``. When the
+        initial interval already exceeds the max, the exponential-backoff
+        ceiling is below its own floor — a nonsensical configuration that
+        the backoff loop would silently clamp. Surface it at load instead.
+        """
+        if self.recovery_probe_initial_s > self.recovery_probe_max_s:
+            raise ValueError(
+                f"profile {self.name!r}: recovery_probe_initial_s "
+                f"({self.recovery_probe_initial_s}) must be <= "
+                f"recovery_probe_max_s ({self.recovery_probe_max_s}) — the "
+                f"initial probe interval cannot exceed the backoff ceiling. "
+                f"Lower recovery_probe_initial_s or raise recovery_probe_max_s."
+            )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # v1.6-A: auto_router — declarative request-body classifier
@@ -719,6 +776,14 @@ class RuleMatcher(BaseModel):
     validator enforces this at load. Adding a new matcher type means
     adding a new optional field — the single-field invariant enforces
     discriminated-union semantics without pydantic's tagged-union syntax.
+
+    Boolean matchers (``has_image`` / ``has_tools``) only carry meaning at
+    ``True``: the runtime evaluator matches with ``is True`` (see
+    ``coderouter.routing.auto_router._match_rule``), so a ``False`` value
+    would construct without error yet never match anything — a dead rule
+    that silently shadows nothing and confuses operators. ``_exactly_one``
+    therefore rejects ``False`` for these fields at load (``None`` remains
+    the "unset" sentinel).
 
     Variants (v1.6-A):
 
@@ -822,8 +887,29 @@ class RuleMatcher(BaseModel):
         "cjk_ratio_min",
     )
 
+    # Boolean matcher fields carry meaning only at ``True`` — the runtime
+    # evaluator uses ``is True`` — so a ``False`` value is a dead rule that
+    # never matches. ``_exactly_one`` rejects it explicitly (see below).
+    _BOOL_MATCHER_FIELDS: tuple[str, ...] = ("has_image", "has_tools")
+
     @model_validator(mode="after")
     def _exactly_one(self) -> Self:
+        # Reject the dead-rule shape first so the error names the specific
+        # field the operator got wrong, rather than the generic
+        # "exactly one" message (``False`` counts as "set" below).
+        false_bools = [
+            name
+            for name in self._BOOL_MATCHER_FIELDS
+            if getattr(self, name) is False
+        ]
+        if false_bools:
+            raise ValueError(
+                f"RuleMatcher boolean matcher(s) set to False: {false_bools}. "
+                f"These matchers are evaluated with ``is True``, so a False "
+                f"value is a dead rule that never matches (it would silently "
+                f"shadow nothing). Use True to match, or omit the field "
+                f"(leave it None) to not use this matcher."
+            )
         set_fields = [
             name for name in self._MATCHER_FIELDS if getattr(self, name) is not None
         ]
@@ -1388,6 +1474,74 @@ class CodeRouterConfig(BaseModel):
         if bad:
             raise ValueError(
                 f"mode_aliases points to unknown profile(s): {bad}. known profiles={sorted(names)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_names_unique(self) -> CodeRouterConfig:
+        """mE: provider and profile names must each be unique.
+
+        ``provider_by_name`` / ``profile_by_name`` return the *first*
+        match, so a duplicate name silently shadows every later entry with
+        the same key — the operator's second ``local:`` block is loaded,
+        validated, and then never reachable. Reject duplicates at load with
+        the offending names, matching the fast-fail philosophy of the other
+        ``_check_*`` validators.
+        """
+        seen_p: set[str] = set()
+        dup_p: list[str] = []
+        for p in self.providers:
+            if p.name in seen_p and p.name not in dup_p:
+                dup_p.append(p.name)
+            seen_p.add(p.name)
+        if dup_p:
+            raise ValueError(
+                f"duplicate provider name(s): {sorted(dup_p)}. Provider names "
+                f"must be unique — a duplicate silently shadows the later "
+                f"entry (provider_by_name returns the first match). Rename or "
+                f"remove the duplicate(s)."
+            )
+
+        seen_f: set[str] = set()
+        dup_f: list[str] = []
+        for prof in self.profiles:
+            if prof.name in seen_f and prof.name not in dup_f:
+                dup_f.append(prof.name)
+            seen_f.add(prof.name)
+        if dup_f:
+            raise ValueError(
+                f"duplicate profile name(s): {sorted(dup_f)}. Profile names "
+                f"must be unique — a duplicate silently shadows the later "
+                f"entry (profile_by_name returns the first match). Rename or "
+                f"remove the duplicate(s)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_profile_providers_exist(self) -> CodeRouterConfig:
+        """mE: every provider named in a profile chain must be declared.
+
+        Previously a typo in ``profiles[].providers`` was tolerated at load
+        and only surfaced at runtime as a ``skip-unknown-provider`` warning;
+        if *every* entry in a chain was typo'd the profile silently had no
+        usable providers and only failed once fully drained. Rejecting at
+        load — same philosophy as ``_check_default_profile_exists`` and
+        ``_check_mode_alias_targets_exist`` — turns a silent-until-drained
+        misconfig into a startup error naming the profile and the bad
+        provider(s).
+        """
+        names = {p.name for p in self.providers}
+        errors: list[str] = []
+        for prof in self.profiles:
+            missing = [name for name in prof.providers if name not in names]
+            if missing:
+                errors.append(f"{prof.name!r} -> {missing}")
+        if errors:
+            raise ValueError(
+                f"profile(s) reference undeclared provider(s): "
+                f"{'; '.join(errors)}. known providers={sorted(names)}. "
+                f"Fix the typo in profiles[].providers or add the missing "
+                f"provider(s)."
             )
         return self
 

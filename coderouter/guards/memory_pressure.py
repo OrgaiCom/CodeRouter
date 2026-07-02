@@ -53,6 +53,7 @@ the body of its read/write.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 
@@ -76,8 +77,17 @@ _MEMORY_PRESSURE_PHRASES: tuple[str, ...] = (
     "failed to allocate",
     "failed to load model",
     "ggml_cuda_host_malloc",  # llama.cpp specific
-    "oom",
 )
+
+# M10: "oom" needs word-boundary matching, not a bare substring test.
+# A plain ``"oom" in text`` false-fires on "room" / "zoom" / "bloom" and
+# would wrongly cool down a healthy provider whose error body merely
+# contains one of those words. ``\boom\b`` matches the standalone token
+# "oom" (and "OOM" once lowercased) while rejecting the embedded cases.
+# Note the digit/underscore edges are word chars, so "oom_killer" is NOT
+# matched by this pattern alone — real oom-killer bodies still trip the
+# match via the separate "out of memory" phrase or a standalone "oom".
+_OOM_TOKEN_RE = re.compile(r"\boom\b")
 
 
 def is_memory_pressure_error(exc: AdapterError) -> bool:
@@ -96,7 +106,11 @@ def is_memory_pressure_error(exc: AdapterError) -> bool:
     focused on the actual signal.
     """
     text = str(exc).lower()
-    return any(phrase in text for phrase in _MEMORY_PRESSURE_PHRASES)
+    if any(phrase in text for phrase in _MEMORY_PRESSURE_PHRASES):
+        return True
+    # M10: standalone "oom" token only (word-boundary), so "room" /
+    # "zoom" / "bloom" in an unrelated error body don't false-fire.
+    return _OOM_TOKEN_RE.search(text) is not None
 
 
 # ---------------------------------------------------------------------------

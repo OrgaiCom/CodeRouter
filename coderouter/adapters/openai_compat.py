@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from coderouter.adapters.base import (
     AdapterError,
@@ -287,7 +288,22 @@ class OpenAICompatAdapter(BaseAdapter):
 
         # Tag the response with which provider answered
         data.setdefault("object", "chat.completion")
-        return ChatResponse(coderouter_provider=self.name, **data)
+        # M6: a syntactically valid JSON body may still not be a valid
+        # Chat Completions response (e.g. an OpenAI-compat server that
+        # returns ``{"error": ...}`` with a 200, or omits ``choices``).
+        # pydantic raises ValidationError here; if left uncaught it would
+        # propagate past the engine's AdapterError-based retry/fallback
+        # logic. Convert to a retryable AdapterError so the chain can fall
+        # through to the next provider (mirrors the invalid-JSON branch,
+        # but retryable since a malformed shape is often transient).
+        try:
+            return ChatResponse(coderouter_provider=self.name, **data)
+        except ValidationError as exc:
+            raise AdapterError(
+                f"malformed response shape from upstream: {exc}",
+                provider=self.name,
+                retryable=True,
+            ) from exc
 
     async def stream(
         self,
@@ -312,6 +328,10 @@ class OpenAICompatAdapter(BaseAdapter):
         # produce dozens of duplicate log lines.
         strip_reasoning = not self.config.capabilities.reasoning_passthrough
         reasoning_logged = False
+        # M6: one-shot dedupe flag for the malformed-chunk warning. A single
+        # broken stream can emit many non-conforming chunks; we skip each one
+        # but log only on the first to avoid a log flood.
+        malformed_chunk_logged = False
 
         # v1.0-A: stateful output_filters chain for the duration of this
         # stream. Handles `<think>...</think>` / stop markers that split
@@ -381,7 +401,23 @@ class OpenAICompatAdapter(BaseAdapter):
                             if isinstance(content, str) and content:
                                 delta["content"] = filter_chain.feed(content)
                         last_chunk_template = payload_obj
-                    yield StreamChunk(**payload_obj)
+                    # M6: a chunk may be valid JSON yet not a valid
+                    # StreamChunk (e.g. a mid-stream ``{"error": ...}``
+                    # frame, or a chunk missing required fields). Rather
+                    # than let the ValidationError abort the whole stream
+                    # (bypassing the engine's AdapterError handling), skip
+                    # the bad chunk and keep consuming. Warn once per stream.
+                    try:
+                        chunk = StreamChunk(**payload_obj)
+                    except ValidationError as exc:
+                        if not malformed_chunk_logged:
+                            logger.warning(
+                                "malformed-stream-chunk",
+                                extra={"provider": self.name, "error": str(exc)},
+                            )
+                            malformed_chunk_logged = True
+                        continue
+                    yield chunk
 
             # v1.0-A: flush the chain at end-of-stream. If filters held
             # back a partial-tag suffix that turned out NOT to be a tag,

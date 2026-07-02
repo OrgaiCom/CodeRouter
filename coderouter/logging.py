@@ -76,15 +76,36 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+# Marker attribute stamped on the handler this module installs. Used by
+# configure_logging to remove ONLY its own prior handler on reconfigure,
+# rather than nuking every handler on the root logger. Removing all
+# handlers was a M4 bug: a second create_app() in the same process would
+# also detach the MetricsCollector / audit / request-log handlers that
+# other subsystems had attached, silently killing metrics and the JSONL
+# journals from the second app onward.
+_CODEROUTER_LOG_HANDLER_MARKER: str = "_coderouter_json_line_handler"
+
+
 def configure_logging(level: str = "INFO") -> None:
-    """Install JSON-line logging on the root logger. Idempotent."""
+    """Install JSON-line logging on the root logger. Idempotent.
+
+    Only the handler this function previously installed (identified by the
+    :data:`_CODEROUTER_LOG_HANDLER_MARKER` attribute) is removed on
+    reconfigure. Handlers attached by other subsystems — the
+    :class:`~coderouter.metrics.collector.MetricsCollector`, the audit /
+    request-log JSONL handlers — are left in place so a second
+    ``create_app()`` in the same process does not silently detach them.
+    """
     root = logging.getLogger()
     root.setLevel(level.upper())
-    # Avoid duplicate handlers on reload
+    # Avoid duplicate handlers on reload — but only remove OUR own prior
+    # handler, never handlers other subsystems attached (M4).
     for h in list(root.handlers):
-        root.removeHandler(h)
+        if getattr(h, _CODEROUTER_LOG_HANDLER_MARKER, False):
+            root.removeHandler(h)
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(JsonLineFormatter())
+    setattr(handler, _CODEROUTER_LOG_HANDLER_MARKER, True)
     root.addHandler(handler)
 
 

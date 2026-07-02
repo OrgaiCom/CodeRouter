@@ -74,6 +74,66 @@ def _host_without_port(host_header: str) -> str:
     return value
 
 
+# ---------------------------------------------------------------------------
+# M14: request body size limit (DoS protection)
+# ---------------------------------------------------------------------------
+
+# Default cap for incoming request bodies. Anthropic/OpenAI chat payloads are
+# comfortably below this even with large system prompts; the ceiling exists to
+# stop a client from streaming an unbounded body and exhausting memory.
+_DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024  # 64 MB
+_MAX_BODY_BYTES_ENV = "CODEROUTER_MAX_BODY_BYTES"
+
+
+def _parse_max_body_bytes(raw: str | None) -> int:
+    """Resolve the body-size cap from ``CODEROUTER_MAX_BODY_BYTES``.
+
+    Falls back to :data:`_DEFAULT_MAX_BODY_BYTES` when the env var is unset,
+    empty, non-numeric, or non-positive — a misconfigured value must never
+    silently disable the guard.
+    """
+    if raw is None or not raw.strip():
+        return _DEFAULT_MAX_BODY_BYTES
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return _DEFAULT_MAX_BODY_BYTES
+    return value if value > 0 else _DEFAULT_MAX_BODY_BYTES
+
+
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose declared body exceeds the configured cap.
+
+    The check is on the incoming ``Content-Length`` header, so it is cheap
+    (no body is read) and fires before the route handler runs. Streaming
+    *responses* (SSE) are unaffected — this only inspects the request side.
+    A body over the limit fails closed with 413.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        super().__init__(app)
+        self._max_bytes = max_bytes
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except ValueError:
+                declared = -1
+            if declared > self._max_bytes:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": (
+                            f"Request body too large: {declared} bytes exceeds "
+                            f"the {self._max_bytes}-byte limit."
+                        )
+                    },
+                )
+        return await call_next(request)
+
+
 class HostValidationMiddleware(BaseHTTPMiddleware):
     """Reject requests whose Host header is not an allow-listed hostname.
 
@@ -319,6 +379,15 @@ def create_app(config_path: str | None = None) -> FastAPI:
         os.environ.get("CODEROUTER_ALLOWED_HOSTS")
     )
     app.add_middleware(HostValidationMiddleware, allowed_hosts=allowed_hosts)
+
+    # M14: request body size limit (DoS protection). Added after the Host
+    # middleware so that — because add_middleware wraps outermost-last — Host
+    # validation runs first and the size guard second. SSE streaming responses
+    # are unaffected: the check only reads the request Content-Length.
+    max_body_bytes = _parse_max_body_bytes(
+        os.environ.get(_MAX_BODY_BYTES_ENV)
+    )
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body_bytes)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:

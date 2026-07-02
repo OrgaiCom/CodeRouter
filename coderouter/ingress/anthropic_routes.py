@@ -21,6 +21,8 @@ SDKs send values like "2023-06-01"; we log it for diagnostics only.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -50,6 +52,109 @@ _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 _ANTHROPIC_BETA_HEADER = "anthropic-beta"
 _CTX_BUDGET_HEADER = "X-CodeRouter-Context-Budget"
 _DRIFT_HEADER = "X-CodeRouter-Drift"
+
+# M14: overall SSE stream ceiling. A single streamed request can legitimately
+# run much longer than one provider call (long generations, tool turns), so we
+# derive the ceiling from the profile's per-call ``timeout_s`` scaled up, and
+# fall back to a large default when no profile timeout is configured. This is a
+# safety net against a wedged upstream holding a client (and the upstream
+# socket) open forever — NOT a tight per-token deadline.
+_STREAM_TIMEOUT_MULTIPLIER = 20.0
+_STREAM_TIMEOUT_DEFAULT_S = 900.0
+_STREAM_TIMEOUT_MIN_S = 60.0
+
+
+def _resolve_stream_timeout_s(engine: FallbackEngine, profile: str | None) -> float:
+    """M14: derive the overall stream ceiling (seconds) for a profile.
+
+    Uses the profile's per-call ``timeout_s`` (or the first provider's, or
+    the default) scaled by ``_STREAM_TIMEOUT_MULTIPLIER`` so a whole stream
+    gets a generous but bounded budget. Never returns below
+    ``_STREAM_TIMEOUT_MIN_S``. Any resolution failure (stub config in tests,
+    missing profile) falls back to ``_STREAM_TIMEOUT_DEFAULT_S`` — the guard
+    stays active rather than disabling itself. Does NOT change the config
+    schema.
+    """
+    per_call: float | None = None
+    try:
+        config = engine.config
+        chosen = profile or config.default_profile
+        chain_cfg = config.profile_by_name(chosen)
+        per_call = getattr(chain_cfg, "timeout_s", None)
+        if per_call is None:
+            # Fall back to the first provider's timeout.
+            for pname in getattr(chain_cfg, "providers", []) or []:
+                pconf = next(
+                    (p for p in config.providers if p.name == pname), None
+                )
+                if pconf is not None:
+                    per_call = getattr(pconf, "timeout_s", None)
+                    break
+    except (AttributeError, KeyError, ValueError):
+        per_call = None
+
+    if per_call is None:
+        return _STREAM_TIMEOUT_DEFAULT_S
+    return max(_STREAM_TIMEOUT_MIN_S, float(per_call) * _STREAM_TIMEOUT_MULTIPLIER)
+
+
+async def _guard_stream(
+    source: AsyncIterator[str],
+    *,
+    timeout_s: float,
+    label: str,
+) -> AsyncIterator[str]:
+    """M14: enforce an overall timeout + clean cancellation on an SSE stream.
+
+    Wraps ``source`` (an iterator of already-formatted SSE frames) so that:
+
+    * The total wall-clock time is bounded by ``timeout_s`` via
+      ``asyncio.timeout`` — a wedged upstream can no longer hold the client
+      (and the upstream socket) open indefinitely.
+    * On client disconnect (the ASGI server throws ``CancelledError`` into
+      the generator) or on timeout, the underlying ``source`` generator is
+      explicitly closed via ``aclose()``. Closing the engine generator runs
+      its ``finally`` blocks, which lets the adapter's ``httpx`` streaming
+      context manager exit and release the upstream connection instead of
+      leaking it until GC.
+
+    Errors raised by ``source`` itself (in-stream ``event: error`` framing)
+    are produced by the caller's iterator before it reaches here, so this
+    wrapper only has to deal with timeout / cancellation / normal completion.
+    """
+    try:
+        async with asyncio.timeout(timeout_s):
+            async for frame in source:
+                yield frame
+    except TimeoutError:
+        # Overall ceiling hit. Emit a terminal error frame so a
+        # spec-compliant client sees a clean stream end rather than a
+        # silently truncated body, then stop.
+        logger.warning("sse-stream-timeout", extra={"label": label, "timeout_s": timeout_s})
+        err_event = AnthropicStreamEvent(
+            type="error",
+            data={
+                "type": "error",
+                "error": {
+                    "type": "timeout_error",
+                    "message": f"stream exceeded {timeout_s:.0f}s ceiling",
+                },
+            },
+        )
+        yield _format_anthropic_sse(err_event)
+    except asyncio.CancelledError:
+        # Client disconnected. Re-raise after ensuring the source is closed
+        # in the finally block so the upstream connection is released.
+        logger.info("sse-client-disconnect", extra={"label": label})
+        raise
+    finally:
+        # Guarantee the upstream generator is finalized on every exit path
+        # (normal completion, timeout, or cancellation).
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            # Best-effort cleanup; never mask the original exit reason.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await aclose()
 
 
 @router.post("/messages", response_model=None)
@@ -151,8 +256,17 @@ async def messages(
         drift_severity = engine.last_drift_severity
         if drift_severity:
             stream_headers[_DRIFT_HEADER] = drift_severity
-        return StreamingResponse(
+        # M14: wrap the SSE iterator with an overall timeout + client
+        # disconnect cleanup so a wedged upstream cannot pin the client
+        # (or the upstream socket) open forever.
+        timeout_s = _resolve_stream_timeout_s(engine, anth_req.profile)
+        guarded = _guard_stream(
             _anthropic_sse_iterator(engine, anth_req),
+            timeout_s=timeout_s,
+            label="anthropic",
+        )
+        return StreamingResponse(
+            guarded,
             media_type="text/event-stream",
             headers=stream_headers,
         )
