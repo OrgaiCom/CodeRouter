@@ -93,3 +93,7 @@ docs/articles/
 
 # FUSE / virtiofs artifacts
 .fuse_hidden*
+
+# tool-repair bench: locally generated results (curated evidence lives in results/)
+benchmarks/tool-repair/results_*.json
+benchmarks/tool-repair/results_*.md

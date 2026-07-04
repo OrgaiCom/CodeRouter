@@ -1,0 +1,858 @@
+{
+  "generated_at": "2026-07-04T23:46:03.699617+00:00",
+  "total_cases": 55,
+  "overall": {
+    "recovered": 43,
+    "correct_pass": 12,
+    "missed": 0,
+    "false_positive": 0,
+    "positives": 43,
+    "negatives": 12,
+    "recall": 1.0,
+    "false_positive_rate": 0.0
+  },
+  "per_category": {
+    "fenced_json": {
+      "recovered": 6,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 6,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "bare_json": {
+      "recovered": 5,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 5,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "multiple_calls": {
+      "recovered": 6,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 6,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "malformed": {
+      "recovered": 9,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 9,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "nested_fence": {
+      "recovered": 4,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 4,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "thinking_leak": {
+      "recovered": 4,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 4,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "cjk_arguments": {
+      "recovered": 4,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 4,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "negative": {
+      "recovered": 0,
+      "correct_pass": 12,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 0,
+      "negatives": 12,
+      "recall": null,
+      "false_positive_rate": 0.0
+    },
+    "xml_forms": {
+      "recovered": 5,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 5,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    }
+  },
+  "cases": [
+    {
+      "id": "fenced_json_01",
+      "category": "fenced_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Canonical ```json fence, single call. Baseline happy path."
+    },
+    {
+      "id": "fenced_json_02",
+      "category": "fenced_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "Let me check the directory.\n\nThat should show the files.",
+      "dedup_verified": null,
+      "note": "Fence with prose before AND after — chat-tuned qwen narration pattern."
+    },
+    {
+      "id": "fenced_json_03",
+      "category": "fenced_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['read_file']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "read_file"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Bare ``` fence with no language tag."
+    },
+    {
+      "id": "fenced_json_04",
+      "category": "fenced_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Grep']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Grep"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Gemma-style ```tool_code fence tag. Any \\w+ tag accepted."
+    },
+    {
+      "id": "fenced_json_05",
+      "category": "fenced_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Write']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Write"
+      ],
+      "cleaned_text": "I'll write the file for you.",
+      "dedup_verified": null,
+      "note": "Multi-arg fenced call, allow-list has extra tools."
+    },
+    {
+      "id": "fenced_json_06",
+      "category": "fenced_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Fence tag with NO newline after it — the fence regex misses, but the bare-JSON scanner still rescues it. Documents the fallback path."
+    },
+    {
+      "id": "bare_json_01",
+      "category": "bare_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Naked JSON object, whole response is the tool call."
+    },
+    {
+      "id": "bare_json_02",
+      "category": "bare_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "Sure, let me run that.  Done.",
+      "dedup_verified": null,
+      "note": "JSON embedded in prose on one line."
+    },
+    {
+      "id": "bare_json_03",
+      "category": "bare_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Grep']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Grep"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "OpenAI {\"function\": {...}} wrapper shape, bare."
+    },
+    {
+      "id": "bare_json_04",
+      "category": "bare_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "arguments is a JSON *string* (double-encoded), not an object. Repair keeps the string verbatim."
+    },
+    {
+      "id": "bare_json_05",
+      "category": "bare_json",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['read_file']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "read_file"
+      ],
+      "cleaned_text": "Here's the tool call:",
+      "dedup_verified": null,
+      "note": "Prose line then a bare JSON on its own line."
+    },
+    {
+      "id": "multiple_calls_01",
+      "category": "multiple_calls",
+      "outcome": "recovered",
+      "reason": "produced 2 call(s): ['read_file', 'read_file']",
+      "expect_repaired": true,
+      "produced_calls": 2,
+      "produced_names": [
+        "read_file",
+        "read_file"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": true,
+      "note": "Two consecutive bare JSON objects, distinct args -> both survive dedup."
+    },
+    {
+      "id": "multiple_calls_02",
+      "category": "multiple_calls",
+      "outcome": "recovered",
+      "reason": "produced 2 call(s): ['read_file', 'read_file']",
+      "expect_repaired": true,
+      "produced_calls": 2,
+      "produced_names": [
+        "read_file",
+        "read_file"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": true,
+      "note": "JSON array of tool calls. Brace scanner finds each inner object."
+    },
+    {
+      "id": "multiple_calls_03",
+      "category": "multiple_calls",
+      "outcome": "recovered",
+      "reason": "produced 2 call(s): ['Bash', 'Bash']",
+      "expect_repaired": true,
+      "produced_calls": 2,
+      "produced_names": [
+        "Bash",
+        "Bash"
+      ],
+      "cleaned_text": "First:\n\nThen:",
+      "dedup_verified": true,
+      "note": "Two separate fenced blocks with distinct commands."
+    },
+    {
+      "id": "multiple_calls_04_dedup",
+      "category": "multiple_calls",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": true,
+      "note": "IDENTICAL duplicate calls -> deduplicate_tool_calls collapses to ONE. min_calls=1 asserts dedup."
+    },
+    {
+      "id": "multiple_calls_05_dedup_array",
+      "category": "multiple_calls",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['ls']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "ls"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": true,
+      "note": "Identical calls inside an array -> dedup to 1. (Also leaves '[,]' text residue — cosmetic weakness.)"
+    },
+    {
+      "id": "multiple_calls_06_mixed",
+      "category": "multiple_calls",
+      "outcome": "recovered",
+      "reason": "produced 2 call(s): ['Write', 'Bash']",
+      "expect_repaired": true,
+      "produced_calls": 2,
+      "produced_names": [
+        "Write",
+        "Bash"
+      ],
+      "cleaned_text": "And verify:",
+      "dedup_verified": true,
+      "note": "One fenced + one bare, different tools. Fenced extracted first, then bare."
+    },
+    {
+      "id": "malformed_01_trailing_comma",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Trailing comma. json.loads REJECTS -> current impl MISSES. Small models emit this often; SHOULD be repaired -> expect true to surface the gap."
+    },
+    {
+      "id": "malformed_02_single_quotes",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Python-style single quotes. json.loads REJECTS -> MISSED. Gemma/qwen frequently print Python-repr dicts. SHOULD repair."
+    },
+    {
+      "id": "malformed_03_key_tool",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Name under key 'tool' not 'name'. _looks_like_tool_call only knows 'name'/'function' -> MISSED. Common qwen variant."
+    },
+    {
+      "id": "malformed_04_key_parameters",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Args under 'parameters' not 'arguments'. Impl requires literal 'arguments' key -> MISSED. Very common (matches OpenAI *schema* keyword)."
+    },
+    {
+      "id": "malformed_05_key_tool_name_input",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Anthropic-flavoured keys tool_name/input. MISSED — repair only speaks name/arguments."
+    },
+    {
+      "id": "malformed_06_unquoted_keys",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Unquoted JS-style object keys. json.loads REJECTS -> MISSED. SHOULD repair."
+    },
+    {
+      "id": "malformed_07_type_num_as_str",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['sleep_tool']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "sleep_tool"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Numeric arg value is valid JSON — this one SHOULD and DOES repair. Control case for the malformed bucket."
+    },
+    {
+      "id": "nested_fence_01",
+      "category": "nested_fence",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Write']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Write"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Tool call whose ARGUMENT contains a fenced code block (escaped). Outer fence must win. Leaves an empty ```json``` residue in cleaned text (weakness)."
+    },
+    {
+      "id": "nested_fence_02",
+      "category": "nested_fence",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "Here is an example fence in prose:\n```\nnot json, just text with { braces }\n```\nNow the call:",
+      "dedup_verified": null,
+      "note": "A non-JSON fence precedes the real tool-call fence. Non-tool fence must be preserved, tool fence extracted."
+    },
+    {
+      "id": "nested_fence_03",
+      "category": "nested_fence",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Write']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Write"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Fence-like backtick sequence inside a JSON string value. Regex non-greedy match risk."
+    },
+    {
+      "id": "nested_fence_04",
+      "category": "nested_fence",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "``",
+      "dedup_verified": null,
+      "note": "FOUR-backtick fence. _FENCED_RE prefix mismatches, but the bare-JSON scanner rescues the inner object (leaves stray '``' residue). Genuine call, should repair."
+    },
+    {
+      "id": "thinking_leak_01",
+      "category": "thinking_leak",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "<think>\nThe user wants the current directory. I'll use Bash.\n</think>",
+      "dedup_verified": null,
+      "note": "Qwen3/deepseek-r1 <think> block then a bare tool call. Repair should extract the call; think text stays as prose."
+    },
+    {
+      "id": "thinking_leak_02",
+      "category": "thinking_leak",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Grep']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Grep"
+      ],
+      "cleaned_text": "<think>Let me plan. I need to grep for the pattern.</think>",
+      "dedup_verified": null,
+      "note": "Thinking leak followed by a fenced tool call."
+    },
+    {
+      "id": "thinking_leak_03",
+      "category": "thinking_leak",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "<think>\nI could write { \"name\": \"decoy\" } but that's just me reasoning about JSON shapes.\n</think>",
+      "dedup_verified": null,
+      "note": "Think block CONTAINS a JSON fragment lacking 'arguments' (not tool-shaped) plus real call after. Only the real call should extract; decoy has no 'arguments' key and 'decoy' not in allow-list anyway."
+    },
+    {
+      "id": "thinking_leak_04",
+      "category": "thinking_leak",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['read_file']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "read_file"
+      ],
+      "cleaned_text": "<think>reasoning...</think><think>more</think>",
+      "dedup_verified": null,
+      "note": "Tool call sandwiched between two think blocks on one line."
+    },
+    {
+      "id": "cjk_arguments_01",
+      "category": "cjk_arguments",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "実行します。",
+      "dedup_verified": null,
+      "note": "Japanese prose + Japanese inside argument value. ensure_ascii=False keeps it."
+    },
+    {
+      "id": "cjk_arguments_02",
+      "category": "cjk_arguments",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Write']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Write"
+      ],
+      "cleaned_text": "ファイルを書き込みます:",
+      "dedup_verified": null,
+      "note": "Japanese filename + content, bare JSON embedded in Japanese sentence."
+    },
+    {
+      "id": "cjk_arguments_03",
+      "category": "cjk_arguments",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Grep']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Grep"
+      ],
+      "cleaned_text": "承知しました。以下を実行します。\n\nこれでエラー行を検索します。",
+      "dedup_verified": null,
+      "note": "Japanese pattern value with prose wrapping. Brace-scanner must handle multibyte correctly."
+    },
+    {
+      "id": "cjk_arguments_04",
+      "category": "cjk_arguments",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "了解しました。",
+      "dedup_verified": null,
+      "note": "Japanese prose + SINGLE-QUOTED dict with CJK. json.loads REJECTS -> MISSED. Realistic gemma-ja failure. SHOULD repair."
+    },
+    {
+      "id": "negative_01_code_example",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Here is how you'd call it in Python:\n```python\nimport subprocess\nsubprocess.run([\"ls\", \"-la\"])\n```\nThat runs the command.",
+      "dedup_verified": null,
+      "note": "Genuine code example, NOT a tool call. Must not repair."
+    },
+    {
+      "id": "negative_02_plain_json",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "The config looks like:\n```json\n{\"timeout\": 30, \"retries\": 3, \"verbose\": true}\n```",
+      "dedup_verified": null,
+      "note": "Plain JSON config, no name/arguments shape. Must not repair."
+    },
+    {
+      "id": "negative_03_out_of_allowlist",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "{\"name\": \"DeleteEverything\", \"arguments\": {\"path\": \"/\"}}",
+      "dedup_verified": null,
+      "note": "Tool-shaped JSON but name is NOT in the allow-list. Must be rejected — safety-critical."
+    },
+    {
+      "id": "negative_04_prose_mention",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "You could use a tool named Bash with arguments to run commands, but I don't think we need to here.",
+      "dedup_verified": null,
+      "note": "Mentions 'tool', 'Bash', 'arguments' in prose but no JSON object. Must not repair."
+    },
+    {
+      "id": "negative_05_json_doc_example",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "The tool-call format is documented as:\n```json\n{\"name\": \"<tool>\", \"arguments\": {\"<key>\": \"<value>\"}}\n```\nReplace the placeholders with real values.",
+      "dedup_verified": null,
+      "note": "A DOCUMENTATION example of the schema. name is '<tool>', not in allow-list -> correctly rejected. Guards against over-eager repair on tutorials."
+    },
+    {
+      "id": "negative_06_py_dict_lookalike",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "```python\nconfig = {\"name\": \"logger\", \"level\": \"info\"}\nprint(config)\n```",
+      "dedup_verified": null,
+      "note": "Python code fence with a dict having a 'name' key but no 'arguments' and 'logger' not allowed. Must not repair. Fence-any-lang risk mitigated by shape+allowlist check."
+    },
+    {
+      "id": "malformed_08_double_brace_fence",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Double-brace {{...}} inside ```json fence — L2 default-temp fail form. json.loads REJECTS -> MISSED without lenient pass. SHOULD repair."
+    },
+    {
+      "id": "malformed_09_double_brace_xml_fence",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Double-brace inside ```xml fence — L2 default-temp fail form (mislabelled language tag). SHOULD repair."
+    },
+    {
+      "id": "xml_forms_01_attr",
+      "category": "xml_forms",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Self-closing XML attribute form <echo message=\"probe\"/> — tag name in allow-list. R3 attribute parse. Exact L2 probe form."
+    },
+    {
+      "id": "xml_forms_02_tool_wrapper",
+      "category": "xml_forms",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "<tool>{JSON}</tool> wrapper — inner JSON delegated to R1/R2 pipe."
+    },
+    {
+      "id": "xml_forms_03_named_wrapper",
+      "category": "xml_forms",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "<echo>{JSON args}</echo> named-wrapper — tag is tool name, body is the arguments object."
+    },
+    {
+      "id": "xml_forms_04_named_wrapper_ws",
+      "category": "xml_forms",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "<echo>  {JSON}  </echo> with surrounding whitespace — L2 real sample form. Whitespace tolerated."
+    },
+    {
+      "id": "xml_forms_05_attr_multi",
+      "category": "xml_forms",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "了解しました。 を実行します。",
+      "dedup_verified": null,
+      "note": "Attribute form embedded in Japanese prose with CJK attribute value. Prose preserved, call extracted."
+    },
+    {
+      "id": "negative_07_python_dict_fence_allowed_name",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "You can build the payload in Python:\n```python\npayload = {\"name\": \"echo\", \"arguments\": {\"message\": \"probe\"}}\nsend(payload)\n```\nThen post it.",
+      "dedup_verified": null,
+      "note": "```python fence: a tool-SHAPED dict literal whose name IS in the allow-list, but it's assigned to a variable in real code. Must NOT repair (code fence guard)."
+    },
+    {
+      "id": "negative_08_prose_json_allowed_name",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "For example, you would write {\"name\": \"echo\", \"arguments\": {\"message\": \"probe\"}} to invoke it, but here we don't need any tool.",
+      "dedup_verified": null,
+      "note": "Explanatory prose ('For example, you would write ...') containing an allow-listed tool-shaped JSON. HARD case: bare JSON with allowed name in an explanatory sentence."
+    },
+    {
+      "id": "negative_09_xml_doc_example",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "The XML tool syntax is documented like this: write <echo message=\"...\"/> where the message attribute holds your text. Do not run it yet.",
+      "dedup_verified": null,
+      "note": "Explanatory prose DESCRIBING the <echo .../> XML syntax. Placeholder '...' value; must NOT be turned into a call."
+    },
+    {
+      "id": "negative_10_html_mixed",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "<p>Here is the plan:</p>\n<ul><li>read the file</li><li>echo the result</li></ul>\n<div class=\"note\">No tool needed.</div>",
+      "dedup_verified": null,
+      "note": "HTML markup mentioning 'echo' as prose text inside <li>. Known-HTML tags (p/ul/li/div) are not tools; must NOT repair."
+    },
+    {
+      "id": "negative_11_xml_think_tag",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "<think>I could emit <echo message=\"secret\"/> but the user only asked a question.</think>\nNo action is required.",
+      "dedup_verified": null,
+      "note": "An <echo .../> mentioned INSIDE a <think> reasoning block. R3 must not extract calls from within known non-tool tags."
+    },
+    {
+      "id": "negative_12_python_repr_dict_no_args",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "```python\nresult = {'name': 'echo', 'level': 'info'}\nprint(result)\n```",
+      "dedup_verified": null,
+      "note": "```python fence with a single-quoted dict that has an allow-listed 'name' but NO arguments/parameters key. Lenient parser must still enforce shape+fence guard. Must NOT repair."
+    }
+  ]
+}
