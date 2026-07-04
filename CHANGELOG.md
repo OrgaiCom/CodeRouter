@@ -6,6 +6,57 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.7.1] — 2026-07-04 (Native-endpoint shims + benchmarked tool-repair upgrade)
+
+Two feature PRs driven by the 2026-07-04 competitive re-survey and the new
+tool-call repair benchmark: **PR #39** (native `/v1/messages` endpoint gap
+shims) and **PR #40** (lenient tool-call repair). All new behavior is
+**opt-in with `off` defaults** (except the previously-404 `count_tokens`
+endpoint, which is additive), no config-schema breaking changes, and the
+Core runtime stays at **5 dependencies**.
+
+### Added
+
+- **`POST /v1/messages/count_tokens`** (was 404). Anthropic-shape
+  `{"input_tokens": N}`; accurate when the provider declares
+  `tokenizer_path`, char/4 heuristic otherwise. Fills a gap native backends
+  leave open (Ollama's Anthropic-compatible API ships without
+  `count_tokens` / `tool_choice` / prompt caching). (PR #39)
+- **`tool_choice_action: off | warn | emulate`** (profile option) +
+  `Capabilities.tool_choice` + registry field + `provider_supports_tool_choice()`.
+  `emulate` rewrites forced tool_choice (`any` / `tool`) into a system-prompt
+  instruction for non-supporting backends; the original request is preserved
+  for fallback to capable providers. New capability-degraded reason:
+  `unsupported-backend`. (PR #39)
+- **`cache_control_action: off | strip`** (profile option). `strip` removes
+  `cache_control` markers before sending to non-supporting providers
+  (logged as `cache-control-stripped`; deliberately no tokens-saved
+  accounting). (PR #39)
+- **Lenient tool-call repair** (`translation/tool_repair.py`): second-pass
+  parsing for malformed JSON (double braces, trailing commas, single quotes,
+  unquoted keys), key aliases (`tool`/`tool_name`, `parameters`/`input`/`args`),
+  and XML-flavoured forms — all gated on `allowed_tool_names`. Residue
+  cleanup (empty fences, `[,]`). Benchmark: recall 80.6% → **100%** on a
+  55-case corpus; live fail-rate at default temperature 17% → **1%**
+  (qwen2.5-coder:7b × 100 requests). (PR #40)
+
+### Fixed
+
+- **Two real false positives in the previous repairer** (python-fence dict
+  literals and documentation JSON with allowed tool names were converted
+  into executable calls — same class as the v2.7.0 code-eating regression).
+  Now fixed and gated by an expanded 12-case negative corpus. (PR #40)
+
+### Docs
+
+- README repositioned for the native `/v1/messages` era: repair + guards
+  lead, wire translation demoted to last (passthrough note); new section
+  "why a router when Ollama connects directly?".
+
+Tests: **1481 passed, 0 failed** (1401 → 1481; +37 shim, +43 lenient-repair).
+
+---
+
 ## [v2.7.0] — 2026-07-02 (Reliability & security: full-source review fixes)
 
 22 reliability and security fixes from a full-source review (26,600 lines),
