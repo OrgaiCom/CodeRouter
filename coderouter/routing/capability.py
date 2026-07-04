@@ -38,6 +38,7 @@ Design decisions
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from coderouter.config.capability_registry import (
     CapabilityRegistry,
@@ -63,13 +64,17 @@ __all__ = [
     "CapabilityRegistry",
     "ResolvedCapabilities",
     "anthropic_request_has_cache_control",
+    "anthropic_request_has_forced_tool_choice",
     "anthropic_request_requires_thinking",
     "check_claude_code_chain_suitability",
+    "emulate_tool_choice",
     "get_default_registry",
     "log_capability_degraded",
     "provider_supports_cache_control",
     "provider_supports_thinking",
+    "provider_supports_tool_choice",
     "reset_default_registry",
+    "strip_cache_control",
     "strip_thinking",
 ]
 
@@ -306,6 +311,218 @@ def anthropic_request_has_cache_control(request: AnthropicRequest) -> bool:
                     return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# S2 (shim): tool_choice capability gate + emulation
+#
+# Anthropic's ``tool_choice`` forces the model to call a tool: ``{type:
+# "any"}`` (call *some* provided tool) or ``{type: "tool", name: "X"}``
+# (call the named tool). Native Anthropic honors this on the wire; most
+# openai_compat backends silently ignore it after Anthropic → OpenAI
+# translation, so the model can answer with plain text where the client
+# expected a tool call. The gate here answers "does this provider honor a
+# forced tool_choice?" with the same 3-tier resolution as the other v0.5
+# gates. The fallback engine's ``tool_choice_action`` uses the answer to
+# either warn or emulate the forcing via a system-prompt directive.
+#
+# ``auto`` / ``none`` / absent tool_choice never trips the gate — only the
+# forcing modes matter (a non-forced choice loses nothing meaningful in
+# translation).
+# ---------------------------------------------------------------------------
+
+
+def provider_supports_tool_choice(
+    provider: ProviderConfig,
+    *,
+    registry: CapabilityRegistry | None = None,
+) -> bool:
+    """Does this provider honor a forced Anthropic ``tool_choice``?
+
+    Resolution order (mirrors :func:`provider_supports_cache_control`):
+        1. If ``provider.capabilities.tool_choice`` is True → True
+           (explicit per-provider opt-in from providers.yaml — highest
+           precedence).
+        2. Consult the capability registry for an explicit
+           ``tool_choice: true|false`` declaration on this
+           ``(kind, model)``. A registry value of ``False`` hard-disables
+           the capability even on a provider whose ``kind`` would normally
+           pass.
+        3. Fall back to the heuristic ``kind == "anthropic"`` — native
+           ``/v1/messages`` passthrough forwards ``tool_choice`` verbatim,
+           whereas openai_compat translation drops the forcing semantics.
+
+    This routine does not inspect the request — it's a per-provider
+    capability. Combine with :func:`anthropic_request_has_forced_tool_choice`
+    in the engine to decide whether to warn / emulate. The ``registry``
+    kwarg is for tests; production callers pass nothing.
+    """
+    if provider.capabilities.tool_choice:
+        return True
+    resolved = _resolve(provider, registry)
+    if resolved.tool_choice is True:
+        return True
+    if resolved.tool_choice is False:
+        return False
+    return provider.kind == "anthropic"
+
+
+def anthropic_request_has_forced_tool_choice(request: AnthropicRequest) -> bool:
+    """True iff the request forces a tool call via ``tool_choice``.
+
+    Anthropic's ``tool_choice.type`` is one of ``auto`` / ``none`` /
+    ``any`` / ``tool``. Only ``any`` (force *some* tool) and ``tool``
+    (force the named tool) are "forcing" modes that a non-supporting
+    backend would silently ignore. ``auto`` / ``none`` / a missing field
+    return False — there is nothing to emulate.
+    """
+    choice = request.tool_choice
+    if not isinstance(choice, dict):
+        return False
+    return choice.get("type") in ("any", "tool")
+
+
+# English directive templates injected into the system prompt when
+# emulating a forced tool_choice on a non-supporting backend. Kept as
+# module constants so tests can assert the exact text and operators can
+# grep for it.
+_EMULATE_TOOL_DIRECTIVE = (
+    '\n\nIMPORTANT: You MUST respond by calling the tool named "{name}". '
+    "Do not respond with plain text."
+)
+_EMULATE_ANY_DIRECTIVE = (
+    "\n\nIMPORTANT: You MUST respond by calling one of the provided tools. "
+    "Do not respond with plain text."
+)
+
+
+def _inject_system_directive(system: Any, directive: str) -> str | list[dict[str, Any]]:
+    """Append ``directive`` to an Anthropic ``system`` field.
+
+    Handles both wire shapes:
+        - ``str`` (short form) → returns ``system + directive`` (a new
+          ``str``; ``None`` is treated as empty).
+        - ``list[dict]`` (block form) → returns a new list with the
+          directive appended as a trailing ``text`` block, so existing
+          blocks (including any ``cache_control`` markers) are untouched.
+    """
+    if system is None:
+        return directive
+    if isinstance(system, str):
+        return system + directive
+    if isinstance(system, list):
+        return [*system, {"type": "text", "text": directive}]
+    # Unexpected shape — fall back to a fresh string so we never lose the
+    # forcing directive (the original object is left untouched upstream).
+    return directive
+
+
+def emulate_tool_choice(request: AnthropicRequest) -> AnthropicRequest:
+    """Return a copy of ``request`` with tool_choice emulated in the prompt.
+
+    Used by the fallback engine's ``tool_choice_action: "emulate"`` path.
+    The returned request has (1) its ``tool_choice`` field removed and (2)
+    an English directive appended to ``system`` instructing the model to
+    call the requested tool. The directive text differs for ``type ==
+    "tool"`` (names the tool) vs ``type == "any"`` (any provided tool).
+
+    The original request is NOT mutated — the engine iterates a fallback
+    chain and a later capable provider must still receive the real
+    ``tool_choice``. Like :func:`strip_thinking`, the CodeRouter-internal
+    ``profile`` / ``anthropic_beta`` fields are preserved.
+
+    No-op-safe: when the request carries no forced tool_choice this still
+    returns a deep copy (callers gate on
+    :func:`anthropic_request_has_forced_tool_choice` first, so this is
+    just defensive).
+    """
+    choice = request.tool_choice if isinstance(request.tool_choice, dict) else {}
+    ctype = choice.get("type")
+    if ctype == "tool":
+        name = choice.get("name", "")
+        directive = _EMULATE_TOOL_DIRECTIVE.format(name=name)
+    else:  # "any" (or defensive fallback)
+        directive = _EMULATE_ANY_DIRECTIVE
+
+    dumped = request.model_dump()
+    dumped.pop("tool_choice", None)
+    dumped["system"] = _inject_system_directive(request.system, directive)
+    emulated = AnthropicRequest.model_validate(dumped)
+    emulated.profile = request.profile
+    emulated.anthropic_beta = request.anthropic_beta
+    return emulated
+
+
+# ---------------------------------------------------------------------------
+# S3 (shim): cache_control strip
+#
+# The v0.5-B gate (above) is observability-only — it logs that cache_control
+# will be lost in translation but never mutates the request, because most
+# openai_compat backends simply ignore the unknown key. Some strict backends
+# 400 instead. ``strip_cache_control`` proactively removes every
+# ``cache_control`` key from a deep copy of the request so the marker never
+# reaches such a backend. Returns ``(request, markers_removed)`` so the
+# engine can log the count. The original request is not mutated (a later
+# capable provider must still receive the markers).
+# ---------------------------------------------------------------------------
+
+
+def _strip_cache_control_from_blocks(blocks: Any) -> int:
+    """Remove ``cache_control`` from each dict block in ``blocks`` in place.
+
+    Returns the number of keys removed. Non-list / non-dict entries are
+    ignored. Mutates the dicts in the given list (the caller passes a deep
+    copy's containers).
+    """
+    removed = 0
+    if not isinstance(blocks, list):
+        return 0
+    for block in blocks:
+        if isinstance(block, dict) and "cache_control" in block:
+            del block["cache_control"]
+            removed += 1
+    return removed
+
+
+def strip_cache_control(request: AnthropicRequest) -> tuple[AnthropicRequest, int]:
+    """Return ``(copy, markers_removed)`` with all cache_control keys gone.
+
+    Walks the same three locations as
+    :func:`anthropic_request_has_cache_control` — ``system`` blocks,
+    ``tools[*]`` (where the marker rides via ``extra="allow"``), and each
+    list-form ``messages[*].content`` — and removes every ``cache_control``
+    key from a deep copy. The original request is untouched so the fallback
+    chain can hand the real markers to a later capable provider.
+
+    ``markers_removed`` is the total count across all three locations,
+    surfaced by the engine in the ``cache-control-stripped`` log. When the
+    request carried no markers this returns ``(copy, 0)``.
+    """
+    dumped = request.model_dump()
+    removed = 0
+
+    # system blocks (list form only — the str short form can't carry it).
+    removed += _strip_cache_control_from_blocks(dumped.get("system"))
+
+    # tool definitions — cache_control arrives via extra="allow".
+    tools = dumped.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict) and "cache_control" in tool:
+                del tool["cache_control"]
+                removed += 1
+
+    # message content blocks (list form only).
+    messages = dumped.get("messages")
+    if isinstance(messages, list):
+        for msg in messages:
+            if isinstance(msg, dict):
+                removed += _strip_cache_control_from_blocks(msg.get("content"))
+
+    stripped = AnthropicRequest.model_validate(dumped)
+    stripped.profile = request.profile
+    stripped.anthropic_beta = request.anthropic_beta
+    return stripped, removed
 
 
 # ---------------------------------------------------------------------------

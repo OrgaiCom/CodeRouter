@@ -38,6 +38,8 @@ from coderouter.routing import (
     NoProvidersAvailableError,
 )
 from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
+from coderouter.token_estimation import extract_text_from_anthropic_request
+from coderouter.token_estimation_accurate import count_tokens, is_accuracy_available
 from coderouter.translation import (
     AnthropicRequest,
     AnthropicStreamEvent,
@@ -314,6 +316,112 @@ async def messages(
             headers=resp_headers,
         )
     return anth_resp.model_dump(exclude_none=True)
+
+
+def _resolve_count_tokens_tokenizer_path(
+    config: Any, profile: str | None
+) -> str | None:
+    """S1 (shim): best-effort resolve a local tokenizer.json for counting.
+
+    Routing for ``count_tokens`` is not a full chain resolution — we only
+    need *a* representative tokenizer for the profile the request would use.
+    We take the first provider of the resolved profile (or the default
+    profile) and return its ``tokenizer_path`` when declared. Any resolution
+    hiccup (unknown profile, empty chain, stub config in tests) returns
+    ``None``, which makes :func:`count_tokens` fall back to the char/4
+    heuristic — a graceful degrade rather than an error.
+    """
+    try:
+        chosen = profile or config.default_profile
+        chain_cfg = config.profile_by_name(chosen)
+        for pname in getattr(chain_cfg, "providers", []) or []:
+            pconf = next((p for p in config.providers if p.name == pname), None)
+            if pconf is not None:
+                tok = getattr(pconf, "tokenizer_path", None)
+                if tok:
+                    return tok
+                # First provider resolved but declares no tokenizer — stop
+                # here (don't scan the whole chain for an unrelated one).
+                return None
+    except (AttributeError, KeyError, ValueError, TypeError):
+        return None
+    return None
+
+
+@router.post("/messages/count_tokens", response_model=None)
+async def count_tokens_route(
+    payload: dict[str, Any],
+    request: Request,
+    x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
+    x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
+) -> dict[str, Any]:
+    """Anthropic ``POST /v1/messages/count_tokens`` — local token estimate.
+
+    Mirrors Anthropic's count_tokens endpoint: the request body has the
+    same shape as ``/v1/messages`` (minus the ``max_tokens`` requirement)
+    and the response is ``{"input_tokens": N}``. CodeRouter answers this
+    entirely locally — there is no upstream round-trip — using the same
+    text-extraction the language-tax / context-budget guards use, feeding
+    an accurate local tokenizer when the routed provider declares one and
+    the ``accuracy`` extra is installed, otherwise the char/4 heuristic.
+
+    Validation is deliberately looser than :class:`AnthropicRequest` (no
+    ``max_tokens`` needed): ``model`` and a non-empty ``messages`` list are
+    required, everything else optional. Profile selection follows the same
+    body > profile-header > mode-header precedence as ``/messages`` so the
+    tokenizer resolves against the provider the real request would hit.
+    """
+    config = request.app.state.config
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise HTTPException(
+            status_code=400,
+            detail="'messages' is required and must be a non-empty list",
+        )
+    if "model" not in payload:
+        raise HTTPException(status_code=400, detail="'model' is required")
+
+    # Profile selection — body field wins over header, mode header last
+    # (same policy as /messages). Kept minimal: we only need the profile to
+    # pick a representative tokenizer, so an unknown mode/profile degrades
+    # to the default rather than 400'ing the count.
+    profile = payload.get("profile") or x_coderouter_profile
+    if profile is None and x_coderouter_mode:
+        try:
+            profile = config.resolve_mode(x_coderouter_mode)
+        except (KeyError, AttributeError):
+            profile = None
+
+    # Combine system + messages (+ tool JSON length) into one text blob and
+    # count. tools contribute their JSON length as a coarse proxy for the
+    # schema tokens Anthropic would bill.
+    text = extract_text_from_anthropic_request(
+        system=payload.get("system"),
+        messages=messages,
+    )
+    tools = payload.get("tools")
+    if isinstance(tools, list) and tools:
+        with contextlib.suppress(TypeError, ValueError):
+            text = f"{text}\n{json.dumps(tools, ensure_ascii=False)}"
+
+    tokenizer_path = _resolve_count_tokens_tokenizer_path(config, profile)
+    input_tokens = count_tokens(text, tokenizer_path=tokenizer_path)
+    # Report the method count_tokens *actually* used: the accurate backend
+    # only engages when a path is declared AND the optional ``tokenizers``
+    # dependency is importable (see token_estimation_accurate). Otherwise
+    # count_tokens transparently falls back to char/4 — so we must too, or
+    # the log would misreport a heuristic count as tokenizer-accurate.
+    method = "tokenizer" if (tokenizer_path and is_accuracy_available()) else "heuristic"
+
+    logger.info(
+        "count-tokens-served",
+        extra={"method": method, "input_tokens": input_tokens},
+    )
+    return {"input_tokens": input_tokens}
 
 
 async def _anthropic_sse_iterator(

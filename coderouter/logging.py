@@ -129,6 +129,7 @@ CapabilityDegradedReason = Literal[
     "provider-does-not-support",
     "translation-lossy",
     "non-standard-field",
+    "unsupported-backend",
 ]
 """Why a capability was degraded.
 
@@ -142,6 +143,10 @@ CapabilityDegradedReason = Literal[
 - ``non-standard-field``: upstream emits a field that is not in the spec
   the ingress speaks, so we strip it on the response-side boundary.
   v0.5-C reasoning field.
+- ``unsupported-backend``: the request asks for a semantic the target
+  backend does not honor (S2 forced ``tool_choice``); with action
+  ``warn`` the request is sent unchanged, with ``emulate`` a separate
+  ``tool-choice-emulated`` line records the substituted directive.
 """
 
 

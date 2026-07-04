@@ -115,6 +115,20 @@ class RegistryCapabilities(BaseModel):
             "startup check)."
         ),
     )
+    tool_choice: bool | None = Field(
+        default=None,
+        description=(
+            "S2 (shim): does the upstream honor a forced Anthropic "
+            "``tool_choice`` (``{type: any}`` / ``{type: tool}``) on the "
+            "wire? When True, the fallback engine's ``tool_choice_action`` "
+            "leaves the request untouched. ``None`` (default) = no opinion "
+            "→ the gate falls back to ``provider.kind == 'anthropic'``. "
+            "``False`` hard-disables even on an anthropic-kind provider "
+            "(useful when a specific model regresses). Independent from "
+            "``providers.yaml capabilities.tool_choice`` (explicit "
+            "per-provider opt-in, highest precedence)."
+        ),
+    )
     cache_control: bool | None = Field(
         default=None,
         description=(
@@ -201,6 +215,7 @@ class ResolvedCapabilities:
     max_context_tokens: int | None = None
     claude_code_suitability: Literal["ok", "degraded"] | None = None
     cache_control: bool | None = None
+    tool_choice: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +268,7 @@ class CapabilityRegistry:
         resolved_max_ctx: int | None = None
         resolved_suitability: Literal["ok", "degraded"] | None = None
         resolved_cache_control: bool | None = None
+        resolved_tool_choice: bool | None = None
 
         thinking_locked = False
         reasoning_locked = False
@@ -260,6 +276,7 @@ class CapabilityRegistry:
         max_ctx_locked = False
         suitability_locked = False
         cache_control_locked = False
+        tool_choice_locked = False
 
         for rule in self._rules:
             if not rule.kind_matches(kind):
@@ -285,6 +302,9 @@ class CapabilityRegistry:
             if not cache_control_locked and caps.cache_control is not None:
                 resolved_cache_control = caps.cache_control
                 cache_control_locked = True
+            if not tool_choice_locked and caps.tool_choice is not None:
+                resolved_tool_choice = caps.tool_choice
+                tool_choice_locked = True
             if (
                 thinking_locked
                 and reasoning_locked
@@ -292,6 +312,7 @@ class CapabilityRegistry:
                 and max_ctx_locked
                 and suitability_locked
                 and cache_control_locked
+                and tool_choice_locked
             ):
                 break
 
@@ -302,6 +323,7 @@ class CapabilityRegistry:
             max_context_tokens=resolved_max_ctx,
             claude_code_suitability=resolved_suitability,
             cache_control=resolved_cache_control,
+            tool_choice=resolved_tool_choice,
         )
 
     # ------------------------------------------------------------------
