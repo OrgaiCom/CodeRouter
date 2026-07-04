@@ -1,0 +1,41 @@
+# L2 tool-call benchmark providers.yaml
+# ---------------------------------------------------------------------------
+# Three profiles, one per benchmarked model. CodeRouter treats the client-sent
+# `model` field as a routing placeholder (the provider's `model` always wins),
+# so the bench selects the backend model via the X-CodeRouter-Profile header
+# (run_live.py --profile <name>), NOT via --model.
+#
+# Usage:
+#   coderouter serve --port 8088 --config \
+#     _OUTPUTS/CodeRouter-toolrepair-bench/bench/providers.bench.yaml
+#
+# Guards / auto-router are intentionally left at defaults (off) so the
+# measurement isolates the translation + tool-repair path.
+
+default_profile: bench-qwen7b
+
+profiles:
+  - name: bench-qwen7b
+    providers: [ollama-qwen25-coder-7b]
+
+  - name: bench-qwen30b
+    providers: [ollama-qwen3-coder-30b]
+
+  - name: bench-gemma26b
+    providers: [ollama-gemma4-26b]
+
+providers:
+  - name: ollama-qwen25-coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+
+  - name: ollama-qwen3-coder-30b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3-coder:30b
+
+  - name: ollama-gemma4-26b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:26b
