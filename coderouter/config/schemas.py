@@ -43,6 +43,18 @@ class Capabilities(BaseModel):
     # you explicitly want the raw reasoning text to flow to the client
     # (e.g. CodeRouter is fronting a reasoning-aware downstream).
     reasoning_passthrough: bool = False
+    # S2 (shim): Anthropic's ``tool_choice`` forcing modes (``{type: any}``
+    # / ``{type: tool, name: ...}``). Only a subset of backends honor a
+    # forced tool_choice on the wire; openai_compat translation drops it.
+    # This narrow per-model flag mirrors ``thinking`` / ``prompt_cache``:
+    # when unset (None), the capability gate falls back to the registry and
+    # then to a ``kind == "anthropic"`` heuristic (see
+    # ``coderouter/routing/capability.py``). Motivation: let the fallback
+    # engine's ``tool_choice_action`` emulate forced tool calls via a
+    # system-prompt directive on backends that would otherwise silently
+    # ignore the field. Backward compatible — None leaves v2.x behavior
+    # untouched (no gate, no emulation).
+    tool_choice: bool | None = None
     # v1.0+ fields, declared early so providers.yaml can future-proof
     reasoning_control: Literal["none", "openai", "anthropic", "provider_specific"] = "none"
     mcp: Literal["none", "anthropic", "provider_specific"] = "none"
@@ -703,6 +715,72 @@ class FallbackChain(BaseModel):
             "``off`` discards partial content (legacy error event). "
             "``surface`` returns accumulated text as a graceful stream "
             "termination with a ``coderouter_partial`` metadata event."
+        ),
+    )
+
+    # --- S2 (shim): tool_choice capability gate + emulation -----------------
+    #
+    # Anthropic clients (Claude Code, SDKs) can pin the model to a specific
+    # tool with ``tool_choice: {type: "tool", name: "X"}`` or force *some*
+    # tool with ``{type: "any"}``. Native Anthropic honors this; most
+    # openai_compat backends silently ignore it after translation, so the
+    # model may answer with plain text where the client expected a tool
+    # call. This knob decides what the fallback engine does when a forced
+    # tool_choice request is routed to a provider that does not support it
+    # (per ``provider_supports_tool_choice``):
+    #
+    #   * ``off``     — no detection / no mutation / no log. Backward-compat
+    #                   default (identical to pre-shim behavior).
+    #   * ``warn``    — emit a ``capability-degraded`` log line only; the
+    #                   request is sent unchanged.
+    #   * ``emulate`` — strip the ``tool_choice`` field and inject an English
+    #                   directive into the system prompt instructing the
+    #                   model to call the requested tool. Best-effort
+    #                   forcing for backends without native support. The
+    #                   original request object is left untouched so a later
+    #                   capable provider in the chain still receives the real
+    #                   ``tool_choice``.
+    tool_choice_action: Literal["off", "warn", "emulate"] = Field(
+        default="off",
+        description=(
+            "S2 (shim): action when a request carries a forced "
+            "``tool_choice`` (``{type: any}`` or ``{type: tool}``) and the "
+            "target provider does not support it. ``off`` (default) leaves "
+            "the request unchanged. ``warn`` emits a ``capability-degraded`` "
+            "log only. ``emulate`` strips ``tool_choice`` and injects a "
+            "system-prompt directive to coax the model into calling the "
+            "tool. Per-provider — capable providers are never mutated."
+        ),
+    )
+
+    # --- S3 (shim): cache_control strip -------------------------------------
+    #
+    # By default cache_control markers are simply lost during Anthropic →
+    # OpenAI translation and the ``capability-degraded`` gate logs it
+    # (v0.5-B, observability only). Some strict openai_compat backends,
+    # however, 400 when an unexpected ``cache_control`` key rides along on a
+    # content block (rather than silently ignoring it). ``strip`` proactively
+    # removes those keys from a deep copy of the request before dispatch to
+    # a non-supporting provider, so the marker never reaches the wire.
+    #
+    #   * ``off``   — legacy behavior: leave the request as-is and rely on
+    #                 the existing ``capability-degraded`` observability log.
+    #   * ``strip`` — deep-copy the request and remove every ``cache_control``
+    #                 key from system / tools / message blocks before sending
+    #                 to a non-supporting provider; emit a
+    #                 ``cache-control-stripped`` log with the marker count.
+    #                 Does NOT emit a tokens-saved event (this is not token
+    #                 savings, just a wire-compatibility strip).
+    cache_control_action: Literal["off", "strip"] = Field(
+        default="off",
+        description=(
+            "S3 (shim): action when a request carries ``cache_control`` "
+            "markers and the target provider does not support them. ``off`` "
+            "(default) keeps legacy behavior (marker dropped in translation, "
+            "``capability-degraded`` log only). ``strip`` removes the "
+            "``cache_control`` keys from a deep copy before dispatch and "
+            "emits a ``cache-control-stripped`` log. Per-provider — capable "
+            "providers are never mutated."
         ),
     )
 

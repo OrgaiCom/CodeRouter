@@ -86,10 +86,14 @@ from coderouter.routing.adaptive import AdaptiveAdjuster
 from coderouter.routing.budget import BudgetTracker
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
+    anthropic_request_has_forced_tool_choice,
     anthropic_request_requires_thinking,
+    emulate_tool_choice,
     log_capability_degraded,
     provider_supports_cache_control,
     provider_supports_thinking,
+    provider_supports_tool_choice,
+    strip_cache_control,
     strip_thinking,
 )
 from coderouter.translation import (
@@ -433,6 +437,104 @@ def _apply_context_budget_guard(
 
     # Trim couldn't remove anything (e.g. only preserve_last_n messages)
     return request, "warning"
+
+
+# ---------------------------------------------------------------------------
+# S2 / S3 (shim): per-provider tool_choice + cache_control shims
+#
+# Applied at the adapter-call site (same position as strip_thinking) so the
+# mutation is per-provider: a request that falls through to a *capable*
+# provider later in the chain still receives its original tool_choice /
+# cache_control markers. All three actions are opt-in (default ``off``) and
+# read from the resolved profile.
+#
+# The shim is a pure function returning the (possibly-copied) request to
+# send to *this* provider. It never mutates the original request object.
+# ---------------------------------------------------------------------------
+
+
+def _apply_tool_choice_shim(
+    request: AnthropicRequest,
+    *,
+    adapter: BaseAdapter,
+    action: str,
+) -> AnthropicRequest:
+    """S2: warn / emulate a forced tool_choice on a non-supporting provider.
+
+    Returns the request to hand to this provider. Only acts when the
+    request carries a forced ``tool_choice`` (``any`` / ``tool``) AND the
+    provider does not support it:
+
+      * ``warn``    → emit a ``capability-degraded`` log; request unchanged.
+      * ``emulate`` → return :func:`emulate_tool_choice` (tool_choice
+                      stripped, system directive injected) + emit a
+                      ``tool-choice-emulated`` log.
+
+    Any other case (action ``off``, non-forced choice, or a capable
+    provider) returns ``request`` unchanged.
+    """
+    if action == "off":
+        return request
+    if not anthropic_request_has_forced_tool_choice(request):
+        return request
+    if provider_supports_tool_choice(adapter.config):
+        return request
+
+    if action == "warn":
+        log_capability_degraded(
+            logger,
+            provider=adapter.name,
+            dropped=["tool_choice"],
+            reason="unsupported-backend",
+        )
+        return request
+
+    if action == "emulate":
+        choice = request.tool_choice if isinstance(request.tool_choice, dict) else {}
+        mode = choice.get("type")
+        tool_name = choice.get("name") if mode == "tool" else None
+        emulated = emulate_tool_choice(request)
+        logger.info(
+            "tool-choice-emulated",
+            extra={"provider": adapter.name, "tool_name": tool_name, "mode": mode},
+        )
+        return emulated
+
+    return request
+
+
+def _apply_cache_control_shim(
+    request: AnthropicRequest,
+    *,
+    adapter: BaseAdapter,
+    action: str,
+    request_had_cache_control: bool,
+) -> AnthropicRequest:
+    """S3: strip cache_control markers before a non-supporting provider.
+
+    Returns the request to hand to this provider. Only acts when the
+    profile's ``cache_control_action`` is ``strip``, the request carries
+    cache_control markers, and the provider does not support them. Emits a
+    ``cache-control-stripped`` log with the marker count. Never emits a
+    tokens-saved event (this is a wire-compatibility strip, not a savings).
+
+    When the strip does not apply, returns ``request`` unchanged — the
+    existing v0.5-B ``capability-degraded`` observability log (emitted at
+    the call site) is preserved as the ``off`` default behavior.
+    """
+    if action != "strip":
+        return request
+    if not request_had_cache_control:
+        return request
+    if provider_supports_cache_control(adapter.config):
+        return request
+
+    stripped, markers_removed = strip_cache_control(request)
+    logger.info(
+        "cache-control-stripped",
+        extra={"provider": adapter.name, "markers_removed": markers_removed},
+    )
+    return stripped
 
 
 def _emit_cache_observed(
@@ -1596,6 +1698,25 @@ class FallbackEngine:
             append_system_prompt=profile.append_system_prompt,
         )
 
+    def _resolve_shim_actions(self, profile_name: str | None) -> tuple[str, str]:
+        """S2 / S3 (shim): resolve ``(tool_choice_action, cache_control_action)``.
+
+        Both default to ``off``, so a missing / stub profile (e.g. a
+        ``__new__``-constructed test engine) yields the backward-compatible
+        no-op pair. Resolved once at the top of each Anthropic entry point
+        (profiles are immutable per request) and passed to every adapter
+        call so the per-provider shim helpers stay pure.
+        """
+        chosen = profile_name or self.config.default_profile
+        try:
+            profile = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return "off", "off"
+        return (
+            getattr(profile, "tool_choice_action", "off"),
+            getattr(profile, "cache_control_action", "off"),
+        )
+
     def _resolve_chain(self, profile_name: str | None) -> list[BaseAdapter]:
         """Return the list of adapters to try, in order, for this profile.
 
@@ -2306,6 +2427,10 @@ class FallbackEngine:
         # ever asked for caching. Compute once; the v0.5-B gate uses the
         # same value below for the capability-degraded log.
         request_had_cache_control = anthropic_request_has_cache_control(request)
+        # S2 / S3 (shim): resolve the opt-in per-provider actions once.
+        tool_choice_action, cache_control_action = self._resolve_shim_actions(
+            request.profile
+        )
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -2337,6 +2462,19 @@ class FallbackEngine:
                     dropped=["cache_control"],
                     reason="translation-lossy",
                 )
+            # S2 (shim): forced tool_choice warn / emulate on non-supporting
+            # providers. S3 (shim): cache_control strip. Both mutate a
+            # per-provider copy; a later capable provider still gets the
+            # original request.
+            effective_request = _apply_tool_choice_shim(
+                effective_request, adapter=adapter, action=tool_choice_action
+            )
+            effective_request = _apply_cache_control_shim(
+                effective_request,
+                adapter=adapter,
+                action=cache_control_action,
+                request_had_cache_control=request_had_cache_control,
+            )
             logger.info(
                 "try-provider",
                 extra={
@@ -2534,6 +2672,10 @@ class FallbackEngine:
         # v1.9-A: compute once for the v0.5-B capability-degraded gate
         # AND for the cache-observed emission below.
         request_had_cache_control = anthropic_request_has_cache_control(request)
+        # S2 / S3 (shim): resolve the opt-in per-provider actions once.
+        tool_choice_action, cache_control_action = self._resolve_shim_actions(
+            request.profile
+        )
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -2557,6 +2699,16 @@ class FallbackEngine:
                     dropped=["cache_control"],
                     reason="translation-lossy",
                 )
+            # S2 / S3 (shim): mirror of the non-streaming path.
+            effective_request = _apply_tool_choice_shim(
+                effective_request, adapter=adapter, action=tool_choice_action
+            )
+            effective_request = _apply_cache_control_shim(
+                effective_request,
+                adapter=adapter,
+                action=cache_control_action,
+                request_had_cache_control=request_had_cache_control,
+            )
             logger.info(
                 "try-provider",
                 extra={

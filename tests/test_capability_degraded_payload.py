@@ -35,17 +35,19 @@ from coderouter.routing.capability import (
 # ---------------------------------------------------------------------------
 
 
-def test_literal_enumerates_the_three_v0_5_reasons() -> None:
-    """``CapabilityDegradedReason`` must list exactly the 3 v0.5 reasons.
+def test_literal_enumerates_the_known_reasons() -> None:
+    """``CapabilityDegradedReason`` must list exactly the known reasons.
 
     Adding a new reason is deliberate — this test is the deliberate
-    forcing function. When v0.6+ extends the literal, update this test
-    at the same time so the retro / CHANGELOG / TypedDict stay in sync.
+    forcing function. When the literal extends, update this test at the
+    same time so the retro / CHANGELOG / TypedDict stay in sync. The S2
+    shim added ``unsupported-backend`` for the forced-tool_choice gate.
     """
     assert set(get_args(CapabilityDegradedReason)) == {
         "provider-does-not-support",
         "translation-lossy",
         "non-standard-field",
+        "unsupported-backend",
     }
 
 
