@@ -25,8 +25,8 @@
         │
         ▼
   ┌─ CodeRouter ─┐
-  │  翻訳 + 修復  │──→  ① ローカル (Ollama — 無料・最速)
-  │  ガード + 監視 │──→  ② 無料クラウド (OpenRouter / NIM)
+  │  修復 + ガード │──→  ① ローカル (Ollama — 無料・最速)
+  │  監視 + 診断  │──→  ② 無料クラウド (OpenRouter / NIM)
   │  自動フォールバック │──→  ③ 有料 (Claude — opt-in 時のみ)
   └──────────────┘
 ```
@@ -34,10 +34,28 @@
 **やってくれること:**
 
 - ローカルモデルが壊した tool calling を Claude Code に届く前に修復する
+- 8 時間回しても止まらないように 6 種類のガードで守る
 - 1 つ目が落ちたら自動で次のプロバイダに切り替える
 - 有料 API は明示的に許可したときだけ使う (デフォルトは無料のみ)
-- 8 時間回しても止まらないように 6 種類のガードで守る
 - 何がおかしいか `coderouter doctor` コマンド一発で診断する
+
+---
+
+## 「Ollama に直結できるのに、なぜルーター?」
+
+2026 年、Ollama (v0.14+) / LM Studio (0.4.1+) / llama.cpp / vLLM は Anthropic 互換 `/v1/messages` を標準装備しました。`ANTHROPIC_BASE_URL` を直接向ければ Claude Code は一応動きます。
+
+**でも直結では、こうなります:**
+
+| 直結の現実 | CodeRouter 経由 |
+|---|---|
+| 壊れた tool call は壊れたまま届く | 届く前に修復 |
+| backend が落ちたらセッション終了 | ローカル → 無料 → 有料へ自動フォールバック |
+| 長時間で context 溢れ・drift・ループ | 6 系統ガード + self-healing |
+| モデル名がハードコード (リタイアで即エラー) | プロファイルで抽象化、差し替え 1 行 |
+| 何が悪いか分からない | `doctor` 6 プローブ + `/dashboard` + audit/replay |
+
+直結で困っていないなら CodeRouter は不要です。**長時間・無人・弱いモデル**のどれかに当てはまったら、戻ってきてください。
 
 ---
 
@@ -75,8 +93,9 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 | あなたの状況 | CodeRouter は？ |
 |---|---|
-| Claude Code + ローカル Ollama で tool calling が壊れる | **必須** — wire 変換 + tool 修復 |
-| Claude Code + ローカルで長時間回すと止まる | **便利** — 6 系統ガード + self-healing |
+| Claude Code + ローカル Ollama で tool calling が壊れる | **必須** — tool 修復 (+ 必要なら wire 変換) |
+| Claude Code + ローカルで長時間回すと止まる | **必須級** — 6 系統ガード + self-healing |
+| Ollama v0.14+ / LM Studio にネイティブ直結で動いてる | **便利** — 直結に無い fallback / ガード / 診断を追加 (passthrough で翻訳ゼロ) |
 | codex / gemini-cli + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら |
 | Claude API を直接叩いてて問題ない | 不要 |
 
@@ -86,14 +105,14 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 ## 主な機能
 
-### 接続と修復
+### 修復と接続
 
 | 機能 | 何をしてくれるか |
 |---|---|
-| **Wire 翻訳** | Claude Code (Anthropic形式) ↔ Ollama (OpenAI形式) を自動変換 |
 | **Tool-call 修復** | ローカルモデルがテキストで吐いた JSON を正しい tool_use ブロックに復元 |
 | **3 層フォールバック** | ローカル → 無料クラウド → 有料の順に自動切替 |
-| **出力フィルタ** | `<think>` タグ漏れ、stop marker 漏れを自動除去 |
+| **出力フィルタ** | `<think>` タグ漏れ、stop marker 漏れ、byte-fallback (`<0xNN>`) を自動除去/修復 |
+| **Wire 翻訳** | Anthropic 形式 ↔ OpenAI 形式を自動変換 (ネイティブ `/v1/messages` 対応 backend は passthrough で翻訳ゼロ) |
 
 ### 長時間運用ガード
 
