@@ -156,6 +156,8 @@ Browser UI at `http://localhost:8088/launcher` for starting and managing local i
 | **Option profiles** | Name your flag presets in `providers.yaml` — select from a dropdown, no CLI needed |
 | **Multi-process** | Run llama.cpp and vllm side by side on different ports |
 | **Log viewer** | stdout/stderr of each process shown live in the browser |
+| **Provider auto-sync** (v2.7.4) | A started backend is auto-registered as a routable provider (`launcher-llamacpp-8085`); route to it with `X-CodeRouter-Profile: launcher` — zero providers.yaml edits. In-memory, shares the server's lifetime |
+| **Model-id passthrough** (v2.7.4) | Providers with `model: ""` make `/v1/models` surface the upstream's actually-loaded model id (the GGUF name). Swap models without touching config — external benchmarks can tell runs apart |
 
 ```yaml
 # Add to providers.yaml — no code changes needed
