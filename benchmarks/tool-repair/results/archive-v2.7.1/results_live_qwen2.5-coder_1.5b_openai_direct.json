@@ -1,0 +1,180 @@
+{
+  "generated_at": "2026-07-05T04:21:55.739162+00:00",
+  "base_url": "http://localhost:11434/v1",
+  "wire": "openai",
+  "model": "qwen2.5-coder:1.5b",
+  "temperature": "0",
+  "profile": null,
+  "reps": 20,
+  "prompts": [
+    "simple_echo",
+    "complex_args",
+    "multi_tool_select",
+    "japanese_instruction",
+    "no_tool_temptation"
+  ],
+  "totals": {
+    "native": 0,
+    "repair": 100,
+    "fail": 0,
+    "error": 0,
+    "total": 100,
+    "native_rate": 0.0,
+    "repair_rate": 1.0,
+    "fail_rate": 0.0
+  },
+  "per_prompt": {
+    "simple_echo": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "complex_args": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "multi_tool_select": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "japanese_instruction": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "no_tool_temptation": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    }
+  },
+  "samples": [
+    {
+      "prompt": "simple_echo",
+      "rep": 0,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 1,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 2,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 3,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 4,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 5,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 6,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 7,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 8,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 9,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 10,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 11,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 12,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 13,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 14,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 15,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 16,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 17,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 18,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 19,
+      "verdict": "repair",
+      "text_sample": "```json\n{\n  \"name\": \"echo\",\n  \"arguments\": {\n    \"message\": \"probe\"\n  }\n}\n```"
+    }
+  ]
+}

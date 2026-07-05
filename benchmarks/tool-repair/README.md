@@ -8,8 +8,9 @@ field — and how often a live model needs that rescue at all.
 Two layers:
 
 - **L1 — `run_offline.py`**: deterministic, no network, stdlib only. Runs the
-  repairer over a fixed corpus of broken outputs (`corpus.jsonl`, 55 cases in
-  8 categories + 12 negatives) and scores **recovery** and **false
+  repairer over a fixed corpus of broken outputs (`corpus.jsonl`, 84 cases:
+  59 expect-repair across 11 categories + 25 negatives, including 10
+  adversarial-review counterexamples) and scores **recovery** and **false
   positives**. This is the regression gate for the repairer itself; it also
   runs in CI via `tests/test_toolrepair_bench.py`.
 - **L2 — `run_live.py`**: talks to a real endpoint (a backend directly, or
@@ -66,21 +67,39 @@ Notes:
   the path, not the sampler. Use `--temperature none` for backend-default
   sampling.
 - Requires `httpx` (already a CodeRouter runtime dep).
+- `bench_l3_p1.sh` runs the whole model matrix (direct + router per model);
+  `REPS=5` for a smoke pass, `P2=1` to include the second-priority models.
 
-## Measured results (2026-07-04, M3 Max, 100 requests per cell)
+## Measured results (2026-07-05, M3 Max, 100 requests per cell, zero errors)
 
-Kept under `results/` as evidence for the write-ups.
+Kept under `results/` as evidence for the write-ups. Repairer-version A/B
+snapshots live in `results/archive-v2.7.0/` and `results/archive-v2.7.1/`;
+top-level files are the latest (v2.7.2 / R4, plus the fallback-chain run).
 
-| model | direct | via CodeRouter | reading |
-|---|:-:|:-:|---|
-| qwen2.5-coder:7b | 0% usable calls | **100%** | weak models: repair does all the work |
-| qwen3-coder:30b | 100% | **100%** | strong models: zero degradation |
-| gemma4:26b | 80% | 80% | empty responses — repair can't fix absent text (fallback territory) |
+| model | direct | v2.7.0 | v2.7.1 | **v2.7.2 (R4)** | reading |
+|---|:-:|:-:|:-:|:-:|---|
+| qwen2.5-coder:7b | 0% | **100%** | 100% | 100% | fenced text-JSON: base repairer does all the work |
+| qwen2.5-coder:1.5b | 0% | **100%** | 100% | 100% | second 0→100 model, size-independent |
+| mistral:7b | 0% | 80% | 80% | **100%** | colon call-syntax (`echo(message: 'x')`) closed by R4c |
+| phi4-mini:3.8b | 0% | 20% | 40% | **80%** | +20pt = R2 aliases, +40pt = R4c; the last 20% is the semantically-corrupted case the repairer refuses **by design** |
+| llama3.2:3b / 3.1:8b | 100% | 100% | 100% | 100% | zero degradation (negative result: they don't break at temp 0) |
+| qwen3-coder:30b | 100% | 100% | 100% | 100% | zero degradation |
+| gemma4:26b | 80% | 80% | 80% | 80% | empty 200s — no text to repair |
+| gemma4:26b → qwen3-30b chain | — | — | — | **100%** | `empty_response_action: fallback` rescues all 20 blank turns |
 
-Offline (post-v2.7.1 repairer): recall **100%** (43/43), false positives
-**0/12**. The pre-v2.7.1 repairer scored 80.6% overall and 14.3% on the
-`malformed` category — that gap is what drove the lenient-repair upgrade
-shipped in v2.7.1.
+Three-tier summary the numbers support: **(1)** broken-but-present tool
+calls are repaired (four 0→100/0→80 models), **(2)** healthy models pass
+through undegraded, **(3)** what repair cannot touch — blank responses,
+semantically corrupted arguments — is fallback territory, and the chain row
+shows fallback closing it.
+
+Offline (post-v2.7.2 repairer): recall **100%** (59/59), false positives
+**0/25**. The pre-R4 repairer scored 78.0% on the same corpus (nested-XML
+0/5, JSON-envelope 1/4, call-syntax 0/5) — that gap, measured live in the
+mistral/phi4 rows above, is what drove the R4 upgrade shipped in v2.7.2.
+
+Note: gemma3:27b was excluded — its Ollama build ships without the `tools`
+capability and 400s any tool-bearing request (verify with `ollama show`).
 
 ## Growing the corpus
 

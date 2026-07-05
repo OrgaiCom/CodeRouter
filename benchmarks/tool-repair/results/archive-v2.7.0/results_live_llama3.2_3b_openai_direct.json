@@ -1,0 +1,59 @@
+{
+  "generated_at": "2026-07-05T03:46:21.678432+00:00",
+  "base_url": "http://localhost:11434/v1",
+  "wire": "openai",
+  "model": "llama3.2:3b",
+  "temperature": "0",
+  "profile": null,
+  "reps": 20,
+  "prompts": [
+    "simple_echo",
+    "complex_args",
+    "multi_tool_select",
+    "japanese_instruction",
+    "no_tool_temptation"
+  ],
+  "totals": {
+    "native": 100,
+    "repair": 0,
+    "fail": 0,
+    "error": 0,
+    "total": 100,
+    "native_rate": 1.0,
+    "repair_rate": 0.0,
+    "fail_rate": 0.0
+  },
+  "per_prompt": {
+    "simple_echo": {
+      "native": 20,
+      "repair": 0,
+      "fail": 0,
+      "error": 0
+    },
+    "complex_args": {
+      "native": 20,
+      "repair": 0,
+      "fail": 0,
+      "error": 0
+    },
+    "multi_tool_select": {
+      "native": 20,
+      "repair": 0,
+      "fail": 0,
+      "error": 0
+    },
+    "japanese_instruction": {
+      "native": 20,
+      "repair": 0,
+      "fail": 0,
+      "error": 0
+    },
+    "no_tool_temptation": {
+      "native": 20,
+      "repair": 0,
+      "fail": 0,
+      "error": 0
+    }
+  },
+  "samples": []
+}
