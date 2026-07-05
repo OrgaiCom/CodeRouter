@@ -6,6 +6,46 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.7.3] — 2026-07-05 (Per-request empty-response fallback + L3 bench evidence)
+
+Two PRs: **PR #45** (`empty_response_action` — the fallback leg of the
+three-tier tool-call reliability story) and **PR #46** (L3 benchmark
+refresh: model matrix, repairer-version A/B archives, results). Fully
+backward compatible: new knob defaults to `off`, no breaking config
+changes, no new dependencies.
+
+### Added
+
+- **`FallbackChain.empty_response_action: off | warn | fallback`**
+  (default `off`). With `fallback`, a 200 response that is *content-empty*
+  (no `tool_use`, no non-whitespace text; thinking-only counts as empty) is
+  re-dispatched in-flight to the next provider in the chain. Non-streaming
+  responses are judged on the finalized object; streaming buffers events
+  until the first real content token and discards an unobserved stream.
+  Emptiness is judged on content, not `usage.output_tokens` (unreliable on
+  some backends). Motivation: gemma4:26b returns blank 200s on
+  `no_tool_temptation`-type prompts (20/20 at temperature 0, direct AND via
+  router) — no text exists for the repair layer to fix, and the windowed
+  drift guard `empty_response_rate` cannot rescue a single blank turn
+  in-flight. 21 new tests. (PR #45)
+- **Benchmark refresh**: full L3 model matrix in
+  `benchmarks/tool-repair/providers.bench.yaml` (llama3.2/3.1, mistral,
+  qwen2.5-coder:1.5b, phi4-mini + originals, `bench-gemma-chain` enabled),
+  one-shot matrix runner `bench_l3_p1.sh`, latest live results plus
+  repairer-version A/B snapshots under `results/archive-v2.7.{0,1}/`.
+  (PR #46)
+
+### Results
+
+- Live chain validation (M3 Max, temperature 0, 100 requests, zero
+  errors): gemma4:26b → qwen3-coder:30b chain **80% → 100%** native —
+  all 20 blank turns rescued.
+- Three-tier story now fully measured: repair rescues broken-but-present
+  calls (qwen2.5×2 / mistral 0→100, phi4 +60pt), healthy models pass
+  through undegraded, and fallback closes what repair cannot touch.
+
+---
+
 ## [v2.7.2] — 2026-07-05 (R4 tool-call repair: nested-XML / JSON-envelope / call-syntax forms)
 
 Single feature PR **#43**, driven by the 2026-07-05 L3 live benchmark
