@@ -1373,6 +1373,46 @@ def log_partial_stitch_surfaced(
 
 
 # ---------------------------------------------------------------------------
+# ⑧ (empty-response): per-request empty-response fallback log shape
+#
+# Fired when a provider returns a 200 with content-empty output (no
+# tool_use and no non-whitespace text). The single event lane carries the
+# ``action`` (warn|fallback) that triggered it, whether the empty response
+# came from the streaming or non-streaming path, and ``chain_exhausted``
+# — True only when every provider in the chain returned empty and the last
+# empty response is being returned to the client as-is.
+# ---------------------------------------------------------------------------
+
+
+def log_empty_response_detected(
+    logger: logging.Logger,
+    provider: str,
+    *,
+    action: str,
+    stream: bool,
+    chain_exhausted: bool = False,
+) -> None:
+    """Emit an ``empty-response-detected`` warn line.
+
+    Fired when ``empty_response_action`` is ``warn`` or ``fallback`` and a
+    provider returns a structurally-valid but content-empty response. The
+    ``action`` field records which knob value produced the line; ``stream``
+    distinguishes the SSE path from the non-streaming path; ``chain_exhausted``
+    is True only when the whole chain returned empty and the last empty
+    response is being returned unchanged.
+    """
+    logger.warning(
+        "empty-response-detected",
+        extra={
+            "provider": provider,
+            "action": action,
+            "stream": stream,
+            "chain_exhausted": chain_exhausted,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # v2.0-I: Continuous probe log shapes
 #
 # Two event lanes mirror the backend-health triplet:
