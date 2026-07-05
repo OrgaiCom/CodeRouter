@@ -718,6 +718,57 @@ class FallbackChain(BaseModel):
         ),
     )
 
+    # --- ⑧ (empty-response): per-request empty-response fallback ------------
+    #
+    # Some local backends (observed: gemma4:26b on ``no_tool_temptation``
+    # prompts) return a 200 with a structurally-valid but *content-empty*
+    # Anthropic response — no tool_use and no non-whitespace text — for a
+    # fraction of requests. The drift guard's ``empty_response_rate`` is a
+    # windowed aggregate (default threshold 0.3, ``min_window_fill`` 6): it
+    # promotes/reloads a backend once the *rate* is bad, but cannot rescue a
+    # single blank turn in-flight. This knob adds a per-request in-flight
+    # fallback that re-dispatches the *same* request to the next provider in
+    # the chain the moment an empty response is detected.
+    #
+    # Design: "empty" is judged on *content*, not usage.output_tokens (which
+    # some backends report unreliably). A response is empty when its content
+    # list is empty, or every block is either a whitespace-only ``text`` block
+    # or a ``thinking`` block — i.e. nothing the client can act on. A single
+    # ``tool_use`` block or one non-whitespace ``text`` block makes it non-empty.
+    #
+    #   * ``off``      — no detection, no fallback, no log. Backward-compatible
+    #                    default (byte-for-byte identical to pre-⑧ behavior).
+    #   * ``warn``     — detect + emit an ``empty-response-detected`` log line
+    #                    only; the empty response is returned unchanged.
+    #   * ``fallback`` — on an empty response, log ``empty-response-detected``
+    #                    and continue to the next provider (the empty response
+    #                    is *not* recorded as an error). If every provider in
+    #                    the chain returns empty, the last empty response is
+    #                    returned as-is (a 200 blank is a legitimate answer)
+    #                    with ``chain_exhausted=True`` on the log line. On the
+    #                    streaming path, ``fallback`` buffers events until real
+    #                    content is observed, so an empty stream can be swapped
+    #                    to the next provider without the client seeing bytes.
+    #
+    # Default ``off`` preserves complete backward compatibility; the original
+    # request object is never mutated, so a later provider always receives the
+    # untouched request.
+    empty_response_action: Literal["off", "warn", "fallback"] = Field(
+        default="off",
+        description=(
+            "⑧ (empty-response): action when a provider returns a 200 with "
+            "empty content (no tool_use and no non-whitespace text; a "
+            "thinking-only response counts as empty). ``off`` (default) does "
+            "nothing. ``warn`` emits an ``empty-response-detected`` log only "
+            "and returns the empty response. ``fallback`` re-dispatches the "
+            "same request to the next provider (empty is not counted as an "
+            "error); if the whole chain returns empty, the last empty response "
+            "is returned unchanged. Streaming buffers events until real "
+            "content appears so empty streams can be swapped provider-side "
+            "without the client seeing any bytes."
+        ),
+    )
+
     # --- S2 (shim): tool_choice capability gate + emulation -----------------
     #
     # Anthropic clients (Claude Code, SDKs) can pin the model to a specific

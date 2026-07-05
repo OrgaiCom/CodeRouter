@@ -76,6 +76,7 @@ from coderouter.logging import (
     log_chain_memory_pressure_blocked,
     log_chain_paid_gate_blocked,
     log_demote_unhealthy_provider,
+    log_empty_response_detected,
     log_memory_pressure_detected,
     log_skip_budget_exceeded,
     log_skip_memory_pressure,
@@ -973,6 +974,82 @@ def _warn_if_uniform_auth_failure(errors: list[AdapterError], *, profile: str) -
     )
 
 
+# ---------------------------------------------------------------------------
+# ⑧ (empty-response): content-based emptiness judgement + stream buffering
+# ---------------------------------------------------------------------------
+
+
+def _block_field(block: Any, key: str) -> Any:
+    """Read ``key`` from a content block whether it is a dict or a model.
+
+    Anthropic content blocks reach the engine as plain dicts (openai_compat
+    translation, most test fakes) or as pydantic-ish objects (native
+    passthrough). This mirrors the accessor pattern already used by the
+    drift fingerprint at the success-path tail.
+    """
+    if isinstance(block, dict):
+        return block.get(key)
+    return getattr(block, key, None)
+
+
+def _anthropic_response_is_empty(resp: AnthropicResponse) -> bool:
+    """Return True when ``resp`` carries no client-actionable content.
+
+    "Empty" is judged on content, never on ``usage.output_tokens`` (some
+    backends report that unreliably). A response is empty when:
+        - its ``content`` list is empty / falsy, or
+        - every block is either a whitespace-only ``text`` block or a
+          ``thinking`` block.
+
+    A single ``tool_use`` block, or one ``text`` block with any
+    non-whitespace character, makes the response non-empty. Unknown block
+    types are treated conservatively as *content* (non-empty) so a novel
+    actionable block is never silently swallowed.
+    """
+    content = getattr(resp, "content", None)
+    if not content:
+        return True
+    for block in content:
+        btype = _block_field(block, "type")
+        if btype == "text":
+            text = _block_field(block, "text") or ""
+            if text.strip():
+                return False
+            # whitespace-only text → keep scanning
+            continue
+        if btype == "thinking":
+            # thinking-only carries nothing the client can act on
+            continue
+        # tool_use or any other (unknown → conservatively non-empty) block
+        return False
+    return True
+
+
+def _stream_event_is_real_content(event: AnthropicStreamEvent) -> bool:
+    """Return True when ``event`` is the first byte of actionable content.
+
+    Real content is either a ``content_block_start`` opening a ``tool_use``
+    block, or a ``content_block_delta`` carrying a non-whitespace text
+    delta. ``message_start`` / ``ping`` / empty-text openers do not count —
+    they are the buffered preamble that an empty stream also emits.
+    """
+    data = getattr(event, "data", None) or {}
+    etype = data.get("type") if isinstance(data, dict) else None
+    if etype == "content_block_start":
+        block = data.get("content_block") or {}
+        return isinstance(block, dict) and block.get("type") == "tool_use"
+    if etype == "content_block_delta":
+        delta = data.get("delta") or {}
+        if isinstance(delta, dict):
+            # text_delta with non-whitespace text is real content;
+            # input_json_delta (tool args) is real content too.
+            if delta.get("type") == "text_delta":
+                return bool((delta.get("text") or "").strip())
+            if delta.get("type") == "input_json_delta":
+                return True
+    return False
+
+
 class FallbackEngine:
     """Sequential fallback router — the core of CodeRouter.
 
@@ -1717,6 +1794,20 @@ class FallbackEngine:
             getattr(profile, "cache_control_action", "off"),
         )
 
+    def _resolve_empty_response_action(self, profile_name: str | None) -> str:
+        """⑧ (empty-response): resolve ``empty_response_action`` for a profile.
+
+        Defaults to ``off`` so a missing / stub profile (e.g. a
+        ``__new__``-constructed test engine) yields the backward-compatible
+        no-op. Resolved once at the top of each Anthropic entry point.
+        """
+        chosen = profile_name or self.config.default_profile
+        try:
+            profile = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return "off"
+        return getattr(profile, "empty_response_action", "off")
+
     def _resolve_chain(self, profile_name: str | None) -> list[BaseAdapter]:
         """Return the list of adapters to try, in order, for this profile.
 
@@ -2431,6 +2522,11 @@ class FallbackEngine:
         tool_choice_action, cache_control_action = self._resolve_shim_actions(
             request.profile
         )
+        # ⑧ (empty-response): resolve the per-request empty-response action
+        # once. ``last_empty_resp`` holds the most recent content-empty 200
+        # under ``fallback`` so a fully-empty chain returns it verbatim.
+        empty_response_action = self._resolve_empty_response_action(request.profile)
+        last_empty_resp: AnthropicResponse | None = None
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -2585,6 +2681,26 @@ class FallbackEngine:
                 stream=False,
                 response_fingerprint=_fp(_fp_text) if _fp_text else None,
             )
+            # ⑧ (empty-response): per-request empty-response handling. Runs
+            # after the drift observation above (which still gets the real
+            # output_tokens=0 signal for the windowed empty_response_rate)
+            # but before the cache-observed / observer fanout, so a
+            # ``fallback`` swap does not emit a "completed" line for a
+            # response the client never sees.
+            if empty_response_action != "off" and _anthropic_response_is_empty(resp):
+                if empty_response_action == "fallback":
+                    # Remember this empty response so a fully-empty chain can
+                    # return it verbatim, then try the next provider. Not
+                    # recorded in ``errors`` — a 200 blank is not a failure.
+                    last_empty_resp = resp
+                    log_empty_response_detected(
+                        logger, adapter.name, action="fallback", stream=False
+                    )
+                    continue
+                # ``warn``: log only; fall through and return the empty resp.
+                log_empty_response_detected(
+                    logger, adapter.name, action="warn", stream=False
+                )
             # v1.9-A: pair every successful Anthropic response with a
             # cache-observed log line. Native Anthropic / LM Studio
             # /v1/messages report cache_read_input_tokens /
@@ -2624,6 +2740,20 @@ class FallbackEngine:
                 stream=False,
             )
             return resp
+
+        # ⑧ (empty-response): the chain is exhausted. Under ``fallback``,
+        # if every provider that answered returned an empty 200, return the
+        # last empty response verbatim (a 200 blank is a legitimate answer)
+        # rather than raising — errors is empty in that case anyway.
+        if last_empty_resp is not None:
+            log_empty_response_detected(
+                logger,
+                last_empty_resp.coderouter_provider or "unknown",
+                action="fallback",
+                stream=False,
+                chain_exhausted=True,
+            )
+            return last_empty_resp
 
         profile = request.profile or self.config.default_profile
         _warn_if_uniform_auth_failure(errors, profile=profile)
@@ -2676,6 +2806,15 @@ class FallbackEngine:
         tool_choice_action, cache_control_action = self._resolve_shim_actions(
             request.profile
         )
+        # ⑧ (empty-response): resolve the per-request empty-response action.
+        # Only ``fallback`` changes the streaming path (it buffers events
+        # until real content appears); ``off`` / ``warn`` stream unchanged.
+        # ``last_empty_stream_buffer`` holds the buffered preamble of the
+        # most recent empty stream so a fully-empty chain can flush it and
+        # terminate normally rather than raising.
+        empty_response_action = self._resolve_empty_response_action(request.profile)
+        empty_fallback = empty_response_action == "fallback"
+        last_empty_stream_buffer: list[AnthropicStreamEvent] | None = None
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -2828,15 +2967,59 @@ class FallbackEngine:
             self._observe_provider_success(
                 adapter.name, profile=request.profile
             )
-            acc.observe(first)
-            yield first
+            # ⑧ (empty-response): under ``fallback`` we withhold the opening
+            # events (message_start / empty content_block_start / ping) from
+            # the client until the *first real content* event is observed.
+            # Because no bytes have reached the client, an empty stream can
+            # still be swapped for the next provider. ``off`` / ``warn`` keep
+            # the legacy immediate-yield behavior (byte-for-byte unchanged).
+            #
+            # ``content_started`` flips True the moment real content is seen
+            # (or immediately, when the action is not ``fallback``); from
+            # then on events pass straight through and the mid-stream guard
+            # is live exactly as before.
+            content_started = not empty_fallback
+            buffer: list[AnthropicStreamEvent] = []
             # Mid-stream guard identical to stream() — any error after the
-            # first event is terminal.
+            # first *forwarded* event is terminal.
             try:
-                async for ev in event_iter:
+                # Seed the loop with the already-fetched ``first`` event,
+                # then drain the rest of the iterator.
+                pending = first
+                iterator = event_iter.__aiter__()
+                while True:
+                    ev = pending
                     acc.observe(ev)
-                    yield ev
+                    if content_started:
+                        yield ev
+                    else:
+                        buffer.append(ev)
+                        if _stream_event_is_real_content(ev):
+                            # Real content arrived — flush the withheld
+                            # preamble in order, then switch to passthrough.
+                            content_started = True
+                            for buffered_ev in buffer:
+                                yield buffered_ev
+                            buffer = []
+                    try:
+                        pending = await iterator.__anext__()
+                    except StopAsyncIteration:
+                        break
             except AdapterError as exc:
+                if not content_started:
+                    # Empty-stream failure before any real content under
+                    # ``fallback``: nothing reached the client, so treat it
+                    # like an empty response and try the next provider. Do
+                    # NOT raise MidStreamError (that would surface to the
+                    # client). Record the error-only observation for adaptive.
+                    self._adaptive.record_attempt(
+                        adapter.name, latency_ms=None, success=False
+                    )
+                    log_empty_response_detected(
+                        logger, adapter.name, action="fallback", stream=True
+                    )
+                    last_empty_stream_buffer = buffer
+                    continue
                 # M2: mid-stream failure — record an error-only
                 # observation (no latency; first-event success already
                 # recorded) so adaptive error rate reflects the breakage.
@@ -2868,6 +3051,17 @@ class FallbackEngine:
                 raise MidStreamError(
                     adapter.name, exc, partial_content=acc.partial_content
                 ) from exc
+            # ⑧ (empty-response): the stream ended cleanly but no real
+            # content was ever observed under ``fallback`` — the preamble is
+            # still buffered (never sent). Treat as an empty response: keep
+            # the buffer for a possible chain-exhausted flush and try the
+            # next provider.
+            if empty_fallback and not content_started:
+                log_empty_response_detected(
+                    logger, adapter.name, action="fallback", stream=True
+                )
+                last_empty_stream_buffer = buffer
+                continue
             # v2.0-G (L4): drift detection observation (stream success).
             # P1-4: compute response fingerprint for goal_progress_stall.
             _stream_fp_text = " ".join(
@@ -2921,6 +3115,23 @@ class FallbackEngine:
                 latency_ms=None,  # streaming latency is end-of-stream-relative; left to plugin
                 stream=True,
             )
+            return
+
+        # ⑧ (empty-response): the chain is exhausted under ``fallback`` and
+        # every provider produced an empty stream. Flush the last buffered
+        # (empty) preamble so the client gets a well-formed, terminating SSE
+        # sequence (message_start … message_stop) instead of an error — a
+        # 200 blank is a legitimate answer. errors is empty in that case.
+        if last_empty_stream_buffer is not None:
+            log_empty_response_detected(
+                logger,
+                "unknown",
+                action="fallback",
+                stream=True,
+                chain_exhausted=True,
+            )
+            for buffered_ev in last_empty_stream_buffer:
+                yield buffered_ev
             return
 
         profile = request.profile or self.config.default_profile
