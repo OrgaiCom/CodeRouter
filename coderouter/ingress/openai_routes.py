@@ -78,22 +78,99 @@ def _resolve_stream_timeout_s(engine: FallbackEngine, profile: str | None) -> fl
     return max(_STREAM_TIMEOUT_MIN_S, float(per_call) * _STREAM_TIMEOUT_MULTIPLIER)
 
 
+# --- /v1/models upstream passthrough -------------------------------------
+#
+# Providers with an *empty* ``model`` field are passthrough providers: the
+# upstream (llama-server, LM Studio, ...) decides which model is loaded and
+# CodeRouter never sends a model name. For those providers the historic
+# behaviour — returning the provider *name* — makes external benchmarks
+# indistinguishable across loaded GGUFs (the launcher_gui setup always
+# reported ``llama-cpp-local`` regardless of the selected model). We now ask
+# the upstream's own ``/models`` endpoint for its real model id(s) and
+# surface those instead.
+#
+# Guards: only for ``kind == "openai_compat"`` with ``model == ""``; a short
+# per-upstream TTL cache keeps repeated SDK probes cheap; ANY failure (refused
+# connection, timeout, unexpected shape) falls back to the historic
+# provider-name entry, so this is strictly additive. Providers with a
+# configured model keep the exact previous behaviour.
+
+_UPSTREAM_MODELS_TTL_S = 30.0
+_UPSTREAM_MODELS_TIMEOUT_S = 2.0
+# base_url -> (expires_monotonic, ids)
+_upstream_models_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+async def _fetch_upstream_model_ids(base_url: str) -> list[str]:
+    """GET {base_url}/models and return the upstream model ids.
+
+    Raises on any transport / shape problem — the caller treats every
+    exception as "fall back to the provider-name entry".
+    """
+    import httpx  # local import keeps module import time flat
+
+    url = base_url.rstrip("/") + "/models"
+    async with httpx.AsyncClient(timeout=_UPSTREAM_MODELS_TIMEOUT_S) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        payload = resp.json()
+    ids = [
+        str(item["id"])
+        for item in payload.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    if not ids:
+        raise ValueError(f"upstream {url} returned no model ids")
+    return ids
+
+
+async def _upstream_model_ids_cached(base_url: str) -> list[str]:
+    """TTL-cached wrapper around :func:`_fetch_upstream_model_ids`."""
+    now = time.monotonic()
+    hit = _upstream_models_cache.get(base_url)
+    if hit is not None and hit[0] > now:
+        return hit[1]
+    ids = await _fetch_upstream_model_ids(base_url)
+    _upstream_models_cache[base_url] = (now + _UPSTREAM_MODELS_TTL_S, ids)
+    return ids
+
+
 @router.get("/models")
 async def list_models(request: Request) -> dict[str, object]:
-    """Minimal /v1/models so OpenAI SDKs that probe it don't choke."""
+    """/v1/models: provider names, with upstream passthrough for empty-model
+    providers (see the passthrough note above)."""
     config = request.app.state.config
-    return {
-        "object": "list",
-        "data": [
+    created = int(time.time())
+    data: list[dict[str, object]] = []
+    for p in config.providers:
+        if p.model == "" and p.kind == "openai_compat":
+            try:
+                ids = await _upstream_model_ids_cached(str(p.base_url))
+            except Exception:  # any failure means "no passthrough"
+                logger.debug(
+                    "models passthrough failed; falling back to provider name",
+                    extra={"provider": p.name},
+                )
+            else:
+                data.extend(
+                    {
+                        "id": model_id,
+                        "object": "model",
+                        "created": created,
+                        "owned_by": f"coderouter/{p.name}",
+                    }
+                    for model_id in ids
+                )
+                continue
+        data.append(
             {
                 "id": p.name,
                 "object": "model",
-                "created": int(time.time()),
+                "created": created,
                 "owned_by": "coderouter",
             }
-            for p in config.providers
-        ],
-    }
+        )
+    return {"object": "list", "data": data}
 
 
 @router.post("/chat/completions", response_model=None)
