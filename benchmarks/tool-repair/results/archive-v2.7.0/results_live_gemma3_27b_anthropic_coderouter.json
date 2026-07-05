@@ -1,0 +1,180 @@
+{
+  "generated_at": "2026-07-05T03:54:15.004672+00:00",
+  "base_url": "http://localhost:8088",
+  "wire": "anthropic",
+  "model": "gemma3:27b",
+  "temperature": "0",
+  "profile": "bench-gemma3-27b",
+  "reps": 20,
+  "prompts": [
+    "simple_echo",
+    "complex_args",
+    "multi_tool_select",
+    "japanese_instruction",
+    "no_tool_temptation"
+  ],
+  "totals": {
+    "native": 0,
+    "repair": 0,
+    "fail": 0,
+    "error": 100,
+    "total": 100,
+    "native_rate": 0.0,
+    "repair_rate": 0.0,
+    "fail_rate": 0.0
+  },
+  "per_prompt": {
+    "simple_echo": {
+      "native": 0,
+      "repair": 0,
+      "fail": 0,
+      "error": 20
+    },
+    "complex_args": {
+      "native": 0,
+      "repair": 0,
+      "fail": 0,
+      "error": 20
+    },
+    "multi_tool_select": {
+      "native": 0,
+      "repair": 0,
+      "fail": 0,
+      "error": 20
+    },
+    "japanese_instruction": {
+      "native": 0,
+      "repair": 0,
+      "fail": 0,
+      "error": 20
+    },
+    "no_tool_temptation": {
+      "native": 0,
+      "repair": 0,
+      "fail": 0,
+      "error": 20
+    }
+  },
+  "samples": [
+    {
+      "prompt": "simple_echo",
+      "rep": 0,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 1,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 2,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 3,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 4,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 5,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 6,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 7,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 8,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 9,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 10,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 11,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 12,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 13,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 14,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 15,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 16,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 17,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 18,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 19,
+      "verdict": "error",
+      "detail": "Server error '502 Bad Gateway' for url 'http://localhost:8088/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502"
+    }
+  ]
+}

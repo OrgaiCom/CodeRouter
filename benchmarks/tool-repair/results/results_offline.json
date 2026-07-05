@@ -1,13 +1,13 @@
 {
-  "generated_at": "2026-07-04T23:46:03.699617+00:00",
-  "total_cases": 55,
+  "generated_at": "2026-07-05T06:33:13.469742+00:00",
+  "total_cases": 84,
   "overall": {
-    "recovered": 43,
-    "correct_pass": 12,
+    "recovered": 59,
+    "correct_pass": 25,
     "missed": 0,
     "false_positive": 0,
-    "positives": 43,
-    "negatives": 12,
+    "positives": 59,
+    "negatives": 25,
     "recall": 1.0,
     "false_positive_rate": 0.0
   },
@@ -43,11 +43,11 @@
       "false_positive_rate": null
     },
     "malformed": {
-      "recovered": 9,
+      "recovered": 11,
       "correct_pass": 0,
       "missed": 0,
       "false_positive": 0,
-      "positives": 9,
+      "positives": 11,
       "negatives": 0,
       "recall": 1.0,
       "false_positive_rate": null
@@ -84,11 +84,11 @@
     },
     "negative": {
       "recovered": 0,
-      "correct_pass": 12,
+      "correct_pass": 24,
       "missed": 0,
       "false_positive": 0,
       "positives": 0,
-      "negatives": 12,
+      "negatives": 24,
       "recall": null,
       "false_positive_rate": 0.0
     },
@@ -101,6 +101,36 @@
       "negatives": 0,
       "recall": 1.0,
       "false_positive_rate": null
+    },
+    "nested_xml": {
+      "recovered": 5,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 5,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "json_wrappers": {
+      "recovered": 4,
+      "correct_pass": 0,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 4,
+      "negatives": 0,
+      "recall": 1.0,
+      "false_positive_rate": null
+    },
+    "python_call": {
+      "recovered": 5,
+      "correct_pass": 1,
+      "missed": 0,
+      "false_positive": 0,
+      "positives": 5,
+      "negatives": 1,
+      "recall": 1.0,
+      "false_positive_rate": 0.0
     }
   },
   "cases": [
@@ -853,6 +883,388 @@
       "cleaned_text": "```python\nresult = {'name': 'echo', 'level': 'info'}\nprint(result)\n```",
       "dedup_verified": null,
       "note": "```python fence with a single-quoted dict that has an allow-listed 'name' but NO arguments/parameters key. Lenient parser must still enforce shape+fence guard. Must NOT repair."
+    },
+    {
+      "id": "nested_xml_01_tools_function",
+      "category": "nested_xml",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "L2 default-temp residual fail (2026-07-04). Tag is container; tool name lives in the name attribute. R4 target #1."
+    },
+    {
+      "id": "nested_xml_02_double_quote_args",
+      "category": "nested_xml",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['Bash']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "Bash"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Nested form with double-quoted (escaped) arguments attribute."
+    },
+    {
+      "id": "nested_xml_03_bare_function_tag",
+      "category": "nested_xml",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "I'll run it now.",
+      "dedup_verified": null,
+      "note": "Bare <function> tag without <tools> container, prose before."
+    },
+    {
+      "id": "nested_xml_04_tool_tag_name_attr",
+      "category": "nested_xml",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['read_file']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "read_file"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Generic <tool> tag with name attribute and args (not arguments) key."
+    },
+    {
+      "id": "nested_xml_05_multiple_functions",
+      "category": "nested_xml",
+      "outcome": "recovered",
+      "reason": "produced 2 call(s): ['echo', 'echo']",
+      "expect_repaired": true,
+      "produced_calls": 2,
+      "produced_names": [
+        "echo",
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Two calls inside one <tools> container."
+    },
+    {
+      "id": "json_wrappers_01_tool_calls_array",
+      "category": "json_wrappers",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Model echoes the OpenAI response envelope as text (Llama pattern). R4 target #2."
+    },
+    {
+      "id": "json_wrappers_02_function_call_legacy",
+      "category": "json_wrappers",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "OpenAI legacy function_call shape; arguments is a JSON string (double parse needed). R4 target #3."
+    },
+    {
+      "id": "json_wrappers_03_fenced_two_calls",
+      "category": "json_wrappers",
+      "outcome": "recovered",
+      "reason": "produced 2 call(s): ['echo', 'echo']",
+      "expect_repaired": true,
+      "produced_calls": 2,
+      "produced_names": [
+        "echo",
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Fenced envelope with two calls in the array."
+    },
+    {
+      "id": "json_wrappers_04_top_level_array",
+      "category": "json_wrappers",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Bare top-level JSON array of call objects."
+    },
+    {
+      "id": "python_call_01_tool_code_default_api",
+      "category": "python_call",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Gemma tool_code idiom: python kwargs call wrapped in print(default_api.*). R4 target #4 — repair ONLY inside tool_code fence."
+    },
+    {
+      "id": "python_call_02_tool_code_plain",
+      "category": "python_call",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "tool_code fence, plain kwargs call without default_api prefix."
+    },
+    {
+      "id": "malformed_10_index_field",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "Gemma-style extra index field. Verified working 2026-07-05 — regression guard."
+    },
+    {
+      "id": "malformed_11_trailing_garbage",
+      "category": "malformed",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "###END_OF_TURN###",
+      "dedup_verified": null,
+      "note": "Mistral-style gibberish/sentinel appended after valid call JSON."
+    },
+    {
+      "id": "negative_13_bare_python_call",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "You can invoke it directly, e.g. echo(message=\"probe\") returns the same string.",
+      "dedup_verified": null,
+      "note": "Bare python-call syntax in prose. Too ambiguous outside a tool_code fence — must NOT repair (safe side)."
+    },
+    {
+      "id": "negative_14_command_style",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Run this:\necho --message \"probe\"",
+      "dedup_verified": null,
+      "note": "Mistral command-style text. Indistinguishable from shell instructions to the user — permanently out of repair scope (2026-07-05 弱点分析 #5)."
+    },
+    {
+      "id": "python_call_03_untagged_fence_kwargs",
+      "category": "python_call",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "呼び出し構文族: Python kwargs形・無タグフェンス。tool_code フェンス外でも fence+allowed名なら修復対象(R4 スコープ拡大判断 2026-07-05)。"
+    },
+    {
+      "id": "python_call_04_colon_style_mistral",
+      "category": "python_call",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['echo']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "echo"
+      ],
+      "cleaned_text": "The `echo` function echoes back the provided message.",
+      "dedup_verified": null,
+      "note": "呼び出し構文族: コロン区切り(Ruby/Swift風)。mistral:7b L3 実測形(no_tool_temptation 20/20)。説明文+呼びの境界例 — negative_15 と両立できなければ本ケースを stretch に降格(FP 0% 優先)。"
+    },
+    {
+      "id": "python_call_05_json_object_arg",
+      "category": "python_call",
+      "outcome": "recovered",
+      "reason": "produced 1 call(s): ['write_note']",
+      "expect_repaired": true,
+      "produced_calls": 1,
+      "produced_names": [
+        "write_note"
+      ],
+      "cleaned_text": "",
+      "dedup_verified": null,
+      "note": "呼び出し構文族: JSONオブジェクト引数(JS風)・単独行。phi4-mini L3 実測形の健全版。内部JSONがパース可能な場合のみ修復。"
+    },
+    {
+      "id": "python_call_06_corrupted_inner_json",
+      "category": "python_call",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "write_note({\"path\":\"notes/日本語.txt\",\"text\":\"line1\\ndefine(\"quotes\", 1234) and a comma, plus {braces}\\n\"})",
+      "dedup_verified": null,
+      "note": "phi4-mini L3 実測の生データ: 内部JSONが引用符ネスト崩壊でパース不能。形だけ直すと壊れた引数で実行される — 修復しないのが安全側(意味崩壊は修復層の対象外、2026-07-05 設計判断)。"
+    },
+    {
+      "id": "negative_15_example_cue_call_syntax",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "For example, you would write:\n\n```\necho(message: 'demo')\n```\n\nbut don't actually run it now — this is just the syntax.",
+      "dedup_verified": null,
+      "note": "呼び出し構文族の FP ガード: 明示的な例示cue(For example / don't run)付き。python_call_04 との弁別が R4 の最難関 — 両立不能なら negative が勝つ。"
+    },
+    {
+      "id": "negative_16_inline_prose_call_syntax",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "The echo(message) signature takes one string; calling echo(message=\"hi\") simply returns \"hi\" unchanged.",
+      "dedup_verified": null,
+      "note": "呼び出し構文族の FP ガード: 文中インラインの呼び形(フェンス無し・独立行でもない)。散文に埋まった形は修復しない。"
+    },
+    {
+      "id": "negative_17_below_convention",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Below is the calling convention.\n\n```\necho(message: 'demo')\n```",
+      "dedup_verified": null,
+      "note": "Sonnetレビュー反例A3系: 'calling convention' はドキュメント文脈cue。cue辞書拡充の回帰ゲート。"
+    },
+    {
+      "id": "negative_18_as_follows",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "The calling convention is as follows:\n\n```\necho(message=\"demo\")\n```",
+      "dedup_verified": null,
+      "note": "Sonnetレビュー反例A4: 'as follows:' cue。"
+    },
+    {
+      "id": "negative_19_sample_payload_envelope",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Here's a sample response payload you might receive:\n{\"tool_calls\": [{\"name\": \"echo\", \"arguments\": {\"message\": \"example\"}}]}",
+      "dedup_verified": null,
+      "note": "Sonnetレビュー反例C1: 'sample ... payload' cue付きJSONエンベロープ例示(R4bのFPガード)。"
+    },
+    {
+      "id": "negative_20_this_format_fenced",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "The button config uses this format:\n\n```\necho(message: 'demo')\n```",
+      "dedup_verified": null,
+      "note": "Sonnetレビュー反例A15: 'this format:' cue。"
+    },
+    {
+      "id": "negative_21_long_leadin_for_example",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "For example, here is a very very very very very very very very long lead-in sentence that goes on and on before finally showing the call:\n\n```\necho(message=\"probe\")\n```",
+      "dedup_verified": null,
+      "note": "Sonnetレビュー反例A14: cue検出窓80文字問題の回帰ゲート(窓拡大 or 行頭検査で抑止すべき)。"
+    },
+    {
+      "id": "negative_22_xml_doc_example",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Here's how function calls look in this format:\n<function name=\"echo\" arguments='{\"message\":\"x\"}'/>",
+      "dedup_verified": null,
+      "note": "Sonnetレビュー反例B3: 言い回し違いの例示cue(R4aのFPガード)。"
+    },
+    {
+      "id": "negative_23_sample_payload_blankline",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Here's a sample response payload you might receive:\n\n{\"tool_calls\": [{\"name\": \"echo\", \"arguments\": {\"message\": \"example\"}}]}",
+      "dedup_verified": null,
+      "note": "再レビュー発見: negative_19 の空行(\\n\\n)バリアント。cue検出窓バグ(window(1)アンカー+window(2) pop off-by-one)の回帰ゲート。"
+    },
+    {
+      "id": "negative_24_xml_doc_example_blankline",
+      "category": "negative",
+      "outcome": "correct_pass",
+      "reason": "no tool call produced, as expected",
+      "expect_repaired": false,
+      "produced_calls": 0,
+      "produced_names": [],
+      "cleaned_text": "Here's how function calls look in this format:\n\n<function name=\"echo\" arguments='{\"message\":\"x\"}'/>",
+      "dedup_verified": null,
+      "note": "再レビュー発見: negative_22 の空行バリアント(XML経路)。同上の回帰ゲート。"
     }
   ]
 }

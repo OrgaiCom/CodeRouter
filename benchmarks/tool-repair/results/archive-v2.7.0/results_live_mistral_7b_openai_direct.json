@@ -1,0 +1,180 @@
+{
+  "generated_at": "2026-07-05T03:48:05.462578+00:00",
+  "base_url": "http://localhost:11434/v1",
+  "wire": "openai",
+  "model": "mistral:7b",
+  "temperature": "0",
+  "profile": null,
+  "reps": 20,
+  "prompts": [
+    "simple_echo",
+    "complex_args",
+    "multi_tool_select",
+    "japanese_instruction",
+    "no_tool_temptation"
+  ],
+  "totals": {
+    "native": 0,
+    "repair": 80,
+    "fail": 20,
+    "error": 0,
+    "total": 100,
+    "native_rate": 0.0,
+    "repair_rate": 0.8,
+    "fail_rate": 0.2
+  },
+  "per_prompt": {
+    "simple_echo": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "complex_args": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "multi_tool_select": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "japanese_instruction": {
+      "native": 0,
+      "repair": 20,
+      "fail": 0,
+      "error": 0
+    },
+    "no_tool_temptation": {
+      "native": 0,
+      "repair": 0,
+      "fail": 20,
+      "error": 0
+    }
+  },
+  "samples": [
+    {
+      "prompt": "simple_echo",
+      "rep": 0,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 1,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 2,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 3,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 4,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 5,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 6,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 7,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 8,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 9,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 10,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 11,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 12,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 13,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 14,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 15,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 16,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 17,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 18,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    },
+    {
+      "prompt": "simple_echo",
+      "rep": 19,
+      "verdict": "repair",
+      "text_sample": " [{\"name\":\"echo\",\"arguments\":{\"message\":\"probe\"}}]"
+    }
+  ]
+}
