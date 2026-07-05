@@ -655,6 +655,28 @@ async def api_backends(request: Request) -> dict[str, Any]:
     return {"backends": result}
 
 
+def _launcher_provider_config(backend: str, port: int) -> Any:
+    """Build the provider entry for a launcher-started backend.
+
+    ``model`` is left EMPTY on purpose: llama-server / vllm / mlx decide
+    which model is actually loaded, and the empty-model /v1/models
+    passthrough then surfaces the upstream's real model id to benchmark
+    clients — swap the GGUF, no config edit needed.
+
+    Name embeds backend + port (``launcher-llamacpp-8085``) so restarting
+    on the same port REPLACES the entry instead of piling up duplicates.
+    """
+    from coderouter.config.schemas import ProviderConfig
+
+    safe_backend = backend.replace(".", "")
+    return ProviderConfig(
+        name=f"launcher-{safe_backend}-{port}",
+        base_url=f"http://localhost:{port}/v1",
+        model="",
+        timeout_s=120.0,
+    )
+
+
 @router.post("/api/launcher/start")
 async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     """Start a new backend process."""
@@ -717,7 +739,35 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     _background_tasks.add(_task)
     _task.add_done_callback(_background_tasks.discard)
 
-    return {"id": proc_id, "pid": p.pid, "command": cmd}
+    # Provider auto-sync: register the just-started backend as a routable
+    # provider so requests can reach it without hand-editing providers.yaml
+    # (in-memory only — see FallbackEngine.register_provider docstring).
+    # Sync failure must never fail the start itself.
+    provider_sync: dict[str, Any] | None = None
+    engine = getattr(request.app.state, "engine", None)
+    if engine is not None and hasattr(engine, "register_provider"):
+        try:
+            provider_sync = engine.register_provider(
+                _launcher_provider_config(req.backend, req.port)
+            )
+            proc.log_tail.append(
+                "[launcher] provider sync: "
+                f"{provider_sync['provider']} -> profile "
+                f"'{provider_sync['profile']}' (in-memory)"
+            )
+        except Exception as exc:
+            logger.warning(
+                "launcher provider sync failed",
+                extra={"backend": req.backend, "port": req.port, "error": str(exc)},
+            )
+            proc.log_tail.append(f"[launcher] provider sync failed: {exc}")
+
+    return {
+        "id": proc_id,
+        "pid": p.pid,
+        "command": cmd,
+        "provider_sync": provider_sync,
+    }
 
 
 @router.post("/api/launcher/stop/{proc_id}")

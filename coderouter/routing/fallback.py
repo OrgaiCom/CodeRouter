@@ -1173,6 +1173,80 @@ class FallbackEngine:
         # v2.0-K: persistent state store (None = in-memory only).
         self._state_store: StateStore | None = None
 
+    def register_provider(
+        self, provider: ProviderConfig, profile_name: str = "launcher"
+    ) -> dict[str, Any]:
+        """Register (or update) a provider at runtime — launcher auto-sync.
+
+        Motivation: the embedded launcher can start a llama.cpp / vllm /
+        mlx backend on an arbitrary port, but routing is driven entirely
+        by providers.yaml — historically the operator had to hand-edit the
+        config or the new backend was simply unreachable (observed in the
+        wild as "launcher started on 8085, providers.yaml pointed at
+        8080"). This method closes that gap in-process:
+
+        - the provider entry is appended to ``config.providers`` (or, when
+          a provider with the same *name* already exists, its config entry
+          and cached adapter are REPLACED — the launcher restarting a
+          backend on the same port lands here),
+        - an adapter is built and cached alongside the static ones,
+        - the ``profile_name`` chain is created on demand, and the
+          provider is moved to the FRONT of that chain (most recently
+          launched backend wins the launcher profile).
+
+        Deliberately **in-memory only** — no providers.yaml rewrite. A
+        YAML round-trip would destroy operator comments (and a
+        comment-preserving writer means a new dependency), and the
+        launcher's process registry is itself in-memory by design: both
+        the process and its provider entry share the lifetime of this
+        server process. ``default_profile`` is never touched — routing to
+        the launcher profile stays an explicit opt-in
+        (``X-CodeRouter-Profile: launcher`` or body ``profile``).
+
+        Returns a small summary dict for the launcher API response.
+        """
+        from coderouter.config.schemas import FallbackChain
+
+        replaced = False
+        for i, existing in enumerate(self.config.providers):
+            if existing.name == provider.name:
+                self.config.providers[i] = provider
+                replaced = True
+                break
+        if not replaced:
+            self.config.providers.append(provider)
+        self._adapters[provider.name] = build_adapter(provider)
+
+        try:
+            chain = self.config.profile_by_name(profile_name)
+        except KeyError:
+            chain = FallbackChain(name=profile_name, providers=[provider.name])
+            self.config.profiles.append(chain)
+        else:
+            if provider.name in chain.providers:
+                chain.providers.remove(provider.name)
+            chain.providers.insert(0, provider.name)
+
+        logger.info(
+            "launcher provider sync: registered %s -> %s (profile %r)",
+            provider.name,
+            provider.base_url,
+            profile_name,
+            extra={
+                "provider": provider.name,
+                "base_url": str(provider.base_url),
+                "profile": profile_name,
+                "replaced": replaced,
+            },
+        )
+        return {
+            "provider": provider.name,
+            "base_url": str(provider.base_url),
+            "profile": profile_name,
+            "replaced": replaced,
+            "persisted": False,  # in-memory only, by design (see docstring)
+        }
+
     @property
     def plugins(self) -> PluginRegistry:
         """Return the plugin registry, lazily building an empty one if absent.
