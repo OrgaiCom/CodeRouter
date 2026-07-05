@@ -27,6 +27,30 @@ Recognised shapes
     <echo message="probe"/>                        (attribute form)
     <tool>{"name": "echo", "arguments": {...}}</tool>   (wrapper form)
     <echo>{"message": "probe"}</echo>              (named-wrapper form)
+5. Nested-XML name-attribute forms (R4a), where the tool name lives in a
+   ``name`` attribute rather than the tag itself (L2 default-temp residual):
+    <tools><function name="echo" arguments='{...}'/></tools>   (container form)
+    <function name="echo" arguments='{...}'/>       (bare call-tag form)
+    <tool name="read_file" args='{...}'/>           (args alias)
+   The container/call tags are a fixed known set; the ``name`` attribute must
+   be allow-listed and the ``arguments``/``args`` value is delegated to R1.
+6. JSON envelope forms (R4b), where the model echoes a response wrapper:
+    {"tool_calls": [{"name": "echo", "arguments": {...}}, ...]}  (OpenAI list)
+    {"function_call": {"name": ..., "arguments": "<JSON string>"}}  (legacy)
+   The envelope is unwrapped and each inner object is run through the same
+   shape + allow-list validation; the legacy ``arguments`` string is
+   double-parsed. Works both fenced and bare.
+7. Call-syntax forms (R4c), the "name + parens + args" family, recognised
+   ONLY inside a fenced block or on its own standalone line (never inline in
+   prose):
+    print(default_api.echo(message="probe"))        (Gemma tool_code idiom)
+    echo(message="probe")                           (python kwargs)
+    echo(message: 'demo')                           (colon-separated kwargs)
+    write_note({"path": "a", "text": "b"})          (single JSON-object arg)
+   Guards: the function name must be allow-listed, the argument list must
+   parse completely (a broken inner JSON is left alone rather than executed
+   with corrupt args), and an explanatory example cue preceding the fence
+   suppresses extraction.
 
 Each candidate is accepted only if it parses to one of:
     {"name": <str>, "arguments": <dict | str>}          # direct shape
@@ -64,6 +88,7 @@ name that is not in the allow-list is still never repaired.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import uuid
@@ -135,6 +160,71 @@ def _looks_like_tool_call(obj: Any, allowed: set[str] | None) -> tuple[str, Any]
     if allowed is not None and name not in allowed:
         return None
     return name, args
+
+
+# R4b: JSON envelope keys whose value carries the actual tool call(s).
+#   {"tool_calls": [ {call}, {call}, ... ]}   -> a list of calls
+#   {"function_call": {call}}                 -> a single call
+# These are the OpenAI response-envelope shapes a model sometimes echoes back
+# into the text body verbatim. The envelope wrapper is unwrapped and each inner
+# object is validated by the same _looks_like_tool_call predicate.
+_ENVELOPE_LIST_KEY = "tool_calls"
+_ENVELOPE_SINGLE_KEY = "function_call"
+
+
+def _expand_tool_call_envelope(
+    obj: Any, allowed: set[str] | None
+) -> list[tuple[str, Any]] | None:
+    """Unwrap an R4b JSON envelope into a list of (name, arguments) tuples.
+
+    Recognises exactly two response-envelope wrappers:
+      - ``{"tool_calls": [ ... ]}``    (OpenAI tool_calls list)
+      - ``{"function_call": { ... }}`` (OpenAI legacy single call)
+
+    The dict must carry the envelope key and nothing else that would make it
+    ambiguous with a plain tool-call object (i.e. it must NOT itself already
+    look like a direct call). Every inner element must resolve to an
+    allow-listed call, otherwise the whole envelope is declined (all-or-nothing
+    keeps false positives at zero — a half-recognised wrapper is suspicious).
+
+    Returns the list of calls, or None if ``obj`` is not an envelope. An empty
+    envelope (no valid inner calls) also returns None.
+    """
+    if not isinstance(obj, dict):
+        return None
+    # If the object is itself a direct tool call, it is not an envelope; let the
+    # ordinary single-call path handle it (avoids double extraction).
+    if _looks_like_tool_call(obj, allowed) is not None:
+        return None
+
+    if _ENVELOPE_LIST_KEY in obj:
+        raw = obj[_ENVELOPE_LIST_KEY]
+        if not isinstance(raw, list) or not raw:
+            return None
+        calls: list[tuple[str, Any]] = []
+        for item in raw:
+            hit = _looks_like_tool_call(item, allowed)
+            if hit is None:
+                return None  # all-or-nothing
+            calls.append(hit)
+        return calls or None
+
+    if _ENVELOPE_SINGLE_KEY in obj:
+        inner = obj[_ENVELOPE_SINGLE_KEY]
+        hit = _looks_like_tool_call(inner, allowed)
+        if hit is None:
+            return None
+        name, args = hit
+        # Legacy shape carries arguments as a JSON *string*; double-parse it so
+        # the normaliser emits a proper arguments object where possible. If the
+        # inner string is not valid JSON, keep it verbatim (bug-for-bug parity
+        # with bare_json_04's string-arguments behaviour).
+        if isinstance(args, str):
+            with contextlib.suppress(ValueError):
+                args = _parse_json_object(args)
+        return [(name, args)]
+
+    return None
 
 
 def _normalise_to_openai_tool_call(name: str, arguments: Any) -> dict[str, Any]:
@@ -373,12 +463,30 @@ def _extract_tool_call_fenced_blocks(
         body = match.group(2).strip()
         if lang in _CODE_FENCE_LANGS:
             return match.group(0)  # protected source-code fence
+        # R4c: call-syntax family (name(...)) inside a non-code fence. Only
+        # attempted when the body is a single call line and its name is
+        # allow-listed with fully-parseable arguments; an example cue on the
+        # line(s) preceding the fence suppresses it.
+        if not body.startswith("{") and allowed is not None:
+            if not _preceded_by_prose_cue_before_fence(text, match.start()):
+                call_hits = _extract_call_syntax_lines(body, allowed)
+                if call_hits:
+                    for name, args in call_hits:
+                        tool_calls.append(_normalise_to_openai_tool_call(name, args))
+                    return ""
+            return match.group(0)  # keep other non-JSON fenced blocks (code)
         if not body.startswith("{"):
             return match.group(0)  # keep non-JSON fenced blocks (e.g. code)
         try:
             obj = _parse_json_object(body)
         except ValueError:
             return match.group(0)  # keep unparseable fenced blocks
+        # R4b: response-envelope wrappers ({"tool_calls": [...]}, ...).
+        envelope = _expand_tool_call_envelope(obj, allowed)
+        if envelope is not None:
+            for name, args in envelope:
+                tool_calls.append(_normalise_to_openai_tool_call(name, args))
+            return ""
         hit = _looks_like_tool_call(obj, allowed)
         if hit is None:
             return match.group(0)  # keep non-tool-call JSON blocks
@@ -403,6 +511,17 @@ def _protected_code_spans(text: str) -> list[tuple[int, int]]:
         if lang in _CODE_FENCE_LANGS:
             spans.append((m.start(), m.end()))
     return spans
+
+
+def _all_fence_spans(text: str) -> list[tuple[int, int]]:
+    """Byte spans of *every* fenced block (any language tag or none).
+
+    Used by the standalone-line R4c scanner: a call line that survives inside a
+    fence was already offered to the fenced R4c path (and, if suppressed by an
+    example cue, must stay suppressed), so the standalone scanner must never
+    reach inside any fence.
+    """
+    return [(m.start(), m.end()) for m in _FENCED_RE.finditer(text)]
 
 
 def _in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
@@ -514,27 +633,389 @@ def _find_candidate_object_spans(text: str) -> list[tuple[int, int, str]]:
 # If one of these phrases appears immediately before a bare JSON object (within
 # a short window, on the same clause), the object is being *described* rather
 # than emitted as a call. Conservative: only suppresses, never forces a repair.
+#
+# The vocabulary is deliberately broad — documentation / example / "here is the
+# format" framings all mark the following block as *illustrative*. It stays
+# clear of tokens that appear in genuine descriptive prose which nonetheless
+# precedes a real call (e.g. "The `echo` function echoes back the provided
+# message." for python_call_04), so words like ``function`` / ``message`` are
+# NOT cues.
 _PROSE_CUE_RE = re.compile(
     r"(?:"
     r"for\s+example|for\s+instance|e\.?g\.?|such\s+as|"
     r"you\s+(?:would|could|can|might)\s+write|"
     r"you\s+would\s+(?:use|call)|"
-    r"(?:is|are)\s+documented(?:\s+as)?|documented\s+like|"
-    r"looks?\s+like\s+this|written\s+as|the\s+format\s+is|"
-    r"syntax\s+is|例えば|たとえば|のように書"
+    r"(?:is|are)\s+documented(?:\s+as)?|documented(?:\s+like)?|"
+    r"looks?\s+like|written\s+as|"
+    r"as\s+follows|"
+    r"(?:calling\s+)?convention|"
+    r"below\s+is|"
+    r"(?:this|the|that)\s+format|the\s+format\s+is|"
+    r"sample|payload|"
+    r"syntax|signature|"
+    r"look(?:s|ing)?\s+in|"
+    r"例えば|たとえば|のように書"
     r")"
-    r"[^\n{]{0,40}$",
+    r"[^\n{]{0,80}$",
     re.IGNORECASE,
 )
 
 
 def _preceded_by_prose_cue(text: str, start: int) -> bool:
-    """True if a documentation/example cue immediately precedes position ``start``."""
+    """True if a documentation/example cue precedes position ``start``.
+
+    Two windows are checked so a cue on the *previous* line still guards a call
+    that a model placed on its own line under an introductory sentence
+    (``"Here's a sample payload:\n{...}"`` — negative_19 / negative_22):
+
+      1. the current same-clause lead-in — the object's own line, explicitly
+         sliced from the last newline, which catches inline "..., e.g. {...}"
+         framings; and
+      2. the immediately preceding non-blank line, matched whole, which catches
+         "Here's how it looks in this format:" one line above the object.
+
+    Design note (colon-terminated lead-ins): a legitimate call announcement such
+    as ``"I'll call it now:"`` ends in a cue-adjacent colon and, when it carries
+    a cue word (e.g. "sample", "payload", "format"), is deliberately suppressed
+    together with the illustrative ones. Under the FP-0%-first principle this
+    trade-off is accepted on purpose: losing the occasional genuine "here it
+    comes" preamble is preferable to executing a described example as a real
+    call. (The bare cue guard here still keys off the *vocabulary*, so a
+    cue-free colon lead-in like "Here's the tool call:" stays repairable; the
+    unconditional colon rule lives only on the call-syntax fence path.)
+
+    Conservative: only ever suppresses, never forces a repair.
+    """
     prefix = text[:start]
-    # Look only within the current line/clause (last ~80 chars, no newline jump
-    # further than the immediate lead-in).
-    tail = prefix[-80:]
-    return bool(_PROSE_CUE_RE.search(tail))
+    # (1) same-clause lead-in. Slice the object's *own* line explicitly from the
+    #     last newline so the cue anchor is measured against the current line's
+    #     real end, not the whole-string end. Anchoring on ``prefix[-200:]``
+    #     alone breaks when the object sits at a line start (prefix ends "\n\n"):
+    #     the ``[^\n{]`` tail then collapses to zero width and the anchor can no
+    #     longer reach a cue that lives before the newline. Isolating the current
+    #     line keeps window (1) strictly same-line, leaving cross-line cues to
+    #     window (2).
+    nl = prefix.rfind("\n")
+    current_line = prefix[nl + 1 :] if nl != -1 else prefix
+    if _PROSE_CUE_RE.search(current_line[-200:]):
+        return True
+    # (2) the nearest non-blank line above the object.
+    lines = prefix.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    # Drop the current (partial) line the object sits on — but ONLY when it
+    # actually exists. When ``prefix`` ends in a newline the object is at a line
+    # start, so ``splitlines()`` already excludes any current-line residue and
+    # the last surviving entry *is* the lead-in line; popping it unconditionally
+    # would discard the cue line itself (negative_19 / negative_23 off-by-one).
+    if lines and not prefix.endswith("\n"):
+        lines.pop()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines:
+        lead = lines[-1].strip()
+        if _PROSE_CUE_RE.search(lead[-200:]):
+            return True
+    return False
+
+
+def _preceded_by_prose_cue_before_fence(text: str, fence_start: int) -> bool:
+    """True if the last non-blank line before a fence is an example cue.
+
+    The bare-JSON cue guard (:func:`_preceded_by_prose_cue`) only looks at the
+    immediate same-clause lead-in, which does not span the blank line(s) that
+    separate an introductory sentence from a following ```...``` fence. R4c
+    call-syntax fences are commonly introduced on a *separate* line
+    ("For example, you would write:\\n\\n```..."), so this looks back across
+    blank lines to the nearest non-empty line and applies the same cue regex.
+
+    This is the discriminator between negative_15 (example-cue + fenced call ->
+    suppress) and python_call_04 (descriptive prose + fenced call -> repair).
+    Conservative: only ever suppresses, never forces a repair.
+    """
+    prefix = text[:fence_start]
+    lines = prefix.splitlines()
+    # Drop the (possibly empty) trailing fragment and any blank separator lines
+    # so we land on the last line carrying actual prose.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return False
+    lead = lines[-1].strip()
+    # A lead-in line ending in a colon ("... as follows:", "... this format:",
+    # a long "For example, ...:") is an introduction to an illustrative block,
+    # so a call-syntax fence that follows it is being *shown*, not invoked. This
+    # is a general signal that does not depend on the cue vocabulary and so is
+    # robust to paraphrase and to arbitrarily long lead-in lines (negative_18 /
+    # 20 / 21). It is applied ONLY on this call-syntax fence path — bare JSON /
+    # JSON-envelope fences are introduced by legitimate colon lead-ins too
+    # ("Here's the tool call:", "First:") and must stay repairable.
+    if lead.endswith((":", "：")):  # noqa: RUF001 — full-width colon (U+FF1A) is intentional
+        return True
+    # Otherwise fall back to the cue vocabulary anywhere in the lead-in line.
+    return bool(_PROSE_CUE_RE.search(lead[-200:]))
+
+
+# ------------------------------------------------------------------
+# R4c: call-syntax family (name + parens + args)
+# ------------------------------------------------------------------
+
+# Head of a call line: an optional ``print(`` wrapper, an optional
+# ``default_api.`` prefix (Gemma tool_code idiom), then the tool name and its
+# opening paren. Anchored at the start of a (stripped) line so an inline
+# mid-prose call is never a candidate.
+_CALL_HEAD_RE = re.compile(
+    r"^(?P<print>print\s*\(\s*)?"
+    r"(?:default_api\s*\.\s*)?"
+    r"(?P<name>[A-Za-z_]\w*)\s*\("
+)
+
+# A single ``key = value`` / ``key : value`` kwargs pair.
+_CALL_KWARG_RE = re.compile(r"^(?P<key>[A-Za-z_]\w*)\s*(?:=|:)\s*(?P<val>.*)$", re.DOTALL)
+
+
+def _find_matching_paren(s: str, open_idx: str | int) -> int:
+    """Index of the ``)`` matching the ``(`` at ``open_idx``, or -1.
+
+    Balances parentheses while respecting single/double quoted strings (so a
+    paren inside a string literal does not close the call).
+    """
+    depth = 0
+    i = int(open_idx)
+    n = len(s)
+    quote: str | None = None
+    escape = False
+    while i < n:
+        c = s[i]
+        if escape:
+            escape = False
+        elif quote is not None:
+            if c == "\\":
+                escape = True
+            elif c == quote:
+                quote = None
+        else:
+            if c == '"' or c == "'":
+                quote = c
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return -1
+
+
+def _split_top_level_commas(body: str) -> list[str] | None:
+    """Split ``body`` on top-level commas, respecting quotes and brackets.
+
+    Returns the list of segments, or None if the string/bracket nesting is
+    unbalanced (which means the arguments are corrupt and must not be repaired).
+    """
+    parts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    quote: str | None = None
+    escape = False
+    for c in body:
+        if escape:
+            cur.append(c)
+            escape = False
+            continue
+        if quote is not None:
+            cur.append(c)
+            if c == "\\":
+                escape = True
+            elif c == quote:
+                quote = None
+            continue
+        if c == '"' or c == "'":
+            quote = c
+            cur.append(c)
+            continue
+        if c in "([{":
+            depth += 1
+            cur.append(c)
+            continue
+        if c in ")]}":
+            depth -= 1
+            cur.append(c)
+            continue
+        if c == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+            continue
+        cur.append(c)
+    if quote is not None or depth != 0:
+        return None
+    tail = "".join(cur).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _parse_call_value(raw: str) -> tuple[bool, Any]:
+    """Parse a single kwargs value. Returns (ok, value).
+
+    Tries strict JSON, then the lenient JSON pipe (which normalises single
+    quotes, unquoted words, etc.). ``ok`` is False when the value cannot be
+    parsed at all, so a corrupt argument fails the whole call (guard b).
+    """
+    v = raw.strip()
+    if not v:
+        return False, None
+    try:
+        return True, json.loads(v)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return True, _lenient_json_loads(v)
+    except ValueError:
+        return False, None
+
+
+def _parse_call_args(body: str, name: str) -> tuple[str, Any] | None:
+    """Parse a call's argument list into (name, arguments) or None.
+
+    Handles all three R4c argument styles with a single splitter:
+      - ``key="value"`` / ``key=value`` (Python kwargs)
+      - ``key: 'value'``               (colon-separated, Ruby/Swift flavour)
+      - ``({...})`` a single JSON-object positional argument (JS flavour)
+
+    Every argument must parse completely; a broken inner value causes the whole
+    call to be declined (guard b — a form-only fix with corrupt args is more
+    harmful than no repair).
+    """
+    body = body.strip()
+    if not body:
+        # Zero-arg call: valid, empty arguments object.
+        return name, {}
+
+    # Single JSON-object positional argument: write_note({...}).
+    if body.startswith("{"):
+        try:
+            obj = _parse_json_object(body)
+        except ValueError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        return name, obj
+
+    segments = _split_top_level_commas(body)
+    if not segments:
+        return None
+    out: dict[str, Any] = {}
+    for seg in segments:
+        m = _CALL_KWARG_RE.match(seg.strip())
+        if not m:
+            return None  # positional args / unparseable -> decline
+        ok, val = _parse_call_value(m.group("val"))
+        if not ok:
+            return None
+        out[m.group("key")] = val
+    return name, out
+
+
+def _extract_one_call_line(line: str, allowed: set[str]) -> tuple[str, Any] | None:
+    """Extract a single call-syntax invocation from one standalone line.
+
+    The line must be *entirely* a call (optionally wrapped in ``print(...)``);
+    trailing garbage after the closing paren disqualifies it, so an inline
+    call embedded in a sentence is never matched. The name must be allow-listed
+    and the arguments must parse fully.
+    """
+    stripped = line.strip()
+    m = _CALL_HEAD_RE.match(stripped)
+    if not m:
+        return None
+    name = m.group("name")
+    if name not in allowed:
+        return None
+    open_idx = m.end() - 1
+    close_idx = _find_matching_paren(stripped, open_idx)
+    if close_idx < 0:
+        return None
+    inner = stripped[open_idx + 1 : close_idx]
+    rest = stripped[close_idx + 1 :].strip()
+    if m.group("print"):
+        # A print(...) wrapper must be closed by exactly one trailing ')'.
+        if not rest.startswith(")"):
+            return None
+        rest = rest[1:].strip()
+    if rest:
+        return None  # trailing garbage -> not a clean standalone call
+    return _parse_call_args(inner, name)
+
+
+def _extract_call_syntax_lines(
+    block: str, allowed: set[str]
+) -> list[tuple[str, Any]]:
+    """Extract call-syntax invocations from the non-blank lines of ``block``.
+
+    Used for fence interiors (one or more call lines). Every non-blank line
+    must resolve to an allow-listed call with fully-parseable arguments; if any
+    line fails, the whole block is declined (all-or-nothing keeps a mixed
+    code/call fence from being partially executed).
+    """
+    lines = [ln for ln in block.splitlines() if ln.strip()]
+    if not lines:
+        return []
+    hits: list[tuple[str, Any]] = []
+    for ln in lines:
+        hit = _extract_one_call_line(ln, allowed)
+        if hit is None:
+            return []
+        hits.append(hit)
+    return hits
+
+
+def _extract_r4c_standalone_lines(
+    text: str,
+    allowed: set[str],
+    protected: list[tuple[int, int]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Extract R4c call-syntax invocations that stand alone on their own line.
+
+    Complements the fenced R4c path: a call like ``write_note({...})`` may
+    appear bare (no fence) as the whole response or on its own line. Each
+    candidate line must be *entirely* a call (``_extract_one_call_line``
+    enforces the no-trailing-garbage rule), so an inline call embedded in a
+    sentence is never a candidate. Lines inside a protected code fence, or
+    introduced by an example cue, are skipped.
+
+    Returns (text_with_call_lines_removed, tool_calls).
+    """
+    if "(" not in text:
+        return text, []
+    tool_calls: list[dict[str, Any]] = []
+    out_lines: list[str] = []
+    pos = 0
+    changed = False
+    for line in text.splitlines(keepends=True):
+        line_start = pos
+        pos += len(line)
+        stripped = line.strip()
+        if not stripped:
+            out_lines.append(line)
+            continue
+        if _in_spans(line_start, protected):
+            out_lines.append(line)
+            continue
+        if _preceded_by_prose_cue(text, line_start):
+            out_lines.append(line)
+            continue
+        hit = _extract_one_call_line(stripped, allowed)
+        if hit is None:
+            out_lines.append(line)
+            continue
+        name, args = hit
+        tool_calls.append(_normalise_to_openai_tool_call(name, args))
+        changed = True
+        # Drop the call line entirely (keep a trailing newline structure sane).
+    if not changed:
+        return text, []
+    return "".join(out_lines), tool_calls
 
 
 # ------------------------------------------------------------------
@@ -605,6 +1086,121 @@ _XML_WRAPPER_RE = re.compile(
     re.DOTALL,
 )
 _XML_ATTR_RE = re.compile(r"([\w.:-]+)\s*=\s*\"([^\"]*)\"")
+
+# R4a: nested-XML name-attribute forms.
+# Known call/container tags whose ``name`` attribute (not the tag itself)
+# carries the tool name. Restricting to this fixed set — rather than treating
+# any tag with a ``name`` attribute as a call — keeps arbitrary markup (e.g.
+# <input name="q"/>) from being mistaken for a tool call.
+_R4A_CALL_TAGS = frozenset({"function", "tool", "function_call", "invoke", "tool_call"})
+# Container tags that merely wrap one or more call tags; scanned through, never
+# themselves a call.
+_R4A_CONTAINER_TAGS = frozenset({"tools", "tool_calls", "function_calls", "invoke"})
+# A self-closing call tag: <function name="..." arguments='...'/>. Attribute
+# values may be single- OR double-quoted; the ``arguments`` value is captured
+# raw and delegated to the JSON pipe (R1/R2). ``\1`` on the quote char keeps the
+# value greedy up to the matching closing quote.
+_R4A_ATTR_RE = re.compile(
+    r"""([\w.:-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')""",
+)
+_R4A_SELFCLOSE_RE = re.compile(
+    r"""<([A-Za-z_][\w.-]*)((?:\s+[\w.:-]+\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))+)\s*/>""",
+)
+# R4a attribute keys that hold the tool name / the arguments payload.
+_R4A_NAME_ATTRS = ("name",)
+_R4A_ARG_ATTRS = ("arguments", "args", "parameters", "input")
+
+
+def _r4a_parse_attrs(attr_blob: str) -> dict[str, str]:
+    """Parse an XML attribute blob into {key: value}, unescaping quoted values.
+
+    A double-quoted value may carry backslash-escaped inner quotes
+    (``arguments="{\\"command\\": ...}"``); those are unescaped so the value is
+    valid JSON before it reaches the parse pipe. Single-quoted values are taken
+    verbatim (their inner double quotes are already literal JSON).
+    """
+    out: dict[str, str] = {}
+    for m in _R4A_ATTR_RE.finditer(attr_blob):
+        key = m.group(1)
+        if m.group(2) is not None:  # double-quoted
+            val = m.group(2).replace('\\"', '"').replace("\\\\", "\\")
+        else:  # single-quoted
+            val = m.group(3) or ""
+        out[key] = val
+    return out
+
+
+def _r4a_build_call(
+    attrs: dict[str, str], allowed: set[str]
+) -> tuple[str, Any] | None:
+    """Turn parsed R4a attributes into (name, arguments) if valid, else None."""
+    name = None
+    for k in _R4A_NAME_ATTRS:
+        if k in attrs:
+            name = attrs[k]
+            break
+    if not name or name not in allowed:
+        return None
+    args: Any = {}
+    for k in _R4A_ARG_ATTRS:
+        if k in attrs:
+            raw = attrs[k].strip()
+            if not raw:
+                args = {}
+                break
+            try:
+                args = _parse_json_object(raw)
+            except ValueError:
+                return None  # malformed arguments -> decline (safe side)
+            break
+    return name, args
+
+
+def _extract_r4a_nested_xml(
+    text: str,
+    allowed: set[str] | None,
+    guard: list[tuple[int, int]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Extract R4a nested-XML name-attribute tool calls.
+
+    Handles both the bare call tag (``<function name=.../>``) and the same tag
+    inside a container (``<tools>...</tools>``). Containers are transparent —
+    the scanner simply finds every allow-listed call tag, wherever it sits, and
+    removes it; a lone empty ``<tools></tools>`` shell left behind is trimmed by
+    residue cleanup. Reasoning-block / example-cue guards are honoured.
+
+    Returns (text_with_calls_removed, tool_calls).
+    """
+    if allowed is None or "<" not in text:
+        return text, []
+    tool_calls: list[dict[str, Any]] = []
+    removals: list[tuple[int, int]] = []
+    for m in _R4A_SELFCLOSE_RE.finditer(text):
+        tag = m.group(1).lower()
+        if tag not in _R4A_CALL_TAGS:
+            continue
+        if _in_spans(m.start(), guard) or _preceded_by_prose_cue(text, m.start()):
+            continue
+        attrs = _r4a_parse_attrs(m.group(2) or "")
+        hit = _r4a_build_call(attrs, allowed)
+        if hit is None:
+            continue
+        name, args = hit
+        tool_calls.append(_normalise_to_openai_tool_call(name, args))
+        removals.append((m.start(), m.end()))
+
+    if not removals:
+        return text, []
+    # Also sweep up now-empty container shells around removed calls.
+    cleaned = text
+    removals.sort()
+    for s, e in reversed(removals):
+        cleaned = cleaned[:s] + cleaned[e:]
+    for ctag in _R4A_CONTAINER_TAGS:
+        cleaned = re.sub(
+            rf"<{ctag}\s*>\s*</{ctag}\s*>", "", cleaned, flags=re.IGNORECASE
+        )
+    return cleaned, tool_calls
 
 
 def _known_non_tool_tag_ranges(text: str) -> list[tuple[int, int]]:
@@ -785,6 +1381,26 @@ def repair_tool_calls_in_text(
     cleaned, xml_tool_calls = _extract_xml_tool_calls(cleaned, allowed, protected)
     extracted.extend(xml_tool_calls)
 
+    # 2b. R4a: nested-XML name-attribute forms (<function name=.../> etc.).
+    #     Same guards as R3: protected code fences + reasoning blocks are
+    #     shielded, and an example cue immediately before a call tag suppresses
+    #     it.
+    protected = _protected_code_spans(cleaned)
+    r4a_guard = protected + _known_non_tool_tag_ranges(cleaned)
+    cleaned, r4a_tool_calls = _extract_r4a_nested_xml(cleaned, allowed, r4a_guard)
+    extracted.extend(r4a_tool_calls)
+
+    # 2c. R4c: standalone call-syntax lines outside any fence
+    #     (e.g. ``write_note({...})`` alone on a line). Fenced call-syntax was
+    #     already handled in step 1. Only whole-line calls with an allow-listed
+    #     name and fully-parseable arguments are taken; inline / mid-prose forms
+    #     are never candidates.
+    if allowed is not None:
+        cleaned, r4c_tool_calls = _extract_r4c_standalone_lines(
+            cleaned, allowed, _all_fence_spans(cleaned)
+        )
+        extracted.extend(r4c_tool_calls)
+
     # 3. Scan remaining text for bare JSON objects (strict then lenient).
     #    Skip anything inside a protected code fence or introduced by a prose
     #    example cue. Walk back-to-front so slicing removals don't shift the
@@ -802,6 +1418,14 @@ def repair_tool_calls_in_text(
         try:
             obj = json.loads(substr)
         except json.JSONDecodeError:
+            continue
+        # R4b: response-envelope wrappers ({"tool_calls": [...]}, ...) expand to
+        # one or more inner calls before the direct-shape check.
+        envelope = _expand_tool_call_envelope(obj, allowed)
+        if envelope is not None:
+            for name, args in envelope:
+                repaired_from_bare.append(_normalise_to_openai_tool_call(name, args))
+            spans_to_remove.append((start, end))
             continue
         hit = _looks_like_tool_call(obj, allowed)
         if hit is None:
