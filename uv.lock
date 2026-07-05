@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 1
 requires-python = ">=3.12"
 
 [[package]]
@@ -56,7 +56,7 @@ wheels = [
 
 [[package]]
 name = "coderouter-cli"
-version = "2.6.0"
+version = "2.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
