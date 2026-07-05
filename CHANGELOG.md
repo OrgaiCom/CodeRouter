@@ -6,6 +6,60 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.7.2] — 2026-07-05 (R4 tool-call repair: nested-XML / JSON-envelope / call-syntax forms)
+
+Single feature PR **#43**, driven by the 2026-07-05 L3 live benchmark
+(6 local models × 2 wire paths × repairer-version A/B on an M3 Max). Closes
+the three text-tool-call gap classes the bench measured in the wild. Fully
+backward compatible: no config-schema changes, no signature changes,
+no new dependencies (repairer stays stdlib-only).
+
+### Added
+
+- **R4a — nested-XML name-attribute forms.** The tool name lives in a
+  `name` attribute rather than the tag itself:
+  `<tools><function name="echo" arguments='{...}'/></tools>`, bare
+  `<function .../>`, `<tool ... args='{...}'/>`. Fixed known tag set;
+  `name` must be allow-listed; attribute values are delegated to the R1
+  lenient-JSON pipe. (PR #43)
+- **R4b — JSON envelope forms.** Models sometimes echo the response wrapper
+  verbatim into the text body: `{"tool_calls": [...]}` and legacy
+  `{"function_call": {"name": ..., "arguments": "<JSON string>"}}` (string
+  arguments double-parsed). All-or-nothing allow-list validation: one
+  non-allow-listed inner call rejects the whole envelope. (PR #43)
+- **R4c — call-syntax family.** One extractor for the "name + parens + args"
+  idiom observed independently across three model families (Gemma, Mistral,
+  phi4): `print(default_api.echo(message="probe"))`, `echo(message="probe")`,
+  `echo(message: 'demo')` (colon kwargs), `write_note({JSON})`. Recognised
+  only inside a fence or on a standalone line, never inline in prose. The
+  argument list must parse completely — a corrupted inner JSON is left
+  alone rather than executed with broken args. (PR #43)
+- **50 new unit tests** (`tests/test_tool_repair_r4.py`) and **29 new bench
+  corpus cases** (55 → 84), including 10 adversarial-review counterexamples
+  locked in as negatives (blank-line cue variants among them). (PR #43)
+
+### Changed
+
+- **Prose-cue false-positive guard hardened** after two adversarial review
+  rounds: expanded cue vocabulary (`as follows` / `convention` / `format` /
+  `sample` / `payload` / ...), 200-char window with whole-previous-line
+  matching (two blank-line window bugs fixed), and a colon-ended lead-in
+  rule (full-width `：` U+FF1A included). The colon rule deliberately
+  over-suppresses genuine "I'll call it now:" lead-ins — FP-zero-first is
+  documented in the module docstring as a design decision. (PR #43)
+
+### Results
+
+- L1 offline bench: recall **78.0% → 100%** (59/59), false positives
+  **0/25** maintained, existing 70 cases regression-free.
+- L2/L3 live (temperature 0, 100 requests per path, zero errors):
+  mistral:7b via router **80% → 100%** (third 0→100 model after
+  qwen2.5-coder 1.5b/7b); phi4-mini **40% → 80%**, with the remaining 20%
+  being exactly the semantically-corrupted case the repairer refuses by
+  design.
+
+---
+
 ## [v2.7.1] — 2026-07-04 (Native-endpoint shims + benchmarked tool-repair upgrade)
 
 Two feature PRs driven by the 2026-07-04 competitive re-survey and the new
