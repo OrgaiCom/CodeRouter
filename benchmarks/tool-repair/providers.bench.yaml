@@ -47,13 +47,13 @@ profiles:
   - name: bench-gemma26b
     providers: [ollama-gemma4-26b]
 
-  # --- Empty-response fallback chain ---
-  # Requires `empty_response_action` support (feature/empty-response-fallback,
-  # PR pending as of 2026-07-05). Uncomment once merged. Measured result:
-  # gemma4:26b 80% -> 100% native (20/20 blank turns rescued by qwen3-30b).
-  # - name: bench-gemma-chain
-  #   providers: [ollama-gemma4-26b, ollama-qwen3-coder-30b]
-  #   empty_response_action: fallback
+  # --- Empty-response fallback chain (PR #45) ---
+  # gemma4:26b blanks out on no_tool_temptation-type prompts (~20% at temp 0);
+  # empty_response_action re-dispatches the blank turn to qwen3-30b in-flight.
+  # Measured: 80% -> 100% native (20/20 blank turns rescued, zero errors).
+  - name: bench-gemma-chain
+    providers: [ollama-gemma4-26b, ollama-qwen3-coder-30b]
+    empty_response_action: fallback
 
 providers:
   # --- L3 P1 ---
