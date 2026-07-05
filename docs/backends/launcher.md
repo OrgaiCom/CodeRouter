@@ -110,6 +110,31 @@ Launcher の画面は「MODELS パネル」「LAUNCH フォーム」「PROCESSES
 
 `▶ 起動` でプロセスが起動し、PROCESSES テーブルに表示されます。バイナリが見つからない場合は**起動ボタンが自動的に無効化**され、理由が表示されます。「追加オプション」欄の横の **⚙ 推奨値** ボタンについては [メモリ推奨](#メモリ推奨) を参照してください。
 
+### provider 自動同期(v2.7.4、Web版のみ)
+
+Web 版で backend を起動すると、その backend が **provider として自動登録**されます(providers.yaml の編集不要)。
+
+- provider 名は `launcher-<backend>-<port>`(例: `launcher-llamacpp-8085`)。同名で再起動するとエントリは**置き換え**られ、重複しません
+- 登録先は `launcher` プロファイル(無ければ自動作成)。**最後に起動した backend が先頭**に来ます
+- ルーティングは明示オプトイン: `X-CodeRouter-Profile: launcher` ヘッダ、または body の `"profile": "launcher"`。**`default_profile` は変更されません**
+- 登録は**メモリ内のみ**です(providers.yaml には書き込みません — 手書きコメントを壊さないため)。serve を再起動すると消えますが、Launcher のプロセス自体も同寿命なので整合します。恒久化したい場合は providers.yaml に手で転記してください
+- provider は `model: ""` で登録されるため、`/v1/models` は**上流がロード中の実モデル ID(gguf 名)**を返します(モデル名パススルー、同 v2.7.4)。gguf を差し替えても config 編集は不要で、外部ベンチマークからモデルを識別できます(30 秒 TTL キャッシュあり)
+
+動作確認:
+
+```bash
+# 起動後
+curl http://localhost:8088/v1/models
+#   → "id": "<ロード中のgguf名>", "owned_by": "coderouter/launcher-llamacpp-8085"
+
+curl http://localhost:8088/v1/chat/completions \
+  -H 'Content-Type: application/json' -H 'X-CodeRouter-Profile: launcher' \
+  -d '{"model":"x","messages":[{"role":"user","content":"say hi"}]}'
+#   → coderouter_provider が launcher-llamacpp-<port> なら疎通OK
+```
+
+デスクトップ GUI 版(launcher_gui.py)は別プロセスで動くため自動同期の対象外です。従来どおり providers.yaml のエントリ(初回自動生成される `llama-cpp-local` など)の `base_url` を、起動ポートに合わせてください。
+
 ### PROCESSES テーブル
 
 起動した backend プロセスの一覧です。NAME / BACKEND(llama.cpp / vllm / mlx)/ MODEL / PORT / PID / STATUS(`starting` / `running` / `stopped` / `error` を色分け)を表示し、プロセスを選んで **停止**(SIGTERM)・**削除**(レジストリから除去)・**ログ表示**ができます。
