@@ -6,6 +6,49 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v2.7.4] — 2026-07-06 (Launcher provider auto-sync + /v1/models passthrough)
+
+Two PRs closing the "launcher started it, but nothing can route to it /
+nothing can *name* it" gap, driven by a real field failure (launcher on
+port 8085, providers.yaml pointing at 8080; external benchmark reports
+indistinguishable across loaded GGUFs). **PR #48** (models passthrough)
+and **PR #49** (launcher auto-sync). Fully backward compatible, no new
+dependencies. Verified end-to-end on real hardware (NucBox EVO-X2,
+llama.cpp + omnicoder-9b): zero-config launch → route via
+`X-CodeRouter-Profile: launcher` → response carries the real GGUF name.
+
+### Added
+
+- **`/v1/models` upstream passthrough** for empty-model providers.
+  A provider with `model: ""` (the launcher/llama-server pattern — the
+  upstream decides what is loaded) used to be listed by its static
+  provider name only. Now `/v1/models` queries the upstream's own
+  `/models` (2s timeout, 30s TTL cache) and surfaces the real loaded
+  model id(s) as `owned_by: coderouter/<provider>`. Any failure falls
+  back to the historic provider-name entry; providers with a configured
+  model keep the exact previous shape. External benchmarks (e.g.
+  SWE-bench harnesses with `model: auto`) can now tell GGUF swaps apart
+  without config edits. (PR #48)
+- **Launcher provider auto-sync.** A backend started from the embedded
+  launcher (`/api/launcher/start`) is auto-registered as a routable
+  provider named `launcher-<backend>-<port>` (restart on the same port
+  replaces, never duplicates) and placed at the FRONT of an on-demand
+  `launcher` profile. `default_profile` is never touched — routing is an
+  explicit opt-in via `X-CodeRouter-Profile: launcher` or body
+  `profile`. Registration is deliberately **in-memory only** (a YAML
+  rewrite would destroy operator comments; provider and process share
+  the server's lifetime). Sync failures never fail the start; the
+  result rides on the start response as `provider_sync`. New engine
+  API: `FallbackEngine.register_provider()`. (PR #49)
+
+### Docs
+
+- README (JA/EN) launcher feature table + `docs/backends/launcher.md`:
+  auto-sync semantics, verification curl recipes, and the desktop-GUI
+  caveat (launcher_gui.py runs out-of-process and is not synced).
+
+---
+
 ## [v2.7.3] — 2026-07-05 (Per-request empty-response fallback + L3 bench evidence)
 
 Two PRs: **PR #45** (`empty_response_action` — the fallback leg of the
