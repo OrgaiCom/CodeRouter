@@ -242,12 +242,13 @@ coderouter doctor --check-model lmstudio-qwen3-5-9b
 Expected:
 
 ```
-[1/6] auth+basic-chat …… [OK]    200 OK (in=19, out=16)
-[2/6] num_ctx ………………… [SKIP]    not Ollama-shape (port 1234) — by design
-[3/6] tool_calls ………… [OK]    native `tool_calls` observed; matches declaration.
-[4/6] thinking ………… [SKIP]    capabilities.thinking=true on openai_compat is informational
-[5/6] reasoning-leak …… [OK]   upstream emits non-standard `reasoning_content`; stripped by v1.8.3 adapter
-[6/6] streaming ………… [SKIP]    streaming-path detection is Ollama-shape gated
+[1/7] auth+basic-chat …… [OK]    200 OK (in=19, out=16)
+[2/7] num_ctx ………………… [SKIP]    not Ollama-shape (port 1234) — by design
+[3/7] tool_calls ………… [OK]    native `tool_calls` observed; matches declaration.
+[4/7] thinking ………… [SKIP]    capabilities.thinking=true on openai_compat is informational
+[5/7] reasoning-leak …… [OK]   upstream emits non-standard `reasoning_content`; stripped by v1.8.3 adapter
+[6/7] streaming ………… [SKIP]    streaming-path detection is Ollama-shape gated
+[7/7] cache ………………… [SKIP]    not applicable — cache_control is Anthropic-shaped (kind: openai_compat)
 
 Summary: all probes match declarations.
 Exit: 0
@@ -262,12 +263,13 @@ coderouter doctor --check-model lmstudio-qwen3-5-9b-anthropic
 Expected:
 
 ```
-[1/6] auth+basic-chat …… [OK]    200 OK (in=19, out=16)
-[2/6] num_ctx ………………… [SKIP]    not Ollama-shape
-[3/6] tool_calls ………… [OK]    native `tool_calls` observed; matches declaration.
-[4/6] thinking ………… [OK]    thinking block emitted; matches declaration.   ← !!
-[5/6] reasoning-leak …… [SKIP]    only openai_compat emits the non-standard reasoning field
-[6/6] streaming ………… [SKIP]
+[1/7] auth+basic-chat …… [OK]    200 OK (in=19, out=16)
+[2/7] num_ctx ………………… [SKIP]    not Ollama-shape
+[3/7] tool_calls ………… [OK]    native `tool_calls` observed; matches declaration.
+[4/7] thinking ………… [OK]    thinking block emitted; matches declaration.   ← !!
+[5/7] reasoning-leak …… [SKIP]    only openai_compat emits the non-standard reasoning field
+[6/7] streaming ………… [SKIP]
+[7/7] cache ………………… [SKIP]    skipped — no explicit `capabilities.prompt_cache: true` declared for this provider
 
 Summary: all probes match declarations.
 Exit: 0

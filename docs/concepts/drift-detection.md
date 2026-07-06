@@ -12,9 +12,10 @@ Ollama 等のローカル LLM バックエンドは長時間稼働すると以�
 - tool_use を返すべき場面で返さなくなる (tool silence)
 - 異常な stop_reason が増加する
 - エラー率が上昇する
+- 同じ内容の応答を繰り返し前進しなくなる (goal progress stall — response_fingerprint が設定された場合のみ)
 
 これらは個別には致命的ではないものの、蓄積すると agent session が事実上動作不能に陥ります。
-Drift Detection はこれらを 5 つの品質シグナルとして rolling window で監視し、
+Drift Detection はこれらを 6 つの品質シグナルとして rolling window で監視し、
 閾値を超えた時点で corrective action を自動実行します。
 
 ## 設定
@@ -48,18 +49,23 @@ profiles:
 | `normal` | 0.3 | 0.5 | 0.7 | 0.4 | 0.25 | 6 |
 | `high` | 0.2 | 0.7 | 0.5 | 0.3 | 0.15 | 4 |
 
-## 5 品質シグナル
+（各プリセットには `goal_progress_stall` 用の `repetition_rate_threshold` も含まれます: low=0.6 / normal=0.4 / high=0.25）
+
+> **goal_mode**: profile に `goal_mode: true` を設定すると、`drift_detection_sensitivity` に関わらず専用の `goal` プリセット (empty=0.2 / collapse=0.6 / tool_silence=0.5 / stop=0.3 / error=0.15 / repetition=0.2 / min_window_fill=4) が適用されます。goal_mode 自体はシグナルではなく、閾値プリセットを切り替える bool フラグです。`/goal` セッション向けに前進停滞・length collapse を早く拾います。
+
+## 6 品質シグナル
 
 1. **empty_response_rate** — output_tokens=0 の応答率 (error を除外)
 2. **length_collapse_ratio** — window 後半の median output_tokens / 前半の median (比率が閾値未満で collapse)
 3. **tool_silence_rate** — tools[] を含む request に対して tool_use を返さない率
 4. **stop_anomaly_rate** — end_turn / tool_use / max_tokens 以外の stop_reason の率
 5. **error_rate** — provider error の率
+6. **goal_progress_stall** — window 内で以前と同じ fingerprint が再出現した率 (response_fingerprint が設定された observation のみ対象、3 件以上で発火)。model が前進せず同じ応答を繰り返している兆候
 
 ## Severity 判定
 
 - severe signal ×1 (empty_response_rate, length_collapse) → **severe**
-- mild signal ×2 以上 (tool_silence, stop_anomaly, error_rate) → **severe**
+- mild signal ×2 以上 (tool_silence, stop_anomaly, error_rate, goal_progress_stall) → **severe**
 - mild signal ×1 → **mild**
 
 ## Response Header

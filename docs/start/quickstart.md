@@ -117,9 +117,9 @@ uv run coderouter serve --port 8088
 
 毎回 `uv run` プレフィックスを付ければ venv activate は不要 (direnv や shell 起動フックでの自動 activate も一案)。
 
-> **補足**: PyPI 上のパッケージ名は `coderouter-cli` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) 参照。
+> **補足**: PyPI 上のパッケージ名は `coderouter-cli` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) 参照。
 >
-> **v1.8.0 から用途別 4 プロファイル**: `coderouter serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) と [`examples/providers.yaml`](../../examples/providers.yaml) のコメントを参照。
+> **v1.8.0 から用途別 4 プロファイル**: `coderouter serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../../CHANGELOG.md) と [`examples/providers.yaml`](../../examples/providers.yaml) のコメントを参照。
 
 ### 3. `providers.yaml` を配置
 

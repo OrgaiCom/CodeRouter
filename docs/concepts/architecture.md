@@ -22,7 +22,7 @@
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │ Wire 翻訳   │  │ 6 系統 Guard │  │ Diagnostic Layer   │  │
 │  │             │  │              │  │                    │  │
-│  │ Anthropic   │  │ L1 Context   │  │ doctor 6-probe     │  │
+│  │ Anthropic   │  │ L1 Context   │  │ doctor 7-probe     │  │
 │  │   ↕         │  │ L2 Memory    │  │ continuous probe   │  │
 │  │ OpenAI      │  │ L3 Tool loop │  │ audit log          │  │
 │  │             │  │ L4 Drift     │  │ request journal    │  │
@@ -62,9 +62,9 @@
 | 障害 | 症状 | CodeRouter の対処 | 導入バージョン |
 |---|---|---|---|
 | **L1 Context overflow** | messages が context window に漸近 → backend 400 | warn (80%) → auto trim (90%)、tool_use/tool_result ペア atomic 保全 | v2.0.0 |
-| **L2 Memory pressure** | Ollama/LM Studio が VRAM 不足で OOM | 残メモリ probe → 軽量モデル切替 | v1.10.0 |
+| **L2 Memory pressure** | Ollama/LM Studio が VRAM 不足で OOM | エラー本文の OOM 文字列を検知 (warn / skip、default warn)。`skip` 時は該当 provider を cooldown (既定 120s) で除外 → チェーンの次の provider へフォールスルー | v1.10.0 |
 | **L3 Tool loop** | 同じ tool args を繰り返す stuck loop | 重複検知 → warn / inject / break 3 段階 | v1.10.0 |
-| **L4 Drift** | KV cache 汚染で応答品質劣化 (空応答/短縮/tool silence) | 5 シグナル rolling window → warn / promote / reload | v2.1.0 |
+| **L4 Drift** | KV cache 汚染で応答品質劣化 (空応答/短縮/tool silence) | 6 シグナル rolling window → warn / promote / reload (default off) | v2.1.0 |
 | **L5 Health** | backend crash / 連続失敗 | 状態機械 (HEALTHY→DEGRADED→UNHEALTHY) + self-healing (自動除外 + restart + 回復 probe) | v1.10.0 + v2.2.0 |
 | **L6 Mid-stream** | streaming 途中で backend が落ちる | 蓄積テキスト返却 (partial stitching) + clean error event | v2.1.0 |
 
@@ -154,7 +154,7 @@ curl http://localhost:8088/v1/chat/completions \
 coderouter doctor --check-model ollama-qwen-coder-14b
 ```
 
-指定プロバイダに対し 6 プローブ (各 ≤100 トークン) を走らせ、宣言と実挙動の食い違いをコピペ可能な YAML パッチで出力:
+指定プロバイダに対し 7 プローブ (各 ≤100 トークン) を走らせ、宣言と実挙動の食い違いをコピペ可能な YAML パッチで出力:
 
 ```
 provider: ollama-qwen-coder-14b  (kind=openai_compat, model=qwen2.5-coder:14b)
@@ -172,16 +172,17 @@ suggested patch for ~/.coderouter/providers.yaml:
         tools: true
 ```
 
-### 6 プローブの役割
+### 7 プローブの役割
 
 | プローブ | 何を検査するか |
 |---|---|
 | **auth+basic-chat** | 到達性・認証・基本応答。失敗時は残り全 SKIP |
+| **num_ctx** | 宣言コンテキスト長と実挙動の食い違い (大入力時の暗黙切り詰め検知) |
 | **tool_calls** | ダミーツールでの tool_use 生成能力 |
 | **thinking** | Anthropic `thinking` ブロック受付 (anthropic kind のみ) |
 | **reasoning-leak** | strip 前の生ボディに `reasoning` フィールドが漏れていないか |
+| **streaming** | SSE ストリーミング応答の整合性 |
 | **cache** | Anthropic prompt cache の read/creation 動作 |
-| **context-truncation** | 大入力時の暗黙切り詰めの有無 |
 
 ### 終了コード (CI 投入想定)
 

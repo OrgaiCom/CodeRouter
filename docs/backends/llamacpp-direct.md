@@ -185,12 +185,13 @@ coderouter doctor --check-model llamacpp-qwen3-6-35b-a3b
 期待される結果：
 
 ```
-[1/6] auth+basic-chat …… [OK]
-[2/6] num_ctx ………………… [SKIP]    ← port 8080 (Ollama 専用 knob は使わない)、設計通り
-[3/6] tool_calls ………… [OK]    ← native tool_calls observed
-[4/6] thinking ………… [SKIP]
-[5/6] reasoning-leak …… [OK]    ← reasoning_content 検出 → adapter で strip 済
-[6/6] streaming ………… [SKIP]
+[1/7] auth+basic-chat …… [OK]
+[2/7] num_ctx ………………… [SKIP]    ← port 8080 (Ollama 専用 knob は使わない)、設計通り
+[3/7] tool_calls ………… [OK]    ← native tool_calls observed
+[4/7] thinking ………… [SKIP]
+[5/7] reasoning-leak …… [OK]    ← reasoning_content 検出 → adapter で strip 済
+[6/7] streaming ………… [SKIP]
+[7/7] cache ………………… [SKIP]    ← kind: openai_compat は対象外 (cache_control は Anthropic 専用)
 
 Summary: all probes match declarations.
 Exit: 0

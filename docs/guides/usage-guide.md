@@ -89,7 +89,7 @@ Reasoning チューニングの distill（既定で `<think>` ブロックを吐
 - **`llama3.2:3b` / `phi4:14b`** — 汎用、コーダチューニングではない。コード以外の短いチャット返信の「fast」プロファイルとして有用。
 - **`gpt-oss:20b`** / **`gpt-oss:120b`**（OpenAI OSS 系）— ベンダーミラーでタグが異なる; 24 GB GPU のスイートスポットは 20B。各 choice の `message` / `delta` に非標準 `reasoning` フィールドを吐きますが、v0.5-C の `openai_compat` アダプタが既に剥がします; `coderouter doctor` で 1 回プローブし strip が発火して `reasoning-leak` が `OK` を返すことを確認してください。
 
-新しいモデルを追加したら必ず `coderouter doctor --check-model <provider>` を走らせてください — 6 プローブ（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming）が、モデルが実際に欲しがる `capabilities.*` と `extra_body.options.*` を教えてくれます。doctor の判定が真実の源で、§3 の表はそれと突き合わせるための既知良好な起点にすぎません。
+新しいモデルを追加したら必ず `coderouter doctor --check-model <provider>` を走らせてください — 7 プローブ（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming / cache）が、モデルが実際に欲しがる `capabilities.*` と `extra_body.options.*` を教えてくれます。doctor の判定が真実の源で、§3 の表はそれと突き合わせるための既知良好な起点にすぎません。
 
 MoE フットプリントの補足: 「N 総 / M アクティブ」とは、レイテンシ的には M パラメータ相当で流れる一方、VRAM には N パラメータ分の重みを常駐させる必要がある、という意味です。Qwen3 30B-A3B は 30B のようにロードし 3B のように動く — メモリ帯域がボトルネックの Apple Silicon では異例にお得ですが、~18 GB Q4 の重み保持予算が実際にあることが前提です。
 
@@ -316,7 +316,7 @@ NVIDIA NIM の開発者枠（40 req/min）を無料層の上に重ねると、�
 
 CodeRouter は 2 つの検証ツールを同梱:
 
-**プロバイダ単位の診断** — `coderouter doctor --check-model <provider>`。6 プローブ連鎖（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming）を 1 プロバイダに対して走らせ、判定表と不一致時のコピペ YAML パッチを出力。`providers.yaml` を編集するたびに使うのが良い。
+**プロバイダ単位の診断** — `coderouter doctor --check-model <provider>`。7 プローブ連鎖（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming / cache）を 1 プロバイダに対して走らせ、判定表と不一致時のコピペ YAML パッチを出力。`providers.yaml` を編集するたびに使うのが良い。
 
 ```bash
 uv run coderouter doctor --check-model ollama-qwen-coder-7b

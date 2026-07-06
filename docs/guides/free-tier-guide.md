@@ -302,7 +302,7 @@ for p in nim-qwen3-coder-480b nim-kimi-k2 nim-llama-3.3-70b; do
 done
 ```
 
-6 プローブ（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming）が回り、宣言と実挙動が食い違えば**コピペ可能な YAML パッチ**を出します。全 probe OK なら Exit 0 が返ります。
+7 プローブ（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming / cache）が回り、宣言と実挙動が食い違えば**コピペ可能な YAML パッチ**を出します。全 probe OK なら Exit 0 が返ります。
 
 2026-04-24 時点の `nim-qwen3-coder-480b` 実出力例（**1Password 経由で env を inject した状態**）:
 

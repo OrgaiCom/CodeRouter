@@ -123,7 +123,7 @@ filter is what fixes it.
   mid-stream safety guard.** Writing that yourself is subtle
   (see [`docs/articles/zenn-02-coderouter-architecture.md`](../articles/zenn/zenn-02-coderouter-architecture.md)).
 - **`coderouter doctor` for diagnosing a misbehaving setup.**
-  Its six probes cover exactly the failure modes above.
+  Its seven probes cover exactly the failure modes above.
 
 ## 7. When CodeRouter is the wrong choice
 
