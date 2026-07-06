@@ -1,5 +1,7 @@
 # Mid-stream Partial Stitching (v2.0-H)
 
+English: [`partial-stitch.en.md`](./partial-stitch.en.md)
+
 ## 概要
 
 streaming 応答中にプロバイダがクラッシュすると、通常はそれまでに生成された

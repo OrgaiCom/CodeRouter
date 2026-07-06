@@ -1,5 +1,7 @@
 # Launcher クイックスタート — バックエンド導入から起動まで
 
+> English: [`launcher-quickstart.en.md`](./launcher-quickstart.en.md)
+
 CodeRouter Launcher を初めて使うための手引きです。Launcher が起動・管理するバックエンド（llama.cpp / vLLM / mlx）の導入から、Launcher の起動・Claude Code 接続までを通しで説明します。
 
 対象プラットフォーム: macOS / Linux / Windows

@@ -1,5 +1,7 @@
 # Claude Code × ローカル LLM(llama.cpp / vLLM)接続ガイド — Ollama なしの設定とトラブルシュート
 
+> English: [`claude-code-llamacpp-vllm.en.md`](./claude-code-llamacpp-vllm.en.md)
+
 Ollama を使わず、**ダウンロード済みの `.gguf` を llama.cpp で**、または **vLLM で** 動かし、CodeRouter 経由で Claude Code に繋ぐための実践ガイドです。
 構成の作り方と、実際に踏みやすいエラー（400 / 接続拒否 / 502 / コネクタ無効化 / `n_ctx=4096` のまま）の直し方をまとめています。
 

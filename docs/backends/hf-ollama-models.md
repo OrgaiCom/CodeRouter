@@ -1,5 +1,7 @@
 # HuggingFace 配布モデルを Ollama 経由で使う
 
+> English: [`hf-ollama-models.en.md`](./hf-ollama-models.en.md)
+
 > CodeRouter の `examples/providers.yaml` には、Ollama 公式 registry に
 > まだ登録されていない trending モデル（Gemma 4 26B-A4B、GLM-4.5-Air、
 > Qwen3 系の Opus 蒸留 fine-tune 等）を **コメントアウトされた provider

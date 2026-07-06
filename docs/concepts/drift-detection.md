@@ -1,5 +1,7 @@
 # Drift Detection (v2.0-G)
 
+English: [`drift-detection.en.md`](./drift-detection.en.md)
+
 長時間稼働する agent session でモデル応答品質の漸進的な劣化 (drift) を自動検知し、
 corrective action を実行するガードです。
 
