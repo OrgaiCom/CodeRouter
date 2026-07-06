@@ -147,6 +147,8 @@ CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter serve --host 0.0.0.0 --port 808
 > ⚠️ チャット入口(`/v1/messages` / `/v1/chat/completions`)は認証を持ちません。
 > ALLOWED_HOSTS を開けるのは信頼できる LAN までにし、インターネットへ公開する場合は
 > 認証付きリバースプロキシを前段に置いてください([セキュリティガイド](./security.md))。
+> 安全な公開パターン(SSH トンネル / Tailscale / リバースプロキシ)の具体手順は
+> [リモートアクセスガイド](./remote-access.md) にまとめてあります。
 
 ---
 

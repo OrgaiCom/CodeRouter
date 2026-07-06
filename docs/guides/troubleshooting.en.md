@@ -148,7 +148,9 @@ bind and no `CODEROUTER_ALLOWED_HOSTS` prints a startup warning.
 > ⚠️ The chat endpoints (`/v1/messages` / `/v1/chat/completions`) have no
 > authentication. Only open ALLOWED_HOSTS to a trusted LAN; for internet
 > exposure put an authenticating reverse proxy in front
-> ([security guide](./security.en.md)).
+> ([security guide](./security.en.md)). Concrete safe-exposure recipes
+> (SSH tunnel / Tailscale / reverse proxy) live in the
+> [remote access guide](./remote-access.en.md).
 
 ---
 

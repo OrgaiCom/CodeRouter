@@ -217,6 +217,7 @@ More detail → [Usage guide](./docs/guides/usage-guide.en.md) · [Architecture]
 | Run for free | [Free-tier guide](./docs/guides/free-tier-guide.en.md) |
 | Launch llama.cpp / vllm via GUI | [Launcher guide](./docs/backends/launcher.md) |
 | Measure & avoid the language tax | [Language Tax guide](./docs/guides/language-tax.en.md) |
+| Reach it safely from another machine | [Remote access guide](./docs/guides/remote-access.en.md) |
 | Stuck? | [Troubleshooting](./docs/guides/troubleshooting.en.md) |
 | Understand the design | [Architecture](./docs/concepts/architecture.md) |
 | Full release history | [CHANGELOG](./CHANGELOG.md) |
