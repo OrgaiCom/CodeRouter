@@ -236,6 +236,7 @@ providers:
 | 無料で回す | [無料枠ガイド](./docs/guides/free-tier-guide.md) |
 | llama.cpp / vllm を GUI で起動 | [Launcher ガイド](./docs/backends/launcher.md) |
 | 言語税を計測・回避する | [言語税ガイド](./docs/guides/language-tax.md) |
+| 別の PC から安全に繋ぐ | [リモートアクセスガイド](./docs/guides/remote-access.md) |
 | 詰まった | [トラブルシューティング](./docs/guides/troubleshooting.md) |
 | 設計を知りたい | [アーキテクチャ詳細](./docs/concepts/architecture.md) |
 | 全リリース履歴 | [CHANGELOG](./CHANGELOG.md) |

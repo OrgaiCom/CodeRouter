@@ -133,8 +133,8 @@ worked on 2.6 broke on 2.7, this is almost certainly it.
 Not a bug: v2.7.0 added **Host-header validation** (DNS-rebinding guard). By
 default only loopback Hosts (`localhost` / `127.0.0.1` / `::1`) are accepted.
 
-Fix — allow-list **the IP / hostname clients type in the URL** (comma-separated,
-no port):
+Fix — allow-list **this server's own IP / hostname (the value in the client's
+URL bar — NOT the client's IP)** (comma-separated, no port):
 
 ```bash
 CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter serve --host 0.0.0.0 --port 8088
@@ -148,7 +148,9 @@ bind and no `CODEROUTER_ALLOWED_HOSTS` prints a startup warning.
 > ⚠️ The chat endpoints (`/v1/messages` / `/v1/chat/completions`) have no
 > authentication. Only open ALLOWED_HOSTS to a trusted LAN; for internet
 > exposure put an authenticating reverse proxy in front
-> ([security guide](./security.en.md)).
+> ([security guide](./security.en.md)). Concrete safe-exposure recipes
+> (SSH tunnel / Tailscale / reverse proxy) live in the
+> [remote access guide](./remote-access.en.md).
 
 ---
 
