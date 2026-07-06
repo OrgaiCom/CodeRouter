@@ -262,7 +262,7 @@ English: [Quickstart](./docs/start/quickstart.en.md) · [Usage guide](./docs/gui
 ## 技術スペック
 
 - **ランタイム依存**: `fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml` の 5 個のみ
-- **テスト**: 964 本 (41 sub-release 連続で依存追加なし)
+- **テスト**: 1,569 本 (v2.7.4 時点。ランタイム依存 5 個は v1 系から一度も増えていません)
 - **対応 OS**: macOS (Apple Silicon 推奨) / Linux / Windows WSL2
 - **対応 backend**: Ollama / llama.cpp / LM Studio / vLLM / MLX-LM / OpenRouter / NVIDIA NIM / Anthropic API
 - **ライセンス**: MIT
