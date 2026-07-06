@@ -34,7 +34,8 @@ def _external_bind_warning(host: str, allowed_hosts_env: str | None) -> str | No
         f"serve: binding on {host!r} but CODEROUTER_ALLOWED_HOSTS is not set. "
         "Requests whose Host header is not loopback will be rejected with 403 "
         "(v2.7.0 DNS-rebinding guard). To allow LAN access, set "
-        "CODEROUTER_ALLOWED_HOSTS=<ip-or-hostname clients use in the URL> "
+        "CODEROUTER_ALLOWED_HOSTS=<THIS machine's address as it appears in the "
+        "client's URL bar, e.g. 192.168.x.x — NOT the client's own IP> "
         "(comma-separated, no port). Note the chat endpoints have no "
         "authentication — do not expose CodeRouter directly to the internet."
     )
