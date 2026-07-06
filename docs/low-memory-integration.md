@@ -1,5 +1,7 @@
 # 統合ガイド — 既存パッケージへの組み込み手順
 
+English: [`low-memory-integration.en.md`](./low-memory-integration.en.md)
+
 本ディレクトリの新規モジュールを既存 `coderouter/` に統合するための差分。
 CLAUDE.md 規約により**既存ファイルは未編集**。実適用は承認後、`feature/low-memory-guard` ブランチで行う。
 

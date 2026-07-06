@@ -3,6 +3,9 @@
 All notable changes to CodeRouter are recorded here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 versioning follows [SemVer](https://semver.org/).
+All entries are in English (pre-v2.5.5 entries were originally written in
+Japanese and translated in place on 2026-07-06; quoted Japanese examples
+are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
@@ -909,56 +912,56 @@ A  tests/test_plugins_integration.py
 
 ## [v2.2.0] — 2026-05-06 (Self-healing + Multi-day operation + Replay)
 
-**Theme: 自己修復 + 状態永続化 + 統計リプレイで "無人長時間運用" 基盤を完成。** v2.0-J で UNHEALTHY provider の自動除外 + restart + 復帰を実装、v2.0-K で sqlite3 StateStore + 構造化 audit log + request journal + `coderouter replay` 統計 A/B 分析を実装。v2.2 で Unsloth Studio 由来の堅牢化 3 件を吸収。**6 系統障害全対処 + 自己修復 + 永続化 + リプレイ**に到達。
+**Theme: complete the "unattended long-run operation" foundation with self-healing + state persistence + statistical replay.** v2.0-J implements automatic exclusion + restart + recovery for UNHEALTHY providers; v2.0-K implements the sqlite3 StateStore + structured audit log + request journal + `coderouter replay` statistical A/B analysis. v2.2 absorbs 3 hardening fixes originating from Unsloth Studio. **Reaches full coverage of all 6 failure classes + self-healing + persistence + replay.**
 
-### v2.0-J: Self-healing Routing (L5 自動復帰)
+### v2.0-J: Self-healing Routing (L5 automatic recovery)
 
-**UNHEALTHY provider をチェーンから完全除外し、restart helper + 回復 probe で自動復帰。**
+**Fully excludes UNHEALTHY providers from the chain, with a restart helper + recovery probe for automatic recovery.**
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
-| `SelfHealingOrchestrator` | `backend_health_action: exclude` 時に UNHEALTHY provider をチェーンから除外 + 自動復帰管理 |
-| restart helper | `restart_command` 設定で backend プロセスを自動再起動 (subprocess, タイムアウト付き) |
-| 回復 probe | 指数 backoff (30s → 300s) で excluded provider に 1-token probe → 成功で即時復帰 |
-| `recovery_probe_initial_s` / `recovery_probe_max_s` | probe 間隔の初期値 / 上限を profile 単位で設定 |
-| `restart_timeout_s` | restart command のタイムアウト |
-| 元位置復帰 | 復帰時に provider をチェーンの元の位置に挿入 (末尾追加ではない) |
+| `SelfHealingOrchestrator` | Excludes UNHEALTHY providers from the chain when `backend_health_action: exclude` is set, and manages automatic recovery |
+| restart helper | Automatically restarts the backend process via the `restart_command` setting (subprocess, with timeout) |
+| recovery probe | Exponential backoff (30s → 300s) sends a 1-token probe to the excluded provider → immediate recovery on success |
+| `recovery_probe_initial_s` / `recovery_probe_max_s` | Per-profile initial value / upper bound for the probe interval |
+| `restart_timeout_s` | Timeout for the restart command |
+| original-position recovery | On recovery, the provider is reinserted at its original position in the chain (not appended to the end) |
 
-### v2.0-K: Multi-day Operation Support (永続化 + Audit + Replay)
+### v2.0-K: Multi-day Operation Support (persistence + audit + replay)
 
-**プロセス再起動をまたいで運用状態を保持 + 構造化ログ + 統計 A/B 分析。**
+**Preserves operational state across process restarts + structured logging + statistical A/B analysis.**
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
 | `StateStore` | sqlite3 KV store (namespace-scoped, WAL mode, thread-safe, graceful degradation) |
-| `state_dir` config | `~/.coderouter/state/` 等を指定して永続化有効化 |
-| 4 subsystem 永続化 | BudgetTracker / BackendHealthMonitor / SelfHealingOrchestrator / MetricsCollector の save_state/load_state |
-| `AuditLogHandler` | guard 発火 / chain fallback / self-healing 等 22 イベントを JSONL 記録 (single-backup rotation) |
-| `coderouter audit` CLI | `--tail`, `--filter`, `--since`, `--summary` で audit log を閲覧 |
-| `RequestLogHandler` | `cache-observed` イベントの metadata (provider, tokens, cost) を JSONL 記録 (body 非記録 = privacy safe) |
-| `request_log: off/active` | request journal の有効化 |
-| Replay engine | `summarize_window()` (provider 別集計) + `compare_providers()` (A/B delta + 変化率) |
-| `coderouter replay` CLI | `--compare A B`, `--provider`, `--since`, `--limit` で統計テーブル出力 |
+| `state_dir` config | Enables persistence by pointing to a directory such as `~/.coderouter/state/` |
+| 4-subsystem persistence | save_state/load_state for BudgetTracker / BackendHealthMonitor / SelfHealingOrchestrator / MetricsCollector |
+| `AuditLogHandler` | Records 22 events (guard triggers / chain fallback / self-healing, etc.) to JSONL (single-backup rotation) |
+| `coderouter audit` CLI | Browse the audit log with `--tail`, `--filter`, `--since`, `--summary` |
+| `RequestLogHandler` | Records `cache-observed` event metadata (provider, tokens, cost) to JSONL (body is not recorded — privacy safe) |
+| `request_log: off/active` | Enables the request journal |
+| Replay engine | `summarize_window()` (per-provider aggregation) + `compare_providers()` (A/B delta + rate of change) |
+| `coderouter replay` CLI | Prints a statistics table via `--compare A B`, `--provider`, `--since`, `--limit` |
 
-### 設定例
+### Configuration example
 
 ```yaml
 # providers.yaml
-state_dir: "~/.coderouter/state/"    # 永続化ディレクトリ
-audit_log: active                     # 構造化 audit log
+state_dir: "~/.coderouter/state/"    # persistence directory
+audit_log: active                     # structured audit log
 request_log: active                   # request metadata journal
 
 profiles:
   - name: self-healing
     providers: [ollama-qwen3, openrouter-free]
-    backend_health_action: exclude    # UNHEALTHY → 除外 + 自己修復
+    backend_health_action: exclude    # UNHEALTHY → exclude + self-heal
     backend_health_threshold: 3
 
 providers:
   - name: ollama-qwen3
     base_url: http://localhost:11434/v1
     model: qwen3:30b-a3b
-    restart_command: "ollama serve"   # 自動再起動
+    restart_command: "ollama serve"   # automatic restart
 ```
 
 ```bash
@@ -967,15 +970,15 @@ coderouter audit --tail 20 --filter self-healing
 coderouter replay --compare anthropic-api openrouter-free --since 2026-05-01
 ```
 
-### v2.2: Unsloth Studio 由来の堅牢化 3 件
+### v2.2: 3 hardening fixes originating from Unsloth Studio
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
-| tool_repair dedup | `repair_tools()` で同一 tool_use_id の重複ブロックを排除 |
-| `StripToolCallXmlFilter` | `<tool_call>` / `<|tool▁call|>` XML タグを output_filters で除去 |
-| `max_tool_calls` hard cap | profile 単位の tool_use 回数上限 (default: 50) |
+| tool_repair dedup | `repair_tools()` removes duplicate blocks sharing the same tool_use_id |
+| `StripToolCallXmlFilter` | Strips `<tool_call>` / `<|tool▁call|>` XML tags via output_filters |
+| `max_tool_calls` hard cap | Per-profile cap on the number of tool_use calls (default: 50) |
 
-### 新規ファイル
+### New files
 
 ```
 A  coderouter/guards/self_healing.py         — SelfHealingOrchestrator
@@ -990,39 +993,39 @@ A  tests/test_audit_log.py                   — 14 tests
 A  tests/test_request_log.py                 — 22 tests
 ```
 
-### 全体サマリ
+### Overall summary
 
-- Tests: ~1005 → **~964** (実測。旧テスト計数は optional dep 込み、964 は collect 可能分)
-- Runtime deps: 5 → 5 (**41 sub-release 連続据え置き**)
-- Backward compat: 完全互換、全機能 default off — opt-in するまで既存挙動完全一致
+- Tests: ~1005 → **~964** (measured. The old test count included optional deps; 964 is the collectible count)
+- Runtime deps: 5 → 5 (**41 consecutive sub-releases unchanged**)
+- Backward compat: fully compatible, all features default off — existing behavior is unchanged until opt-in
 
 ---
 
-## [v2.1.0] — 2026-05-05 (Long-run Reliability 完成 — v2.0-G/H/I)
+## [v2.1.0] — 2026-05-05 (Long-run Reliability completed — v2.0-G/H/I)
 
-**Theme: L4 品質劣化 / L6 mid-stream 失敗 / L5 idle 時障害の 3 系統を同時解決し、Long-run Reliability pillar を完成させる。** v2.0-F (L1 context overflow) と合わせ、6 系統障害のうち 4 系統を CodeRouter が能動的にガードする状態に到達。
+**Theme: complete the Long-run Reliability pillar by simultaneously solving three failure classes — L4 quality degradation, L6 mid-stream failure, and L5 idle-time outages.** Combined with v2.0-F (L1 context overflow), CodeRouter now actively guards against 4 of the 6 failure classes.
 
-### v2.0-G: Drift Detection (L4 品質劣化ガード)
+### v2.0-G: Drift Detection (L4 quality-degradation guard)
 
-**長時間 agent session でモデル応答品質が徐々に劣化する "drift" を自動検知し、corrective action を実行。** Ollama ローカルモデルが数時間稼働すると KV cache 汚染や VRAM 圧迫で応答が空になる / 短くなる / tool_use を返さなくなる現象 (L4) を 5 つのシグナルで検知。warn → promote (chain 降格) → reload (Ollama KV flush) の 3 段階アクションで品質を自動回復。
+**Automatically detects "drift" — the gradual degradation of model response quality during long agent sessions — and runs a corrective action.** When a local Ollama model runs for several hours, KV cache contamination or VRAM pressure can make responses become empty / shorter / stop returning tool_use (L4); five signals detect this. A three-stage action — warn → promote (chain demotion) → reload (Ollama KV flush) — automatically restores quality.
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
-| 5 Signal Detector | empty_response_rate / length_collapse / tool_silence_rate / stop_anomaly_rate / error_rate を per-provider rolling window で監視 |
-| `detect_drift()` | Pure function — severity none/mild/severe 判定 (severe×1 or mild×2 → severe) |
-| `drift_detection_action: off/warn/promote/reload` | profile 単位で guard 有効化 (default: off) |
-| `drift_detection_sensitivity: low/normal/high` | 閾値プリセット選択 |
-| promote action | AdaptiveAdjuster の rank demotion で traffic を別 provider へ迂回 |
-| reload action | Ollama `keep_alive=0` で KV cache flush → fresh context で再開 |
-| Cooldown & Recovery | 設定秒数後に rank 復帰 + window クリア |
-| `X-CodeRouter-Drift` header | response header で mild/severe ステータスを通知 (streaming 対応) |
+| 5-signal detector | Monitors empty_response_rate / length_collapse / tool_silence_rate / stop_anomaly_rate / error_rate over a per-provider rolling window |
+| `detect_drift()` | Pure function — determines severity none/mild/severe (severe×1 or mild×2 → severe) |
+| `drift_detection_action: off/warn/promote/reload` | Enables the guard per profile (default: off) |
+| `drift_detection_sensitivity: low/normal/high` | Selects the threshold preset |
+| promote action | Diverts traffic to another provider via AdaptiveAdjuster rank demotion |
+| reload action | Flushes the KV cache via Ollama `keep_alive=0` → resumes with a fresh context |
+| Cooldown & Recovery | Rank is restored + window cleared after the configured number of seconds |
+| `X-CodeRouter-Drift` header | Reports mild/severe status via the response header (streaming supported) |
 | Prometheus metrics | `coderouter_drift_detected_total`, `coderouter_drift_promoted_total`, `coderouter_drift_reload_total` |
 
 - Tests: ~930 → **~970** (+40, drift_detection 27 + drift_integration 10 + drift_actions 5)
-- Runtime deps: 5 → 5 (**36 sub-release 連続据え置き**)
-- Backward compat: 完全互換、`drift_detection_action` default は `"off"` — opt-in するまで既存挙動完全一致
+- Runtime deps: 5 → 5 (**36 consecutive sub-releases unchanged**)
+- Backward compat: fully compatible, `drift_detection_action` defaults to `"off"` — existing behavior is unchanged until opt-in
 
-### 設定例
+### Configuration example
 
 ```yaml
 profiles:
@@ -1030,89 +1033,89 @@ profiles:
     providers: [ollama-qwen3]
     drift_detection_action: reload      # off | warn | promote | reload
     drift_detection_sensitivity: normal # low | normal | high
-    drift_detection_window_size: 20     # rolling window サイズ
-    drift_detection_cooldown_s: 300     # 復帰までの待機秒数
+    drift_detection_window_size: 20     # rolling window size
+    drift_detection_cooldown_s: 300     # seconds to wait before recovery
 ```
 
-### 新規ファイル
+### New files
 
-- `coderouter/guards/drift_detection.py` — 検知ロジック (observation model + detector + window manager)
+- `coderouter/guards/drift_detection.py` — detection logic (observation model + detector + window manager)
 - `coderouter/guards/drift_actions.py` — reload action (Ollama KV flush)
-- `tests/test_drift_detection.py` — pure function tests (27 本)
-- `tests/test_drift_detection_integration.py` — engine integration tests (10 本)
-- `tests/test_drift_actions.py` — reload action tests (5 本)
-- `docs/drift-detection.md` — ユーザードキュメント
+- `tests/test_drift_detection.py` — pure function tests (27 tests)
+- `tests/test_drift_detection_integration.py` — engine integration tests (10 tests)
+- `tests/test_drift_actions.py` — reload action tests (5 tests)
+- `docs/drift-detection.md` — user documentation
 
-### v2.0-H: Mid-stream Partial Stitching (L6 拡張)
+### v2.0-H: Mid-stream Partial Stitching (L6 extension)
 
-**streaming 応答が途中で失敗した際、蓄積済み��キストを破棄せずクライアントに返却。**
+**When a streaming response fails partway through, returns the text accumulated so far to the client instead of discarding it.**
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
-| `_StreamUsageAccumulator` text 蓄積 | content_block_start/delta/stop を追跡し text block を in-memory 蓄積 |
-| `MidStreamError.partial_content` | 例外に蓄積テキストを搬送 (tool_use 部分 JSON は除外) |
-| `partial_stitch_action: off/surface` | profile 単位で有効化 (default: off) |
-| `event: coderouter_partial` | 蓄積テキスト + provider + reason を SSE メタデータとして返却 |
+| `_StreamUsageAccumulator` text accumulation | Tracks content_block_start/delta/stop and accumulates text blocks in memory |
+| `MidStreamError.partial_content` | Carries the accumulated text on the exception (partial tool_use JSON is excluded) |
+| `partial_stitch_action: off/surface` | Enables per profile (default: off) |
+| `event: coderouter_partial` | Returns accumulated text + provider + reason as SSE metadata |
 | Prometheus metric | `coderouter_partial_stitch_surfaced_total` |
 
-### v2.0-I: Continuous Probing (L5 能動ヘルスチェック)
+### v2.0-I: Continuous Probing (L5 active health check)
 
-**idle 時間帯のプロバイダ障害を能動的に検知し backend health state machine を更新。**
+**Actively detects provider outages during idle periods and updates the backend health state machine.**
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
-| `probe_one()` | 1-token completion で全 model pipeline の正常性を確認 |
-| `probe_loop()` | asyncio background task — sequential probe + graceful shutdown |
-| `continuous_probe: off/active` | グローバル config で有効化 (default: off) |
-| Model drift detection | probe response の model 名と config を照合 → 不一致で warn |
+| `probe_one()` | Confirms the health of the full model pipeline via a 1-token completion |
+| `probe_loop()` | asyncio background task — sequential probing + graceful shutdown |
+| `continuous_probe: off/active` | Enabled via global config (default: off) |
+| Model drift detection | Cross-checks the probe response's model name against config → warns on mismatch |
 | Prometheus metrics | `probe_total`, `probe_outcomes_total`, `probe_rounds_total`, `probe_latency_ms`, `probe_drift_detected_total` |
 
-### 全体サマリ
+### Overall summary
 
 - Tests: ~930 → **~1005** (+75)
-- Runtime deps: 5 → 5 (**38 sub-release 連続据え置き**)
-- Backward compat: 完全互換、全機能 default off — opt-in するまで既���挙動完全一致
+- Runtime deps: 5 → 5 (**38 consecutive sub-releases unchanged**)
+- Backward compat: fully compatible, all features default off — existing behavior is unchanged until opt-in
 
 ---
 
-## [v2.0.0] — 2026-05-05 (Context Budget Management — L1 overflow 防止)
+## [v2.0.0] — 2026-05-05 (Context Budget Management — L1 overflow prevention)
 
-**Theme: 長時間 agent session の context overflow を未然に防止する guard を実装。** Claude Code / Cline / OpenClaw 等の agentic session が 8 時間超え loop で動くと messages が context window に漸近し、backend が 400 / truncation を返して session 死亡する問題 (L1) を根本解決。warn (80%) → auto trim (90%) の 2 段階 guard で overflow をゼロに。
+**Theme: implement a guard that proactively prevents context overflow in long-running agent sessions.** When an agentic session such as Claude Code / Cline / OpenClaw runs a loop for over 8 hours, messages asymptotically fill the context window and the backend returns 400 / truncation, killing the session (L1) — this is fixed at the root. A two-stage guard — warn (80%) → auto trim (90%) — brings overflow to zero.
 
-| 機能 | 説明 |
+| Feature | Description |
 |---|---|
-| `estimate_context_usage()` | char/4 heuristic で request の context 充填率を推定 (5-deps 不変) |
-| `trim_to_budget()` | 古い messages を先頭から削除、tool_use/tool_result ペアを tool_use_id ベースで atomic 保全 |
-| `context_budget_action: off/warn/trim` | profile 単位で guard 有効化 (default: off) |
-| `X-CodeRouter-Context-Budget` header | response header で warn/trimmed ステータスを通知 (streaming 対応) |
+| `estimate_context_usage()` | Estimates a request's context fill ratio via a char/4 heuristic (5-deps invariant preserved) |
+| `trim_to_budget()` | Removes old messages from the front; preserves tool_use/tool_result pairs atomically by tool_use_id |
+| `context_budget_action: off/warn/trim` | Enables the guard per profile (default: off) |
+| `X-CodeRouter-Context-Budget` header | Reports warn/trimmed status via the response header (streaming supported) |
 | Prometheus metrics | `coderouter_context_budget_warnings_total`, `coderouter_context_budget_trims_total`, `coderouter_context_budget_usage_ratio` |
-| `coderouter stats` TUI | Fallback & Gates パネルに context budget warn/trim count + latest ratio 表示 |
-| model-capabilities.yaml | 主要モデル (Claude 200K, Qwen3/3.5/3.6 32-131K, Gemma4 131K, DeepSeek 131K 等) の max_context_tokens bundled |
+| `coderouter stats` TUI | Fallback & Gates panel shows context budget warn/trim count + latest ratio |
+| model-capabilities.yaml | Bundles max_context_tokens for major models (Claude 200K, Qwen3/3.5/3.6 32-131K, Gemma4 131K, DeepSeek 131K, etc.) |
 
 - Tests: 878 → **~930** (+50, token_estimation 13 + context_budget 22 + ingress header 5 + metrics 6 + prometheus 3)
-- Runtime deps: 5 → 5 (**35 sub-release 連続据え置き**)
-- Backward compat: 完全互換、`context_budget_action` default は `"off"` — opt-in するまで既存挙動完全一致
+- Runtime deps: 5 → 5 (**35 consecutive sub-releases unchanged**)
+- Backward compat: fully compatible, `context_budget_action` defaults to `"off"` — existing behavior is unchanged until opt-in
 
-### 設定例
+### Configuration example
 
 ```yaml
 profiles:
   - name: long-session
     providers: [ollama-qwen3]
     context_budget_action: trim          # off | warn | trim
-    context_budget_warn_threshold: 0.80  # ratio で警告
-    context_budget_trim_threshold: 0.90  # ratio で自動 trim
-    context_budget_trim_target: 0.75     # trim 後の目標充填率
-    context_budget_preserve_last_n: 4    # 直近 N messages は必ず保持
+    context_budget_warn_threshold: 0.80  # warn at this fill ratio
+    context_budget_trim_threshold: 0.90  # auto-trim at this fill ratio
+    context_budget_trim_target: 0.75     # target fill ratio after trim
+    context_budget_preserve_last_n: 4    # always keep the last N messages
 
 providers:
   - name: ollama-qwen3
     base_url: http://localhost:11434/v1
     model: qwen3:30b-a3b
-    max_context_tokens: 32768            # 明示 (registry に乗ってない場合)
+    max_context_tokens: 32768            # explicit override (if not in the registry)
 ```
 
-### Files touched (主要)
+### Files touched (primary)
 
 ```
 A  coderouter/token_estimation.py
@@ -1138,32 +1141,32 @@ A  docs/inside/v2.0-F-context-budget-plan.md
 
 ## [v1.10.1] — 2026-05-04 (Patch — tool-aware auto routing + Raspberry Pi starter)
 
-**Theme: 「ローカル小型モデルでは tool calling できないので tool-laden な request だけクラウドに逃がしたい」というユースケース (OpenClaw + Pi 8GB シナリオ) を declarative に解決。** v1.10.0 で feature complete を宣言した auto_router の 6 matcher を 7 matcher に拡張、`has_tools` を追加して「tools[] を宣言したリクエストか否か」で profile を分岐できるように。併せて Raspberry Pi 8GB 向けの starter YAML (`examples/providers.raspberrypi.yaml`) を同梱、SBC 上で OpenClaw / Claude Code 互換 agent を回すユーザーが yaml 1 個 copy するだけで動く状態にした。
+**Theme: declaratively solve the "local small models can't do tool calling, so only tool-laden requests should escape to the cloud" use case (OpenClaw + Pi 8GB scenario).** Extends the 6-matcher `auto_router` that v1.10.0 declared feature-complete to 7 matchers by adding `has_tools`, letting profiles branch on whether a request declares `tools[]`. Also ships a Raspberry Pi 8GB starter YAML (`examples/providers.raspberrypi.yaml`) so users running OpenClaw / Claude-Code-compatible agents on an SBC can get up and running by copying a single yaml file.
 
-含まれる出荷 2 件:
+2 shipments included:
 
-| # | sub-release | テーマ | LOC | tests |
+| # | sub-release | Theme | LOC | tests |
 |---|---|---|---|---|
-| 1 | **has_tools matcher** | `RuleMatcher.has_tools` 7 番目 matcher 追加、OpenAI/Anthropic `tools[]` + OpenAI legacy `functions[]` を一括認識 (OpenClaw + Pi 由来) | ~80 | +7 |
-| 2 | **Raspberry Pi starter** | `examples/providers.raspberrypi.yaml` 新規、Ollama 小型モデル (≤4B) + OpenRouter free 系 + `has_tools` ベースの tool-aware profile 振り分け | YAML のみ | (loader 検証で +0 直接、既存 parametric test に乗る) |
+| 1 | **has_tools matcher** | Added `RuleMatcher.has_tools` as the 7th matcher, recognizing OpenAI/Anthropic `tools[]` plus OpenAI legacy `functions[]` in one shot (from OpenClaw + Pi) | ~80 | +7 |
+| 2 | **Raspberry Pi starter** | New `examples/providers.raspberrypi.yaml`: small Ollama models (≤4B) + OpenRouter free tier + tool-aware profile routing via `has_tools` | YAML only | (+0 direct via loader validation; covered by existing parametric test) |
 
-- Tests: 871 → **878** (+7、has_tools matcher の 6 シナリオ + `has_tools: false` の "set 扱いだがマッチしない" 安全網テスト)
-- Runtime deps: 5 → 5 (**34 sub-release 連続据え置き**)
-- Backward compat: 完全互換、既存 yaml / API / log payload schema 完全に同じ、新フィールド (`has_tools`) を使わない deployment は挙動完全一致
+- Tests: 871 → **878** (+7: 6 has_tools matcher scenarios + a safety-net test for "set but non-matching" `has_tools: false`)
+- Runtime deps: 5 → 5 (**34 consecutive sub-releases unchanged**)
+- Backward compat: fully compatible; existing yaml / API / log payload schema are all identical; deployments that don't use the new `has_tools` field behave exactly as before
 - pyproject version: 1.10.0 → 1.10.1
 
 ### Migration
 
-不要。**v1.10.0 からの自然なアップグレード**:
+None needed. **A natural upgrade from v1.10.0**:
 
-- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
-- 既存 `auto_router.rules[]` は何も変わらない、`has_tools` matcher を使い始めるには yaml に 1 行足すだけ
-- v1.10.0 で v1.6 系 auto_router を「6 matcher で feature complete」と宣言した直後の追加だが、同じ宣言型 framework の延長線で構造変更なし — 「7 matcher で改めて feature complete」と読み替えて差し支えない
+- The `coderouter` command name / Python import name / providers.yaml format / env vars / ingress URL are all unchanged
+- Existing `auto_router.rules[]` are unaffected; adopting `has_tools` only requires adding one line to the yaml
+- This lands right after v1.10.0 declared the v1.6-lineage auto_router "feature complete with 6 matchers," but it's an extension of the same declarative framework with no structural changes — read it as "feature complete again, now with 7 matchers"
 
-### Out of scope (v1.11 以降)
+### Out of scope (v1.11+)
 
-- **Provider capability gate for tools** — `capabilities.tools=false` を fallback chain の skip ゲートとして機能させる案。本 patch は profile レベルで振り分ける方針 (router で chain を切り替える) で `has_tools` matcher を採用、provider レベルの skip ゲートは別 issue。CodeRouter の chain semantics (順次フォールバック + downgrade) の互換性検討が必要なため、必要性が確認できてから着手。
-- **小型ローカルモデルの tool-call repair 強化** — 現状 `tool_repair.py` は `<tool_call>{...}</tool_call>` ラッパ形式の救済を行うが、1-4B モデルが返す自由形式の text からの推測救済は別領域 (`tool_emulation`)。プロンプトテンプレ書き換えで誘導する手段もあり、設計検討は v2.0 後送り。
+- **Provider capability gate for tools** — the idea of wiring `capabilities.tools=false` up as a skip gate in the fallback chain. This patch instead routes at the profile level (switching chains via the router) using the `has_tools` matcher; a provider-level skip gate is a separate issue. It needs compatibility review against CodeRouter's chain semantics (sequential fallback + downgrade), so it's deferred until the need is confirmed.
+- **Stronger tool-call repair for small local models** — `tool_repair.py` currently rescues `<tool_call>{...}</tool_call>`-wrapped forms, but inferring tool calls from freeform text returned by 1-4B models is a separate area (`tool_emulation`). Prompt-template rewrites are another possible lever; design is deferred to v2.0.
 
 ### Files touched
 
@@ -1178,17 +1181,17 @@ M  tests/test_auto_router.py
 
 ---
 
-### has_tools matcher (OpenClaw + Raspberry Pi 由来)
+### has_tools matcher (from OpenClaw + Raspberry Pi)
 
-**Theme: tools[] を宣言したリクエストだけクラウドに振り分け、ローカル小型モデルは tool 不要の素朴な chat に専念させる。** Raspberry Pi 8GB / Jetson Nano クラスの SBC で OpenClaw 等の tool-aware agent を動かしたい時、CPU 推論で実用域に入る Ollama モデル (≤4B) は tool calling が苦手 (`finish_reason: tool_calls` を返さない / 引数 JSON が壊れる / 自由形式 text に bury される) で、結果として agent 側からは「tool 呼び出しが起きてない」状態になる。`auto_router.rules[].if.has_tools` を 7 番目の matcher として追加することで、profile レベルで「tools あり → クラウド (Qwen3-Coder/gpt-oss/Gemini-Flash の OpenRouter free)」「tools 無し → ローカル小型」を declarative に切り替えられる。
+**Theme: route only requests that declare tools[] to the cloud, leaving local small models to focus on plain tool-free chat.** When running a tool-aware agent like OpenClaw on an SBC in the Raspberry Pi 8GB / Jetson Nano class, the Ollama models (≤4B) that are practical for CPU inference struggle with tool calling (they don't return `finish_reason: tool_calls`, argument JSON gets malformed, or it gets buried in freeform text), leaving the agent unable to see any tool invocation happen. Adding `auto_router.rules[].if.has_tools` as the 7th matcher lets profile-level routing declaratively switch between "tools present → cloud (Qwen3-Coder/gpt-oss/Gemini-Flash on OpenRouter free tier)" and "no tools → local small model."
 
-ユースケース例 (Raspberry Pi 8GB starter `examples/providers.raspberrypi.yaml` から抜粋):
+Example use case (excerpted from the Raspberry Pi 8GB starter `examples/providers.raspberrypi.yaml`):
 
 ```yaml
 auto_router:
   rules:
     - id: user:has-tools-go-cloud
-      profile: with-tools         # OpenRouter free 系のみ
+      profile: with-tools         # OpenRouter free tier only
       match:
         has_tools: true
     - id: user:image-go-cloud
@@ -1199,41 +1202,41 @@ auto_router:
       profile: longcontext
       match:
         content_token_count_min: 32000
-  default_rule_profile: local-chat # qwen3.5:2b/4b / gemma3:1b ローカル
+  default_rule_profile: local-chat # qwen3.5:2b/4b / gemma3:1b, local
 ```
 
-OpenClaw (毎ターン Bash/Read/Write 等の tool を declare する agent) を `OPENAI_BASE_URL=http://<pi-ip>:8088/v1` で繋ぐと、tool-laden traffic は自動でクラウドに飛び、軽い chat だけが Pi 上のローカルで処理される。OPENROUTER_API_KEY のみ設定すればよく、有料 API は不要 (`ALLOW_PAID=false` がデフォルト)。
+Connecting OpenClaw (an agent that declares tools like Bash/Read/Write on every turn) via `OPENAI_BASE_URL=http://<pi-ip>:8088/v1` automatically routes tool-laden traffic to the cloud, while lightweight chat is handled locally on the Pi. Only `OPENROUTER_API_KEY` needs to be set — no paid API key required (`ALLOW_PAID=false` by default).
 
-#### なぜ provider レベルの capability gate ではなく profile レベルなのか
+#### Why profile-level rather than a provider-level capability gate?
 
-`ProviderConfig.capabilities.tools=false` フラグは既存 (v0.x からある) だが、現状は `coderouter doctor` の診断表示と `model-capabilities.yaml` registry の解決に使うだけで、fallback chain における skip ゲートには接続されていない。`thinking` / `cache_control` には `will_degrade` ゲート (capability.py の `provider_supports_*`) があるが、tools には同等の skip 機構がない。これは既存の v0.3-D 「downgrade path」(non-native + tools[] あり → 非ストリーミング + tool_repair) に依存していて、provider が tools を返せなくても adapter エラーは出ず、上流から見ると success (空 tool_calls) で chain が fallthrough せず止まってしまう (= 観測症状: 「tool call されてない」)。
+The `ProviderConfig.capabilities.tools=false` flag already exists (since v0.x), but today it's only used for `coderouter doctor` diagnostics and `model-capabilities.yaml` resolution — it isn't wired up as a skip gate in the fallback chain. `thinking` / `cache_control` have a `will_degrade` gate (`provider_supports_*` in capability.py), but tools has no equivalent skip mechanism. This relies on the existing v0.3-D "downgrade path" (non-native + `tools[]` present → non-streaming + tool_repair): if the provider can't return tools, the adapter doesn't error, and from upstream's view it looks like a success (empty tool_calls), so the chain doesn't fall through — it just stops (observed symptom: "tool call didn't happen").
 
-provider レベルの skip ゲートを後付けするのは chain semantics に踏み込む変更で互換性検討が要るため、本 patch では **profile レベルの宣言型 lever** に留める方針を採用。chain semantics を変えず、auto_router rule の追加で同じ効果を得られ、かつ既存の 6 matcher と完全に同じ規約 (exactly one + first match wins + fast-fail at load) で導入できる。
+Bolting on a provider-level skip gate touches chain semantics and needs compatibility review, so this patch sticks to a **declarative lever at the profile level**. It achieves the same effect via an added auto_router rule without changing chain semantics, and can be introduced under exactly the same contract as the existing 6 matchers (exactly one + first match wins + fast-fail at load).
 
-- Tests: 871 → **878** (+7: OpenAI tools[] / Anthropic tools[] / OpenAI legacy functions[] / no-tools fallthrough / 空リスト fallthrough / has_tools rule が code-fence rule より優先 / `has_tools: false` の "set 扱いだがマッチしない" 安全網)
-- Runtime deps: 5 → 5 (34 sub-release 連続据え置き)
-- Backward compat: 完全互換、既存 `auto_router` rule は何も変わらない、`has_tools` を使わない deployment は挙動完全一致
+- Tests: 871 → **878** (+7: OpenAI tools[] / Anthropic tools[] / OpenAI legacy functions[] / no-tools fallthrough / empty-list fallthrough / has_tools rule taking priority over the code-fence rule / safety net for "set but non-matching" `has_tools: false`)
+- Runtime deps: 5 → 5 (34 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; existing `auto_router` rules are unaffected; deployments that don't use `has_tools` behave exactly as before
 
 #### Changes
 
 - `coderouter/config/schemas.py`:
-  - `RuleMatcher` に `has_tools: bool | None = None` を追加、`_MATCHER_FIELDS` tuple に追加 (zero/multiple-fields の "exactly one" バリデータが自動適用)。
-  - docstring の Variants セクションに 7 番目として `has_tools` を追記、boolean 形状が `has_image` と同じである理由 (`True` のみ意味を持ち、`False` は "set" 扱いだが `_match_rule` の `is True` チェックでマッチしない安全網) と、provider レベルの `capabilities.tools` flag との違い (前者は profile-level routing、後者は doctor の診断補助で chain skip ゲートではない) を明示。
+  - Added `has_tools: bool | None = None` to `RuleMatcher` and to the `_MATCHER_FIELDS` tuple (the existing zero/multiple-fields "exactly one" validator applies automatically).
+  - Added it as the 7th entry in the docstring's Variants section, documenting why the boolean shape mirrors `has_image` (only `True` is meaningful; `False` is "set" but doesn't match, per the `is True` check in `_match_rule` — a safety net), and how it differs from the provider-level `capabilities.tools` flag (the former is profile-level routing; the latter is a doctor diagnostic aid, not a chain skip gate).
 
 - `coderouter/routing/auto_router.py`:
-  - `_has_tools_in_body(body)` ヘルパを新設 — body の top-level `tools[]` (OpenAI Chat Completions / Anthropic Messages API 共通) と `functions[]` (OpenAI legacy、deprecated だが pinned SDK で残存) を一括認識、空リスト / None は False (lazy init 対応)。
-  - `_match_rule(rule, message, text, model, estimated_tokens, has_tools)` シグネチャに `has_tools: bool` を追加、`has_tools is True` 分岐を 7 番目として実装。
-  - `classify(...)` 内で `_has_tools_in_body(body)` を一度だけ呼んで rule iteration に渡す。`user_msg is None` でも `has_tools` rule は評価する (system-only prompt + tools[] declaration の構成にも対応)。
-  - `_emit_resolved` / `_emit_fallthrough` の `signals` payload に `has_tools` を追記、`auto-router-resolved` log で「tools あり判定で routing したか」が dashboard / Prometheus exporter から見える。
+  - Added a `_has_tools_in_body(body)` helper — recognizes top-level `tools[]` (shared by OpenAI Chat Completions / Anthropic Messages API) and `functions[]` (OpenAI legacy, deprecated but still seen with pinned SDKs) in one pass; empty list / None both resolve to False (handles lazy init).
+  - Added `has_tools: bool` to the `_match_rule(rule, message, text, model, estimated_tokens, has_tools)` signature, implementing the `has_tools is True` branch as the 7th case.
+  - `classify(...)` now calls `_has_tools_in_body(body)` once and passes the result through rule iteration. The `has_tools` rule is evaluated even when `user_msg is None` (supports system-only prompts with a `tools[]` declaration).
+  - Added `has_tools` to the `signals` payload in `_emit_resolved` / `_emit_fallthrough`, so the `auto-router-resolved` log lets the dashboard / Prometheus exporter see whether routing happened based on a tools-present signal.
 
-- `tests/test_auto_router.py` Group 8 (tool-aware routing) を新設、7 ケース:
-  - `test_classify_request_with_openai_tools_routes_to_with_tools` — 基本ケース、OpenAI 形式 `tools[].function` → `with-tools` profile。
-  - `test_classify_request_with_anthropic_tools_routes_to_with_tools` — Anthropic 形式 `tools[].input_schema` も同じ top-level `tools` キーなので、単一 matcher で両 ingress カバー。
-  - `test_classify_request_with_legacy_functions_routes_to_with_tools` — OpenAI legacy `functions[]` (deprecated だが pinned SDK で残存) も tool-laden 扱い。
-  - `test_classify_request_without_tools_falls_through` — 逆ケース、tools 宣言なしの plain chat は `default_rule_profile` (Pi の場合は `local-chat`) に落ちる。
-  - `test_classify_empty_tools_list_treated_as_no_tools` — `tools: []` / `functions: []` (lazy init shape) は False 扱い、no-spurious-match property を pin。
-  - `test_classify_has_tools_first_match_wins_over_later_content_rule` — has_tools rule が code_fence rule より前に置かれた時、両方マッチする body でも先勝、global "first match wins" を新 matcher にも適用。
-  - `test_has_tools_false_rejected_at_load` — `has_tools: False` が `_exactly_one` を通過するが `_match_rule` の `is True` チェックでマッチしない安全網を文書化、誤設定時もデフォルト経路に落ちることを保証。
+- Added Group 8 (tool-aware routing) to `tests/test_auto_router.py`, 7 cases:
+  - `test_classify_request_with_openai_tools_routes_to_with_tools` — basic case: OpenAI-style `tools[].function` → `with-tools` profile.
+  - `test_classify_request_with_anthropic_tools_routes_to_with_tools` — Anthropic-style `tools[].input_schema` uses the same top-level `tools` key, so a single matcher covers both ingress shapes.
+  - `test_classify_request_with_legacy_functions_routes_to_with_tools` — OpenAI legacy `functions[]` (deprecated but still seen with pinned SDKs) also counts as tool-laden.
+  - `test_classify_request_without_tools_falls_through` — inverse case: plain chat with no tools declared falls through to `default_rule_profile` (`local-chat` on the Pi).
+  - `test_classify_empty_tools_list_treated_as_no_tools` — `tools: []` / `functions: []` (lazy-init shape) resolve to False, pinning the no-spurious-match property.
+  - `test_classify_has_tools_first_match_wins_over_later_content_rule` — when the has_tools rule is placed before a code_fence rule, and the body matches both, the first one wins — applying the global "first match wins" rule to the new matcher too.
+  - `test_has_tools_false_rejected_at_load` — documents that `has_tools: False` passes `_exactly_one` but never matches due to the `is True` check in `_match_rule`, guaranteeing that a misconfiguration still falls through to the default path.
 
 #### Files touched
 
@@ -1249,19 +1252,19 @@ M  tests/test_auto_router.py
 
 ### Raspberry Pi 8GB starter (`examples/providers.raspberrypi.yaml`)
 
-**Theme: SBC で OpenClaw を動かす最小構成を yaml 1 個に集約。** v1.10.1 で追加した `has_tools` matcher を主役にした starter で、`coderouter serve` 1 発で Pi 上のローカル ollama (qwen3.5:2b/4b、qwen2.5:1.5b、gemma3:1b) と OpenRouter free 系 (qwen3-coder:free / gpt-oss-120b:free / gemini-2.5-flash:free) が tool-aware に振り分けられる。OPENROUTER_API_KEY のみ要設定、有料 API キー不要 (`ALLOW_PAID=false` がデフォルト)。
+**Theme: bundle a minimal setup for running OpenClaw on an SBC into a single yaml file.** This starter centers on the `has_tools` matcher added in v1.10.1, letting `coderouter serve` alone route tool-aware traffic between local Ollama on the Pi (qwen3.5:2b/4b, qwen2.5:1.5b, gemma3:1b) and OpenRouter's free tier (qwen3-coder:free / gpt-oss-120b:free / gemini-2.5-flash:free). Only `OPENROUTER_API_KEY` needs to be set — no paid API key required (`ALLOW_PAID=false` by default).
 
-#### 設計の要点
+#### Design points
 
-- **ローカル全部 `tools: false`** — Pi 8GB に乗る ≤4B モデルは tool_calls を安定して返せないため capability で明示的に `false`。これは doctor 診断用の宣言で、実 routing は `has_tools` matcher が profile レベルで振り分けるので二重防御になる。
-- **`num_ctx: 8192` + `num_predict: 1024` 制限** — Pi の CPU 推論は context 縮めた方が prefill が現実的、デフォルト ollama の 2048 だと OpenClaw の system prompt で詰む & 2048 から 32K に上げると prefill が分単位になるので 8K が現実的中間点。
-- **画像 / 長尺 (32K+) もクラウドへ** — Pi では Gemma 4 E4B (vision capable だが 9.6GB で 8GB Pi に乗らない) の代わりに、`has_image` rule で OpenRouter Gemini Flash (1M ctx + vision native) に逃がす。
-- **OpenRouter free 3 モデルで vendor diversity** — qwen-coder / gpt-oss / gemini-flash の 3 ベンダーを並べて、daily cap (~200 req/day per model per account) 当たり時の rate-limit 逃げ場を確保。
-- **`output_filters: [strip_thinking, strip_stop_markers]` を Qwen 系で常時適用** — Pi で動かす Qwen 3.5 系は `<think>...</think>` リーク + `<|im_end|>` 漏れの両方を観測、両方 strip。
+- **All local models set `tools: false`** — the ≤4B models that fit on a Pi 8GB can't reliably return tool_calls, so capability is explicitly declared `false`. This is a doctor-diagnostic declaration; actual routing is handled by the `has_tools` matcher at the profile level, so it's defense in depth.
+- **`num_ctx: 8192` + `num_predict: 1024` caps** — CPU inference on the Pi is more practical with a smaller context; Ollama's default 2048 chokes on OpenClaw's system prompt, while raising it to 32K makes prefill take minutes, so 8K is a practical middle ground.
+- **Images / long context (32K+) also go to the cloud** — instead of Gemma 4 E4B (vision-capable but at 9.6GB doesn't fit an 8GB Pi), the `has_image` rule routes to OpenRouter's Gemini Flash (1M ctx + native vision).
+- **3 OpenRouter free models for vendor diversity** — lining up qwen-coder / gpt-oss / gemini-flash across 3 vendors provides an escape route from rate limits when hitting the daily cap (~200 req/day per model per account).
+- **`output_filters: [strip_thinking, strip_stop_markers]` always applied for Qwen models** — the Qwen 3.5 models run on the Pi were observed leaking both `<think>...</think>` and `<|im_end|>`, so both are stripped.
 
 #### Tests
 
-`tests/test_examples_yaml.py::test_example_yaml_loads` が `examples/providers*.yaml` を parametric にカバーしているため、`providers.raspberrypi.yaml` も自動でこの test に乗る。新たに pin したい invariant (例: ローカル全部 `tools: false`、`has_tools` rule の存在、auto_router default が `local-chat` 等) があれば後続 patch で個別 test 追加可能だが、本 patch では parametric の loader-clean property のみ確保。
+`tests/test_examples_yaml.py::test_example_yaml_loads` parametrically covers `examples/providers*.yaml`, so `providers.raspberrypi.yaml` is automatically covered by this test too. If specific invariants worth pinning emerge (e.g., all-local `tools: false`, presence of the `has_tools` rule, auto_router default being `local-chat`), dedicated tests can be added in a follow-up patch, but this patch only secures the parametric loader-clean property.
 
 #### Files touched
 
@@ -1273,82 +1276,82 @@ A  examples/providers.raspberrypi.yaml
 
 ## [v1.10.0] — 2026-05-01 (Umbrella tag — Cost enforcement + Long-run reliability completion + Auto-router feature complete)
 
-**Theme: 「観測 → 理解 → 行動」を 3 軸で完成、Vision pillar P2/P3 が揃う。** v1.9.1 (patch) で取り切った 2 機能 (v1.9-B2 streaming usage 集約 + per-model auto-routing) は事実上 v1.10 backlog の助走、本 v1.10.0 で残り 3 機能を minor として束ねて出荷。CodeRouter は **「Local LLM で agent を長時間回すための信頼性層」** という Vision の v1.x 担当分が完成 — context overflow (L1) と quality drift (L4) を除く 4 系統障害 (L2/L3/L5/L6) を体系的に対処、auto-router の declarative 6 matcher も揃い、cost 系は観測 (v1.9-D) → enforcement (v1.10) で経路が閉じた。
+**Theme: complete the "observe → understand → act" triad, rounding out Vision pillars P2/P3.** The 2 features landed in v1.9.1 (patch) (v1.9-B2 streaming usage aggregation + per-model auto-routing) were effectively a warm-up for the v1.10 backlog; this v1.10.0 bundles the remaining 3 features as a minor release. CodeRouter's Vision — **"a reliability layer for running agents on local LLMs over long sessions"** — has its v1.x share completed: of the 6 failure classes (excluding context overflow / L1 and quality drift / L4), L2/L3/L5/L6 are now systematically handled, all 6 declarative auto-router matchers are in place, and the cost pillar's path from observation (v1.9-D) to enforcement (v1.10) is closed.
 
-含まれる出荷 5 件 (`docs/inside/future.md §6.6` の v1.10 着手順序、本 release で全完了):
+5 shipments included (per the v1.10 work order in `docs/inside/future.md §6.6`, all complete in this release):
 
-| # | sub-release | テーマ | LOC | tests | 出荷先 |
+| # | sub-release | Theme | LOC | tests | Shipped in |
 |---|---|---|---|---|---|
-| 1 | **v1.9-B2** | streaming 経路の usage 集約 (`_StreamUsageAccumulator`、placeholder→観測値) | ~150 | +3 | v1.9.1 |
-| 2 | **per-model auto-routing** | `RuleMatcher.model_pattern` (Opus/Sonnet/Haiku 分岐、free-claude-code 由来) | ~120 | +5 | v1.9.1 |
-| 3 | **provider 月次予算上限** | `BudgetTracker` + `cost.monthly_budget_usd` (LiteLLM 由来 / v1.9-D 累積版) | ~250 | +8 | **v1.10.0** |
-| 4 | **v1.9-E phase 2 (L2/L5)** | Memory pressure detector + Backend health 状態機械 (Vision pillar 完成) | ~370 | +27 | **v1.10.0** |
-| 5 | **longContext auto-switch** | `RuleMatcher.content_token_count_min` (claude-code-router 由来) | ~80 | +5 | **v1.10.0** |
+| 1 | **v1.9-B2** | Usage aggregation for the streaming path (`_StreamUsageAccumulator`, placeholder → observed values) | ~150 | +3 | v1.9.1 |
+| 2 | **per-model auto-routing** | `RuleMatcher.model_pattern` (Opus/Sonnet/Haiku branching, from free-claude-code) | ~120 | +5 | v1.9.1 |
+| 3 | **provider monthly budget cap** | `BudgetTracker` + `cost.monthly_budget_usd` (from LiteLLM / cumulative version of v1.9-D) | ~250 | +8 | **v1.10.0** |
+| 4 | **v1.9-E phase 2 (L2/L5)** | Memory pressure detector + Backend health state machine (Vision pillar complete) | ~370 | +27 | **v1.10.0** |
+| 5 | **longContext auto-switch** | `RuleMatcher.content_token_count_min` (from claude-code-router) | ~80 | +5 | **v1.10.0** |
 
-- Tests: 838 (v1.9.1) → **871** (+33: 本 minor 単独 +27 from v1.9-E phase 2 + 8 budget + 5 longContext から、v1.10.0 で純増 +33)
-- Runtime deps: 5 → 5 (**33 sub-release 連続据え置き**) — 最初から守ってきた `fastapi / uvicorn / httpx / pydantic / pyyaml` のみ
+- Tests: 838 (v1.9.1) → **871** (+33: +27 from v1.9-E phase 2 alone within this minor + 8 budget + 5 longContext → net +33 in v1.10.0)
+- Runtime deps: 5 → 5 (**34 consecutive sub-releases unchanged**) — still only `fastapi / uvicorn / httpx / pydantic / pyyaml`, as from the start
 - pyproject version: 1.9.1 → 1.10.0
 
-### Pillar 別の達成
+### Achievements by pillar
 
-#### P2 Long-run Reliability (v1.9-E 系) — Vision の核心が揃う
+#### P2 Long-run Reliability (v1.9-E lineage) — the core of the Vision is complete
 
-6 系統障害体系 (`docs/inside/future.md §1`) のうち v1.x で取りに行くと宣言した分が完成:
+Of the 6 failure classes (`docs/inside/future.md §1`), the ones declared in scope for v1.x are now complete:
 
-| # | 障害 | v1.x 担当 | 状態 |
+| # | Failure | v1.x owner | Status |
 |---|---|---|---|
-| **L1** | Context overflow | (v2.0-F) | ⏳ |
-| **L2** | Memory pressure | v1.9-E phase 2 | ✅ v1.10.0 |
-| **L3** | Tool loop | v1.9-E phase 1 | ✅ v1.9.0 |
-| **L4** | Quality drift | (v2.0-G) | ⏳ |
-| **L5** | Backend crash / health | v1.9-E phase 2 | ✅ v1.10.0 |
-| **L6** | Mid-stream interrupt | v0.3-A 既存 + (v2.0-H 強化) | ✅ baseline |
+| **L1** | Context overflow | (v2.0-F) | pending |
+| **L2** | Memory pressure | v1.9-E phase 2 | done (v1.10.0) |
+| **L3** | Tool loop | v1.9-E phase 1 | done (v1.9.0) |
+| **L4** | Quality drift | (v2.0-G) | pending |
+| **L5** | Backend crash / health | v1.9-E phase 2 | done (v1.10.0) |
+| **L6** | Mid-stream interrupt | existing v0.3-A baseline + (v2.0-H enhancement) | done (baseline) |
 
-L2/L3/L5 の 3 兄弟が `coderouter/guards/` 配下に並び、それぞれ `MemoryPressureGuard` / `_apply_tool_loop_guard` / `BackendHealthMonitor` が pure module として独立。engine 統合は `_observe_provider_failure` / `_observe_provider_success` の 2 chokepoint で済む綺麗な設計に着地。
+The L2/L3/L5 trio now live side by side under `coderouter/guards/`, with `MemoryPressureGuard` / `_apply_tool_loop_guard` / `BackendHealthMonitor` each standing as an independent pure module. Engine integration lands cleanly at just 2 chokepoints: `_observe_provider_failure` / `_observe_provider_success`.
 
-#### Cost pillar (v1.9-D 系) — 観測 → 制約の経路が閉じる
+#### Cost pillar (v1.9-D lineage) — the observation → constraint path is closed
 
-| 段階 | sub-release | 役割 |
+| Stage | sub-release | Role |
 |---|---|---|
-| **観測** | v1.9-A | `cache-observed` log + cache hit/miss 4-class outcome |
-| **観測のカバレッジ** | v1.9-B2 (v1.9.1) | streaming 経路まで完全カバー、placeholder ゼロ化 |
-| **理解** | v1.9-D | per-provider USD cost + cache savings 別計算 (LiteLLM 既存品が落とす精度) |
-| **制約** | **v1.10.0** | `monthly_budget_usd` で per-provider 月次 cap、UTC 暦月 in-memory bucketing |
+| **Observation** | v1.9-A | `cache-observed` log + 4-class cache hit/miss outcome |
+| **Observation coverage** | v1.9-B2 (v1.9.1) | Full coverage of the streaming path, placeholders eliminated |
+| **Understanding** | v1.9-D | Per-provider USD cost with cache savings computed separately (more precise than what existing LiteLLM offers) |
+| **Constraint** | **v1.10.0** | Per-provider monthly cap via `monthly_budget_usd`, in-memory bucketing by UTC calendar month |
 
-v1.9.0 GA 時点で「観測の 4-class 精度」「LiteLLM 既存品より精度高い cost 計算」が CodeRouter の差別化軸として確立、v1.10.0 でそれを enforcement に活用できる経路が閉じた。
+By v1.9.0 GA, "4-class observation precision" and "cost calculation more precise than existing LiteLLM" were established as CodeRouter's differentiators; v1.10.0 closes the path to put that toward enforcement.
 
-#### Auto-router (v1.6 系) — 6 matcher で feature complete
+#### Auto-router (v1.6 lineage) — feature complete with 6 matchers
 
-| # | matcher | 由来 | 出荷 |
+| # | matcher | Origin | Shipped |
 |---|---|---|---|
 | 1 | `has_image` | v1.6-A bundled | v1.6.0 |
 | 2 | `code_fence_ratio_min` | v1.6-A bundled | v1.6.0 |
 | 3 | `content_contains` | v1.6-A user-defined | v1.6.0 |
 | 4 | `content_regex` | v1.6-A user-defined | v1.6.0 |
-| 5 | `model_pattern` | free-claude-code 由来 | v1.9.1 |
-| 6 | `content_token_count_min` | claude-code-router 由来 | **v1.10.0** |
+| 5 | `model_pattern` | from free-claude-code | v1.9.1 |
+| 6 | `content_token_count_min` | from claude-code-router | **v1.10.0** |
 
-declarative routing が「latest message の content / 画像 (per-turn signal) + request 全体の model id / token count (request-shape signal)」で完備、competitive analysis で抽出した v1.10 候補の取り込みは打ち止め、これ以降の追加は要望ドリブンで再開する想定。
+Declarative routing is now complete across "latest message content / image (per-turn signal)" and "request-wide model id / token count (request-shape signal)." Intake of v1.10 candidates extracted from competitive analysis is now closed; further additions will resume on a request-driven basis.
 
 ### Migration
 
-不要。**v1.9.1 / v1.9.0 / v1.9.0a* からの自然なアップグレード**:
+None needed. **A natural upgrade from v1.9.1 / v1.9.0 / v1.9.0a\***:
 
-- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
-- 新しい schema field (`cost.monthly_budget_usd` / `memory_pressure_*` / `backend_health_*` / `content_token_count_min`) は全部 optional + 安全側 default (`monthly_budget_usd: None` / action は `warn` か `off`)、未指定 deployment は v1.9.x と挙動完全一致
-- 新しい log event (`skip-budget-exceeded` / `chain-budget-exceeded` / `memory-pressure-detected` / `skip-memory-pressure` / `chain-memory-pressure-blocked` / `backend-health-changed` / `demote-unhealthy-provider`) は既存 `cache-observed` / `provider-failed` / etc. と同じ JSON 形式、外部 consumer は受信側に dispatch 追加するだけで対応可能
+- The `coderouter` command name / Python import name / providers.yaml format / env vars / ingress URL are all unchanged
+- New schema fields (`cost.monthly_budget_usd` / `memory_pressure_*` / `backend_health_*` / `content_token_count_min`) are all optional with safe defaults (`monthly_budget_usd: None`, actions default to `warn` or `off`); deployments that don't set them behave exactly like v1.9.x
+- New log events (`skip-budget-exceeded` / `chain-budget-exceeded` / `memory-pressure-detected` / `skip-memory-pressure` / `chain-memory-pressure-blocked` / `backend-health-changed` / `demote-unhealthy-provider`) use the same JSON shape as existing ones (`cache-observed` / `provider-failed` / etc.); external consumers can add a dispatch handler on their end to support them
 
-### Out of scope (v2.0 以降)
+### Out of scope (v2.0+)
 
-- **L1 Context overflow** → v2.0-F (semantic compression、context budget per-mode)
-- **L4 Quality drift detection** → v2.0-G (response 品質 rolling window 観測)
-- **L6 Mid-stream stitching 強化** → v2.0-H (resumable continuation)
-- **Continuous probing** → v2.0-I (毎時/毎日 model ヘルスチェック、HF dataset 公開)
-- **Persistent budget state** (sqlite / Redis) — 5-deps 不変原則で v1.x 範囲では却下
-- **L5 active probing** (60s 間隔の能動 GET /api/version) — v2.0-I の領域、passive で 80% カバーできているため後回し
-- **tiktoken / SentencePiece による正確なトークンカウント** — 5-deps 不変原則で却下
+- **L1 Context overflow** → v2.0-F (semantic compression, per-mode context budget)
+- **L4 Quality drift detection** → v2.0-G (rolling-window observation of response quality)
+- **L6 Mid-stream stitching enhancement** → v2.0-H (resumable continuation)
+- **Continuous probing** → v2.0-I (hourly/daily model health checks, HF dataset publication)
+- **Persistent budget state** (sqlite / Redis) — rejected within v1.x scope per the 5-deps invariant
+- **L5 active probing** (active GET /api/version every 60s) — the domain of v2.0-I; deferred since passive observation already covers ~80%
+- **Precise token counting via tiktoken / SentencePiece** — rejected per the 5-deps invariant
 
-詳細は `docs/inside/future.md §7` を参照。
+See `docs/inside/future.md §7` for details.
 
 ### Files touched
 
@@ -1374,11 +1377,11 @@ M  tests/test_auto_router.py
 
 ---
 
-### v1.10 候補 #5: longContext auto-switch (claude-code-router 由来)
+### v1.10 candidate #5: longContext auto-switch (from claude-code-router)
 
-**Theme: コンテキスト窓圧迫の自動逃がし。** 長文プロンプト (会話ヒストリーの累積、コードベース貼り付け等) が来た時、context window の小さいモデル (200K Anthropic) ではなく 1M ctx の Gemini Flash 系へ自動切替する仕組み。`auto_router.rules[].if.content_token_count_min` を 6 番目の matcher として追加、既存 5 種と同じ "exactly one" 規約を継承。
+**Theme: automatically escape context-window pressure.** When a long prompt arrives (accumulated conversation history, a pasted codebase, etc.), this mechanism auto-switches away from a model with a smaller context window (200K for Anthropic) toward the 1M-ctx Gemini Flash line. Adds `auto_router.rules[].if.content_token_count_min` as the 6th matcher, inheriting the same "exactly one" contract as the existing 5.
 
-ユースケース例:
+Example use case:
 
 ```yaml
 auto_router:
@@ -1396,41 +1399,41 @@ profiles:
     providers: [anthropic-sonnet-direct]
 ```
 
-agent が短いやり取りを 100 ターン続けて context が膨らんだ時、自動で 1M ctx チェーンに切り替わる。`free-claude-code` / `claude-code-router` 由来のニーズを CodeRouter の declarative auto_router framework に取り込んだ形。
+When an agent runs 100 turns of short exchanges and the context balloons, it automatically switches to the 1M-ctx chain. This brings needs originating from `free-claude-code` / `claude-code-router` into CodeRouter's declarative auto_router framework.
 
-#### 設計判断: char/4 ヒューリスティック vs tiktoken
+#### Design decision: char/4 heuristic vs. tiktoken
 
-token カウントは `len(text) // 4` の素朴ヒューリスティック (OpenAI 公式の rule of thumb)。**5-deps 不変原則** (`plan.md §5.4`) を守るため tiktoken / SentencePiece は導入しない。トレードオフ:
+Token counting uses the naive `len(text) // 4` heuristic (OpenAI's official rule of thumb). To respect the **5-deps invariant** (`plan.md §5.4`), tiktoken / SentencePiece are not introduced. Trade-offs:
 
-- **English 散文 / コード**: char/4 はやや緩い (実際は ~3.5/token)、`min` 比較なので大きい threshold で安全側に倒せる
-- **CJK (日本語/中国語/韓国語)**: char/4 は **保守的にカウント不足** (実際は ~1.5-2 char/token)、つまり 100k 文字の日本語プロンプトを ~25k tokens と過小評価。これは積極的に context overflow を引き起こす方向ではないので fail-safe な誤差
-- **トレードオフ判断**: tiktoken なら正確だが 100MB 級の依存追加、SentencePiece でも 50MB 級。CodeRouter は「個人開発者用の signal-based router」なので、operator が threshold を実機運用フィードバックで調整する前提のヒューリスティックで十分
+- **English prose / code**: char/4 is somewhat loose (actual is ~3.5/token); since this is a `min` comparison, a larger threshold can be used to stay on the safe side
+- **CJK (Japanese/Chinese/Korean)**: char/4 **conservatively undercounts** (actual is ~1.5-2 chars/token) — a 100k-character Japanese prompt is underestimated at ~25k tokens. This doesn't actively cause context overflow, so it's a fail-safe direction of error
+- **Trade-off judgment**: tiktoken would be accurate but adds a ~100MB dependency; SentencePiece is ~50MB too. As CodeRouter is a "signal-based router for individual developers," a heuristic that operators tune via real-world feedback on the threshold is sufficient
 
-#### Other matchers との違い
+#### Difference from other matchers
 
-`content_contains` / `content_regex` / `has_image` は **latest user message** に対して評価 (per-turn signal)、`content_token_count_min` は **request 全体 (system + 全 messages)** を walk して合算 (request-shape signal)。context-window pressure はリクエスト全体の性質なので latest-only では誤検出する。
+`content_contains` / `content_regex` / `has_image` are evaluated against the **latest user message** (per-turn signal), while `content_token_count_min` walks and sums across the **entire request (system + all messages)** (request-shape signal). Context-window pressure is a property of the whole request, so a latest-only approach would misdetect it.
 
-- Tests: 866 → **871** (+5: long-prompt match / 短文 fallthrough / 全 messages walk / 負値 reject / first-match-wins precedence)
-- Runtime deps: 5 → 5 (33 sub-release 連続据え置き)
-- Backward compat: 完全互換、既存 `auto_router` rule は何も変わらない
+- Tests: 866 → **871** (+5: long-prompt match / short-prompt fallthrough / walking all messages / rejecting negative values / first-match-wins precedence)
+- Runtime deps: 5 → 5 (34 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; existing `auto_router` rules are unaffected
 
 #### Changes
 
 - `coderouter/config/schemas.py`:
-  - `RuleMatcher` に `content_token_count_min: int | None = None` (`ge=1`) を追加、`_MATCHER_FIELDS` に登録 (既存の "exactly one" バリデータが自動適用、`ge=1` で 0/負値は schema load で reject)。
-  - docstring の Variants セクションに 6 番目として明記、char/4 ヒューリスティック + 全 messages 対象 (latest-only の他 matcher と差別化) + 5-deps トレードオフを文書化。
+  - Added `content_token_count_min: int | None = None` (`ge=1`) to `RuleMatcher`, registered in `_MATCHER_FIELDS` (the existing "exactly one" validator applies automatically; `ge=1` rejects 0/negative values at schema load).
+  - Documented as the 6th entry in the docstring's Variants section, covering the char/4 heuristic + all-messages scope (distinguishing it from the latest-only matchers) + the 5-deps trade-off.
 
 - `coderouter/routing/auto_router.py`:
-  - `_estimate_total_tokens(body)` ヘルパを新設 — `body["system"]` (str / list-of-blocks 両対応) と `body["messages"]` の全 message を walk、`_extract_text` で text を抽出、char 合算を `_CHARS_PER_TOKEN_HEURISTIC=4` で除して token 推定。image / non-text blocks は 0 寄与。
-  - `_match_rule` に `estimated_tokens: int` パラメータを追加、6 番目の分岐として `content_token_count_min` 比較を実装。
-  - `classify(...)` 内で `_estimate_total_tokens(body)` を 1 回計算、ルール評価ループに流す。`_emit_resolved` / `_emit_fallthrough` の signals payload に `estimated_tokens` を追記、dashboard / Prometheus exporter から「何トークン推定でその profile に流れたか」が見える。
+  - Added a `_estimate_total_tokens(body)` helper — walks `body["system"]` (supports both str and list-of-blocks) and every message in `body["messages"]`, extracting text via `_extract_text`, then dividing the summed char count by `_CHARS_PER_TOKEN_HEURISTIC=4` to estimate tokens. Image / non-text blocks contribute 0.
+  - Added an `estimated_tokens: int` parameter to `_match_rule`, implementing the `content_token_count_min` comparison as the 6th branch.
+  - `classify(...)` computes `_estimate_total_tokens(body)` once and threads it through the rule-evaluation loop. Added `estimated_tokens` to the signals payload in `_emit_resolved` / `_emit_fallthrough`, so the dashboard / Prometheus exporter can see the estimated token count that drove routing to a given profile.
 
-- `tests/test_auto_router.py` Group 7 を新設、5 ケース:
-  - `test_classify_long_prompt_routes_to_longcontext` — 200,000 chars (~50,000 tokens) → 32,000 threshold を超えて longcontext profile。
-  - `test_classify_short_prompt_below_threshold_falls_through` — 1,000 chars (~250 tokens) → default_rule_profile (writing) に落ちる。
-  - `test_classify_long_context_walks_all_messages_not_just_latest` — 長い会話 history + 短い最新ユーザー msg、latest-only matcher なら拾えないケースを longContext は拾うことを pin。
-  - `test_content_token_count_min_rejects_non_positive_at_load` — `0` / `-5` を `RuleMatcher` 構築時に reject (pydantic `ge=1`)。
-  - `test_long_context_first_match_wins_over_later_image_rule` — token-count rule を先に置けば長文+画像 body でも longcontext が勝つ、先勝順序を pin。
+- Added Group 7 to `tests/test_auto_router.py`, 5 cases:
+  - `test_classify_long_prompt_routes_to_longcontext` — 200,000 chars (~50,000 tokens) exceeds the 32,000 threshold → longcontext profile.
+  - `test_classify_short_prompt_below_threshold_falls_through` — 1,000 chars (~250 tokens) → falls through to `default_rule_profile` (writing).
+  - `test_classify_long_context_walks_all_messages_not_just_latest` — pins that longContext catches a long conversation history plus a short latest user message, a case a latest-only matcher would miss.
+  - `test_content_token_count_min_rejects_non_positive_at_load` — rejects `0` / `-5` when constructing `RuleMatcher` (pydantic `ge=1`).
+  - `test_long_context_first_match_wins_over_later_image_rule` — pins first-match-wins ordering: placing the token-count rule first makes longcontext win even on a body that's both long-text and image.
 
 #### Files touched
 
@@ -1443,39 +1446,39 @@ M  tests/test_auto_router.py
 
 #### Why now
 
-`docs/inside/future.md §6.6` の v1.10 着手順序 **#5 (最終)**。実装規模 ~80 LOC + tests ~150 LOC、半日工数 (見積 ~150-200 LOC / 3-5 日より大幅短縮 — auto_router の matcher 追加パターンが per-model auto-routing で確立済み、全 messages walk 用の `_estimate_total_tokens` ヘルパだけ新設で済んだ)。
+Item **#5 (final)** in the v1.10 work order in `docs/inside/future.md §6.6`. Implementation size ~80 LOC + ~150 LOC of tests, a half-day of effort (well under the original estimate of ~150-200 LOC / 3-5 days — the matcher-addition pattern for auto_router was already established via per-model auto-routing, and only the `_estimate_total_tokens` helper for walking all messages needed to be added).
 
-これで **v1.10 候補 5 件全完了** (#1 v1.9-B2 / #2 per-model auto-routing は v1.9.1、#3 monthly budget / #4 v1.9-E phase 2 / #5 longContext auto-switch は本 [Unreleased] umbrella)。次回 PyPI publish 時に **v1.10.0 minor として umbrella tag 化**できる位置 (Vision pillar 完成 + auto-router 全 6 matcher 揃 + cost enforcement 完成)。
+This completes **all 5 v1.10 candidates** (#1 v1.9-B2 / #2 per-model auto-routing shipped in v1.9.1; #3 monthly budget / #4 v1.9-E phase 2 / #5 longContext auto-switch land in this [Unreleased] umbrella). This is now positioned to be **tagged as the v1.10.0 minor umbrella** at the next PyPI publish (Vision pillar complete + all 6 auto-router matchers in place + cost enforcement complete).
 
-#### Out of scope (v2.0 以降 / 将来の精緻化)
+#### Out of scope (v2.0+ / future refinement)
 
-- **tiktoken / SentencePiece による正確なトークンカウント** — 5-deps 不変原則で却下。実機運用で threshold tuning が困難になったら再検討。
-- **Provider 別 context-window 自動推測** — `model-capabilities.yaml` に `max_context_tokens` を加えれば自動推測できる方向もあるが、operator の運用シナリオ次第なので明示宣言で十分。
-- **動的 threshold (chain の最小 max_context_tokens に応じて)** — 同上、明示宣言で十分。
+- **Precise token counting via tiktoken / SentencePiece** — rejected per the 5-deps invariant. Revisit if threshold tuning becomes difficult in real-world operation.
+- **Automatic per-provider context-window inference** — adding `max_context_tokens` to `model-capabilities.yaml` could enable auto-inference, but this depends on the operator's usage scenario, so explicit declaration is sufficient for now.
+- **Dynamic threshold (based on the chain's minimum max_context_tokens)** — same as above; explicit declaration is sufficient for now.
 
 ---
 
-### v1.10 候補 #4: v1.9-E phase 2 (L2 memory pressure + L5 backend health) — Vision 完成
+### v1.10 candidate #4: v1.9-E phase 2 (L2 memory pressure + L5 backend health) — Vision complete
 
-**Theme: 「8 時間 agent ループでも止まらない」を約束する Long-run Reliability pillar (P2) を完成させる。** v1.9.0 で L3 (tool-loop guard) を phase 1 として先行出荷したが、Vision で謳う 6 系統障害体系のうち **L2 (Memory pressure)** と **L5 (Backend crash / health)** が phase 2 として残っていた。本 release で両方を opt-in guard として実装、`coderouter/guards/` 配下に並ぶ 3 兄弟 (tool_loop / memory_pressure / backend_health) で長時間運用の中核 3 障害をカバーする。
+**Theme: complete the Long-run Reliability pillar (P2) that promises "the agent loop won't stop even after 8 hours."** v1.9.0 shipped L3 (tool-loop guard) first as phase 1, but of the 6 failure classes described in the Vision, **L2 (Memory pressure)** and **L5 (Backend crash / health)** remained as phase 2. This release implements both as opt-in guards, joining the trio (tool_loop / memory_pressure / backend_health) under `coderouter/guards/` that together cover the core 3 failure modes of long-running operation.
 
 #### L2: Memory pressure detection + cooldown
 
-ローカル backend (Ollama / LM Studio / llama.cpp) が VRAM 枯渇で 5xx を返す時、エラー本文に `out of memory` / `CUDA out of memory` / `insufficient memory` / `model requires more system memory` 等の OOM フレーズが入る。L2 はこれを観察して当該 provider をクールダウンに入れ、次の chain resolve から `memory_pressure_cooldown_s` 秒間 skip する:
+When a local backend (Ollama / LM Studio / llama.cpp) returns a 5xx due to VRAM exhaustion, the error body contains OOM phrases like `out of memory` / `CUDA out of memory` / `insufficient memory` / `model requires more system memory`. L2 observes this and places the affected provider into cooldown, skipping it for `memory_pressure_cooldown_s` seconds starting from the next chain resolution:
 
 ```yaml
 profiles:
   - name: default
     providers: [ollama-large, ollama-small, openrouter-fallback]
     memory_pressure_action: skip       # off / warn / skip (default: warn)
-    memory_pressure_cooldown_s: 120    # default 120s, 10〜3600 s
+    memory_pressure_cooldown_s: 120    # default 120s, 10-3600 s
 ```
 
-`action=skip` の時、ollama-large が OOM → 120 秒間 ollama-large を chain から除外、ollama-small や openrouter-fallback に流れる → クールダウン明けで再度 ollama-large を試す。`action=warn` (default) は log のみ、`off` は完全に無効化 (zero overhead)。
+With `action=skip`, when ollama-large OOMs it's excluded from the chain for 120 seconds, falling through to ollama-small or openrouter-fallback — then retried once the cooldown expires. `action=warn` (default) only logs; `off` disables the feature entirely (zero overhead).
 
 #### L5: Backend health (consecutive failure state machine)
 
-backend が突発 crash した時の defacto demote。`BackendHealthMonitor` が provider ごとに consecutive failure 数を数え、`backend_health_threshold` (default 3) で `HEALTHY → DEGRADED`、`2 x threshold` で `DEGRADED → UNHEALTHY` に遷移。1 回の成功で即 HEALTHY 復帰。`backend_health_action: demote` の時、UNHEALTHY な provider は chain 末尾に降格 (skip ではなく **demote** — 死活確認の 1 リクエストは飛ばす、best-effort principle):
+A de facto demotion mechanism for when a backend crashes suddenly. `BackendHealthMonitor` counts consecutive failures per provider, transitioning `HEALTHY → DEGRADED` at `backend_health_threshold` (default 3) and `DEGRADED → UNHEALTHY` at `2 x threshold`. A single success immediately restores HEALTHY. With `backend_health_action: demote`, an UNHEALTHY provider is demoted to the end of the chain (demoted, not skipped — a single liveness-check request still gets through, per the best-effort principle):
 
 ```yaml
 profiles:
@@ -1485,56 +1488,56 @@ profiles:
     backend_health_threshold: 3
 ```
 
-v1.9-C の `adaptive` (rolling-window 連続観測 + debounce) とは直交関係 — adaptive が「徐々に遅くなった」勾配ケース、L5 が「突発 crash」二値ケース。両者重ね掛け可能で、両方 enable した chain では「latency 劣化 → adaptive demote」「crash → L5 demote」の両方の信号で並べ替え。
+This is orthogonal to v1.9-C's `adaptive` (rolling-window continuous observation + debounce) — adaptive covers the "gradual slowdown" gradient case, while L5 covers the "sudden crash" binary case. Both can be stacked; with both enabled, a chain reorders on either signal — "latency degradation → adaptive demote" and "crash → L5 demote."
 
 #### Numbers
 
-- Tests: 839 → **866** (+27 累積、L2 +19 / L5 +8)
-- Runtime deps: 5 → 5 (32 sub-release 連続据え置き)
-- Backward compat: 完全互換、両 `*_action` のデフォルトは `warn` (= log のみ、行動変化なし)。`off` で完全無効化。既存 v1.9.x deployment は yaml 変更なしで自然継続
+- Tests: 839 → **866** (+27 cumulative: L2 +19 / L5 +8)
+- Runtime deps: 5 → 5 (32 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; both `*_action` defaults are `warn` (log only, no behavior change). `off` disables entirely. Existing v1.9.x deployments continue naturally with no yaml changes
 
 #### Changes
 
-- `coderouter/guards/memory_pressure.py` 新設 (~170 LOC):
-  - `is_memory_pressure_error(exc)` — 純関数、9 種の OOM フレーズに対する case-insensitive substring match (Ollama / LM Studio / llama.cpp / 汎用 CUDA / Metal の実観測パターン)。
-  - `MemoryPressureGuard` — per-provider TTL cooldown tracker、`mark_pressured` / `is_pressured` / `pressured_until` API、`time.monotonic` ベースで wall-clock skew 耐性、tests は `now=` 引数で deterministic 注入。
+- New `coderouter/guards/memory_pressure.py` (~170 LOC):
+  - `is_memory_pressure_error(exc)` — a pure function doing case-insensitive substring matching against 9 OOM phrases (real-world patterns observed for Ollama / LM Studio / llama.cpp / generic CUDA / Metal).
+  - `MemoryPressureGuard` — a per-provider TTL cooldown tracker with `mark_pressured` / `is_pressured` / `pressured_until` API, built on `time.monotonic` for wall-clock-skew resilience; tests inject a deterministic clock via the `now=` argument.
 
-- `coderouter/guards/backend_health.py` 新設 (~200 LOC):
-  - `BackendHealthMonitor` — per-provider 状態機械 (HEALTHY / DEGRADED / UNHEALTHY)、`record_attempt(success, threshold)` で観測、状態遷移時のみ `HealthTransition` を返す (no log spam on stable state)、threshold は per-call で profile 違いに対応。
-  - 状態機械の遷移ルール: 失敗 N 回 (= threshold) で DEGRADED、2N 回で UNHEALTHY、1 回成功で即 HEALTHY 復帰。
+- New `coderouter/guards/backend_health.py` (~200 LOC):
+  - `BackendHealthMonitor` — a per-provider state machine (HEALTHY / DEGRADED / UNHEALTHY); `record_attempt(success, threshold)` records an observation and returns a `HealthTransition` only on an actual state change (no log spam on stable state); threshold is per-call to support different profiles.
+  - State transition rules: N (= threshold) consecutive failures → DEGRADED, 2N failures → UNHEALTHY, a single success → immediate return to HEALTHY.
 
 - `coderouter/config/schemas.py`:
-  - `FallbackChain` に `memory_pressure_action` / `memory_pressure_cooldown_s` (L2) と `backend_health_action` / `backend_health_threshold` (L5) を追加。L3 (`tool_loop_*`) と同じ命名 + 同じ "off / warn / 行動" tri-state パターン。
-  - 各 field に `Literal` 型 + range 制約 + 詳細 docstring (どの障害を見るか、L2/L5 の使い分け、v1.9-C adaptive との関係)。
+  - Added `memory_pressure_action` / `memory_pressure_cooldown_s` (L2) and `backend_health_action` / `backend_health_threshold` (L5) to `FallbackChain`, following the same naming and the same "off / warn / action" tri-state pattern as L3 (`tool_loop_*`).
+  - Each field has a `Literal` type + range constraints + detailed docstring covering which failure mode it addresses, how L2/L5 differ in use, and the relationship to v1.9-C's adaptive routing.
 
 - `coderouter/logging.py`:
-  - L2: `log_memory_pressure_detected` / `log_skip_memory_pressure` / `log_chain_memory_pressure_blocked` ヘルパ + 3 つの TypedDict payload。paid-gate / budget-gate と完全 symmetric。
-  - L5: `log_backend_health_changed` (state transition、payload に old_state/new_state/consecutive_failures) / `log_demote_unhealthy_provider` ヘルパ + 2 つの TypedDict。
+  - L2: `log_memory_pressure_detected` / `log_skip_memory_pressure` / `log_chain_memory_pressure_blocked` helpers + 3 TypedDict payloads. Fully symmetric with the paid-gate / budget-gate helpers.
+  - L5: `log_backend_health_changed` (state transition, payload includes old_state/new_state/consecutive_failures) / `log_demote_unhealthy_provider` helpers + 2 TypedDicts.
 
 - `coderouter/routing/fallback.py`:
-  - `FallbackEngine` に `_memory_pressure` / `_backend_health` lazy property を追加 (`_adaptive` / `_budget` と同じパターン、`__new__` 経由 legacy tests 対応)。
-  - `_observe_provider_failure(provider, exc, profile)` ヘルパ — L2 OOM 検出 + L5 失敗カウンタを single chokepoint で dispatch、6 つの failure site (4 entry point × non-stream/mid-stream) から呼ぶ。
-  - `_observe_provider_success(provider, profile)` 新設 — L5 状態機械の成功遷移を 4 success site (provider-ok 時) から呼ぶ。
-  - `_resolve_chain` を 4-pass に拡張: paid → budget → **L2 pressure skip** → L5 demote。L2 は filter (skip)、L5 は reorder (demote)、両者の役割分担を明確化。L5 demote は `unhealthy and healthy` 両方ある時のみ実施 (uniformly UNHEALTHY chain は no-op、log spam 抑制)。
+  - Added `_memory_pressure` / `_backend_health` lazy properties to `FallbackEngine` (same pattern as `_adaptive` / `_budget`, compatible with legacy tests going through `__new__`).
+  - New `_observe_provider_failure(provider, exc, profile)` helper — dispatches L2 OOM detection + L5 failure counting at a single chokepoint, called from all 6 failure sites (4 entry points x non-stream/mid-stream).
+  - New `_observe_provider_success(provider, profile)` — calls the L5 state machine's success transition from all 4 success sites (on provider success).
+  - Extended `_resolve_chain` to 4 passes: paid → budget → **L2 pressure skip** → L5 demote. L2 is a filter (skip), L5 is a reorder (demote), keeping the two roles distinct. L5 demotion only kicks in when the chain has both unhealthy and healthy providers (a uniformly-UNHEALTHY chain is a no-op, suppressing log spam).
 
 - `coderouter/metrics/collector.py`:
-  - `_provider_skipped_memory_pressure: Counter` + `_chain_memory_pressure_blocked_total: int` (L2)。
-  - `_provider_demoted_unhealthy: Counter` + `_backend_health_transitions: dict[str, Counter]` (L5、transition を destination state でキー)。
-  - `skip-memory-pressure` / `chain-memory-pressure-blocked` / `backend-health-changed` / `demote-unhealthy-provider` event の dispatch + snapshot/reset 配線。
+  - Added `_provider_skipped_memory_pressure: Counter` + `_chain_memory_pressure_blocked_total: int` (L2).
+  - Added `_provider_demoted_unhealthy: Counter` + `_backend_health_transitions: dict[str, Counter]` (L5, keyed by destination state).
+  - Wired dispatch for `skip-memory-pressure` / `chain-memory-pressure-blocked` / `backend-health-changed` / `demote-unhealthy-provider` events plus snapshot/reset.
 
 - `coderouter/metrics/prometheus.py`:
-  - `coderouter_provider_skipped_total{reason="memory_pressure"}` を既存 `paid` / `unknown` / `budget` と同 counter に同居。
-  - `coderouter_provider_demoted_unhealthy_total{provider}` (L5)、`coderouter_backend_health_transitions_total{provider, state}` (L5)、`coderouter_chain_memory_pressure_blocked_total` (L2) を追加。
+  - Added `coderouter_provider_skipped_total{reason="memory_pressure"}` alongside the existing `paid` / `unknown` / `budget` counters.
+  - Added `coderouter_provider_demoted_unhealthy_total{provider}` (L5), `coderouter_backend_health_transitions_total{provider, state}` (L5), and `coderouter_chain_memory_pressure_blocked_total` (L2).
 
-- `tests/test_memory_pressure.py` 新設 (~360 LOC、+19 tests):
-  - **Group 1 (detector)**: 8 種の OOM フレーズを parameterize で網羅、5 種の非 OOM 失敗で false 確認。
-  - **Group 2 (guard)**: TTL cooldown / lazy expiry / re-mark 拡張。
-  - **Group 3 (engine)**: action=warn は log only / action=skip は cooldown 中 chain skip + fallback / action=off は完全無効 / 全 provider pressured で `chain-memory-pressure-blocked` warn + `NoProvidersAvailableError`。
+- New `tests/test_memory_pressure.py` (~360 LOC, +19 tests):
+  - **Group 1 (detector)**: parameterized coverage of 8 OOM phrases, plus 5 non-OOM failures confirmed to return false.
+  - **Group 2 (guard)**: TTL cooldown / lazy expiry / re-mark extension.
+  - **Group 3 (engine)**: action=warn logs only / action=skip skips the chain during cooldown and falls back / action=off fully disables / all providers pressured triggers `chain-memory-pressure-blocked` warn + `NoProvidersAvailableError`.
 
-- `tests/test_backend_health.py` 新設 (~340 LOC、+8 tests):
-  - **Group 1 (monitor)**: 初期状態 HEALTHY、threshold/2x threshold での状態遷移、success で UNHEALTHY → HEALTHY 即復帰、stable state で transition 返さない。
-  - **Group 2 (engine action)**: warn は log only / demote で chain reorder (try-provider 順序検証) / off で監視ゼロ / UNHEALTHY → HEALTHY recovery transition log。
-  - **Group 3 (chain reorder)**: 全 provider UNHEALTHY 時は demote no-op (log spam なし、best-effort 続行)。
+- New `tests/test_backend_health.py` (~340 LOC, +8 tests):
+  - **Group 1 (monitor)**: initial state HEALTHY, state transitions at threshold/2x threshold, immediate UNHEALTHY → HEALTHY recovery on success, no transition returned on stable state.
+  - **Group 2 (engine action)**: warn logs only / demote reorders the chain (verified via try-provider order) / off means zero monitoring / recovery transition logged for UNHEALTHY → HEALTHY.
+  - **Group 3 (chain reorder)**: demote is a no-op when all providers are UNHEALTHY (no log spam, best-effort continues).
 
 #### Files touched
 
@@ -1553,21 +1556,21 @@ M  coderouter/routing/fallback.py
 
 #### Why now
 
-`docs/inside/future.md §6.6` v1.10 着手順序 #4 — **Vision の核心**。v1.9.0 GA で「v1.10 候補」と整理した backlog で唯一 ~900 LOC スケールの Vision-critical pillar。v1.9.1 の monthly-budget で cost 軸の運用が見えるようになった上に、L2/L5 で **「6 系統障害のうち L2/L3/L5 を体系的に対処」** が完成。`L1 Context overflow` / `L4 Quality drift` / `L6 Mid-stream interrupt 強化` は v2.0-F/G/H の領域、v1.x で cover する long-run reliability の到達点として位置付け。
+Item #4 in the v1.10 work order in `docs/inside/future.md §6.6` — **the core of the Vision**. Among the backlog organized as "v1.10 candidates" at v1.9.0 GA, this is the only Vision-critical pillar at the ~900 LOC scale. With v1.9.1's monthly budget making the cost axis operable, L2/L5 complete the promise that **"of the 6 failure classes, L2/L3/L5 are systematically handled."** `L1 Context overflow` / `L4 Quality drift` / `L6 Mid-stream stitching enhancement` remain the domain of v2.0-F/G/H; this marks the endpoint of long-run reliability coverage intended for v1.x.
 
-#### Out of scope (v2.0 以降)
+#### Out of scope (v2.0+)
 
-- **L5 active probing** (60s 間隔の能動 GET /api/version) — 受動 observation で十分カバーできる範囲、active probe を加えると httpx の lifecycle / mocking の複雑度が増えるため v2.0-I (`continuous probing` pillar 拡張) で再検討。
-- **L2 thresholding (count of OOM events before mark)** — single OOM = mark の素朴実装で十分。複数 OOM 観測でしか mark しないという調整は実機運用 feedback が来てから。
-- **HEALTHY/DEGRADED/UNHEALTHY の 4 段階以上化** — 3 段階で十分、運用 feedback が来てから検討。
+- **L5 active probing** (active GET /api/version every 60s) — passive observation already covers most of the relevant range; adding active probing increases httpx lifecycle/mocking complexity, so it's deferred for reconsideration under v2.0-I (the `continuous probing` pillar extension).
+- **L2 thresholding (count of OOM events before marking)** — the naive "single OOM = mark" implementation is sufficient. Requiring multiple OOM observations before marking would only be considered after real-world operational feedback.
+- **More than the 3-tier HEALTHY/DEGRADED/UNHEALTHY** — 3 tiers is sufficient for now; revisit after operational feedback.
 
 ---
 
-### v1.10 候補 #3: provider 月次予算上限 (LiteLLM 由来 / v1.9-D の累積版)
+### v1.10 candidate #3: provider monthly budget cap (from LiteLLM / cumulative version of v1.9-D)
 
-**Theme: v1.9-D で「いくら使ったか」が見えるようになった所に、「これ以上使うな」を宣言できる gate を足す。** v1.9-D の `cost_total_usd` は process-lifetime cumulative なので billing-cycle 上限としては使えない (再起動で消える + 月境界で reset しない)。本機能は **per-provider monthly USD cap** を `cost.monthly_budget_usd` で宣言できるようにし、UTC 暦月単位の running total が cap に達した provider を chain resolver が skip するようにする。
+**Theme: now that v1.9-D made "how much has been spent" visible, add a gate to declare "don't spend beyond this."** v1.9-D's `cost_total_usd` is a process-lifetime cumulative value, so it can't serve as a billing-cycle cap (it disappears on restart and doesn't reset at month boundaries). This feature lets you declare a **per-provider monthly USD cap** via `cost.monthly_budget_usd`, so the chain resolver skips a provider once its running total for the UTC calendar month hits the cap.
 
-ユースケース例:
+Example use case:
 
 ```yaml
 providers:
@@ -1578,57 +1581,57 @@ providers:
     cost:
       input_tokens_per_million: 3.0
       output_tokens_per_million: 15.0
-      monthly_budget_usd: 5.0   # ← v1.10 新フィールド
+      monthly_budget_usd: 5.0   # new field in v1.10
   - name: ollama-local
     base_url: http://localhost:11434/v1
     model: qwen3.6:35b-a3b
-    # 無料 / cost 未設定 = 無制限 (skip 対象外)
+    # free / cost unset = unlimited (not subject to skipping)
 profiles:
   - name: default
     providers: [anthropic-direct, ollama-local]   # paid → free fallback
 ```
 
-`anthropic-direct` が今月 5 USD 消費した時点で chain resolver が skip し、`ollama-local` (無料) に fall through する。`skip-budget-exceeded` info + (全 provider が cap に達した時のみ) `chain-budget-exceeded` warn が emit される。
+Once `anthropic-direct` has spent 5 USD this month, the chain resolver skips it and falls through to `ollama-local` (free). A `skip-budget-exceeded` info event is emitted, plus a `chain-budget-exceeded` warn only if every provider has hit its cap.
 
-**Persistence の意図的な制限**: in-memory only。プロセス再起動で running total が 0 にリセットされる。**5-deps 不変原則** (`plan.md §5.4`) を守るため sqlite / Redis / disk は導入しない。durable な月次 enforcement が必要なオペレータは v1.9-D の `cost_total_usd` panel を外部監視ツール (Prometheus alertmanager / Grafana threshold) で受ければ十分カバー可能。
+**Deliberate persistence limitation**: in-memory only. The running total resets to 0 on process restart. To respect the **5-deps invariant** (`plan.md §5.4`), sqlite / Redis / disk are not introduced. Operators who need durable monthly enforcement can adequately cover it by feeding v1.9-D's `cost_total_usd` panel into an external monitoring tool (Prometheus alertmanager / Grafana threshold).
 
-- Tests: 831 → **839** (+8: BudgetTracker pure 3 / CostConfig schema 2 / engine integration 3)
-- Runtime deps: 5 → 5 (31 sub-release 連続据え置き)
-- Backward compat: 完全互換、`monthly_budget_usd` 未設定 deployment は挙動完全一致 (opt-in feature)
+- Tests: 831 → **839** (+8: 3 pure BudgetTracker tests / 2 CostConfig schema tests / 3 engine integration tests)
+- Runtime deps: 5 → 5 (31 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; deployments that don't set `monthly_budget_usd` behave exactly as before (opt-in feature)
 
 #### Changes
 
 - `coderouter/config/schemas.py`:
-  - `CostConfig` に `monthly_budget_usd: float | None = None` を追加 (`ge=0.0`、None = 無制限)。
-  - docstring で UTC calendar-month + in-memory only persistence を明示、5-deps 不変原則との整合 (no sqlite/Redis) を文書化。
+  - Added `monthly_budget_usd: float | None = None` to `CostConfig` (`ge=0.0`; None = unlimited).
+  - Documented UTC calendar-month + in-memory-only persistence in the docstring, and consistency with the 5-deps invariant (no sqlite/Redis).
 
-- `coderouter/routing/budget.py` 新設 (~190 LOC):
-  - `BudgetTracker` クラス — per-provider current-month USD running total を `dict[str, float]` で保持、`threading.RLock` 配下。月境界判定は `_utc_month_key` ヘルパ (UTC `datetime.now()` 経由、tests は `now=` 引数で deterministic に注入可能)。
-  - 公開 API: `record(provider, cost_usd)` / `is_over_budget(provider, budget_usd)` / `current_month()` / `total_for_provider(provider)` / `reset()`。
-  - **Lazy month rollover**: 各 public call の入口で `_roll_if_needed` を呼び、cached month と current UTC month が違えば `_totals` を clear してから query に答える。background timer 不要。
-  - `is_over_budget` は `>=` 比較 — exact-hit の "5.00 USD" は exhausted と判定 (conservative: 次の call は bill しない)。
+- New `coderouter/routing/budget.py` (~190 LOC):
+  - `BudgetTracker` class — holds a per-provider current-month USD running total in a `dict[str, float]`, guarded by a `threading.RLock`. Month-boundary detection uses the `_utc_month_key` helper (via UTC `datetime.now()`; tests can inject a deterministic value via the `now=` argument).
+  - Public API: `record(provider, cost_usd)` / `is_over_budget(provider, budget_usd)` / `current_month()` / `total_for_provider(provider)` / `reset()`.
+  - **Lazy month rollover**: each public call calls `_roll_if_needed` on entry, clearing `_totals` before answering the query if the cached month differs from the current UTC month. No background timer needed.
+  - `is_over_budget` uses a `>=` comparison — an exact hit of "5.00 USD" is treated as exhausted (conservative: the next call won't be billed).
 
 - `coderouter/logging.py`:
-  - `SkipBudgetExceededPayload` / `ChainBudgetExceededPayload` TypedDict + `log_skip_budget_exceeded` / `log_chain_budget_exceeded` ヘルパを追加。`log_chain_paid_gate_blocked` のパターンを完全 mirror、payload に `month` (YYYY-MM UTC bucket) を含める。
+  - Added `SkipBudgetExceededPayload` / `ChainBudgetExceededPayload` TypedDicts + `log_skip_budget_exceeded` / `log_chain_budget_exceeded` helpers, fully mirroring the `log_chain_paid_gate_blocked` pattern, with `month` (YYYY-MM UTC bucket) included in the payload.
 
 - `coderouter/routing/fallback.py`:
-  - `FallbackEngine.__init__` に `_budget_tracker: BudgetTracker = BudgetTracker()` を追加、`_adaptive` と同じ lazy property pattern で `_budget` を露出 (legacy tests の `__new__` 経路でも空 tracker が返る)。
-  - `_resolve_chain` を 2-pass に refactor: pass 1 が paid-gate (既存ロジック)、pass 2 が **budget-gate** (新規)。budget-gate は `provider_cfg.cost.monthly_budget_usd` が set されている provider のみ check、`is_over_budget` ならば `skip-budget-exceeded` info を emit して候補から除外。chain が空になった時の aggregate warn は `blocked_by_budget` を優先 (paid-gate より後段で filter したため)、`chain-budget-exceeded` を fire。
-  - `_emit_cache_observed` / `_emit_cache_observed_streaming` に `budget: BudgetTracker | None = None` 引数を追加、`compute_cost_for_attempt` の結果が positive な時に `budget.record(provider, cost.total_usd)` を呼ぶ。engine 側 2 callsite (`generate_anthropic` / `stream_anthropic`) で `budget=self._budget` を渡す配線。
+  - Added `_budget_tracker: BudgetTracker = BudgetTracker()` to `FallbackEngine.__init__`, exposing `_budget` via the same lazy property pattern as `_adaptive` (returns an empty tracker even via the legacy `__new__` path used by legacy tests).
+  - Refactored `_resolve_chain` into 2 passes: pass 1 is the existing paid-gate logic, pass 2 is the new **budget-gate**. The budget-gate only checks providers where `provider_cfg.cost.monthly_budget_usd` is set; if `is_over_budget`, it emits a `skip-budget-exceeded` info event and excludes the provider from candidates. When the chain empties out, the aggregate warn prefers `blocked_by_budget` (since filtering happened after the paid-gate), firing `chain-budget-exceeded`.
+  - Added a `budget: BudgetTracker | None = None` argument to `_emit_cache_observed` / `_emit_cache_observed_streaming`, calling `budget.record(provider, cost.total_usd)` whenever `compute_cost_for_attempt` returns a positive result. Wired at both engine call sites (`generate_anthropic` / `stream_anthropic`) by passing `budget=self._budget`.
 
 - `coderouter/metrics/collector.py`:
-  - `_provider_skipped_budget: Counter[str]` + `_chain_budget_exceeded_total: int` を追加、`_provider_skipped_paid` / `_chain_paid_gate_blocked_total` の対称配置。
-  - `_dispatch` に `skip-budget-exceeded` / `chain-budget-exceeded` event の handler を追加。`reset()` / `snapshot()` も両 counter を含むように拡張。
-  - module docstring の event inventory に v1.10 行 2 件追記。
+  - Added `_provider_skipped_budget: Counter[str]` + `_chain_budget_exceeded_total: int`, symmetric with `_provider_skipped_paid` / `_chain_paid_gate_blocked_total`.
+  - Added handlers for `skip-budget-exceeded` / `chain-budget-exceeded` events to `_dispatch`. `reset()` / `snapshot()` extended to include both counters.
+  - Added 2 v1.10 rows to the module docstring's event inventory.
 
 - `coderouter/metrics/prometheus.py`:
-  - `coderouter_provider_skipped_total{provider, reason="budget"}` を既存の `paid` / `unknown` と同じ counter に同居 (dashboards が reason 別 stack できるように)。
-  - `coderouter_chain_budget_exceeded_total` scalar counter を新設 (`coderouter_chain_paid_gate_blocked_total` の対称配置)。
+  - Added `coderouter_provider_skipped_total{provider, reason="budget"}` alongside the existing `paid` / `unknown` counters (so dashboards can stack by reason).
+  - New `coderouter_chain_budget_exceeded_total` scalar counter, symmetric with `coderouter_chain_paid_gate_blocked_total`.
 
-- `tests/test_budget.py` 新設 (~340 LOC、+8 tests):
-  - **Group 1 (BudgetTracker pure)**: record 蓄積 / is_over_budget の `>=` boundary semantics / 月境界 rollover (`now=` 引数で April→May 跨ぎを deterministic に検証)。
-  - **Group 2 (CostConfig schema)**: `monthly_budget_usd: 5.0` 受理、負値 reject (pydantic `ge=0.0`)。
-  - **Group 3 (engine integration)**: pre-loaded budget でも primary skip + fallback 経由 (warn なし) / 全 provider cap で `NoProvidersAvailableError` + `chain-budget-exceeded` warn 1 回 / 実 attempt の cost が `BudgetTracker` に蓄積されて 3 回目で skip されることを確認 (real wiring の end-to-end test)。
+- New `tests/test_budget.py` (~340 LOC, +8 tests):
+  - **Group 1 (pure BudgetTracker)**: record accumulation / `>=` boundary semantics for is_over_budget / month-boundary rollover (deterministically verifying an April→May crossing via the `now=` argument).
+  - **Group 2 (CostConfig schema)**: accepts `monthly_budget_usd: 5.0`, rejects negative values (pydantic `ge=0.0`).
+  - **Group 3 (engine integration)**: a pre-loaded budget still skips the primary and falls back (no warn) / all providers capped raises `NoProvidersAvailableError` + a single `chain-budget-exceeded` warn / confirms real attempt costs accumulate in `BudgetTracker` and trigger a skip on the 3rd call (an end-to-end test of real wiring).
 
 #### Files touched
 
@@ -1645,49 +1648,49 @@ M  coderouter/routing/fallback.py
 
 #### Why now
 
-`docs/inside/future.md §6.6` の v1.10 着手順序 #3。v1.9-D で観測の基盤ができた直後に **enforcement** を足す自然な順序、cost-aware ユーザー (paid backend を組み込む operator) にとって最も価値の高い v1.10 候補。LiteLLM が同等機能を `litellm[proxy]` の中で重実装 (Redis 必須) しているのに対し、CodeRouter は in-memory + 5-deps 維持で「個人開発者用の budget guard」として割り切ることで構造的負債を避ける。
+Item #3 in the v1.10 work order in `docs/inside/future.md §6.6`. Adding **enforcement** right after v1.9-D built the observation foundation is a natural sequence, and it's the highest-value v1.10 candidate for cost-aware users (operators incorporating paid backends). Where LiteLLM implements equivalent functionality with substantial weight inside `litellm[proxy]` (requiring Redis), CodeRouter avoids that structural debt by staying in-memory and within the 5-deps budget, embracing its role as a "budget guard for individual developers."
 
 #### Out of scope
 
-- **Persistent budget state** (sqlite / Redis / disk-backed) — 5-deps 不変原則により未対応。durable enforcement 必要なケースは v1.9-D dashboard を外部 alerting に繋ぐ運用で代替。
-- **Rolling 30-day window** — UTC calendar month で十分 (typical billing cycle と一致、月境界判定の rollover 実装が単純)。rolling window は `_utc_month_key` を date-windowed key に差し替えれば追加できるが、operator request が来てから判断。
-- **Per-profile budget** (vs per-provider) — provider 単位で十分。同じ provider を複数 profile が共有する場合 budget は共有されるべき (実コストの帰属先は provider なので) という意味的にも provider 帰属が正しい。
+- **Persistent budget state** (sqlite / Redis / disk-backed) — not supported, per the 5-deps invariant. Cases needing durable enforcement can instead feed the v1.9-D dashboard into external alerting.
+- **Rolling 30-day window** — the UTC calendar month is sufficient (matches typical billing cycles, and keeps the month-boundary rollover implementation simple). A rolling window could be added by swapping `_utc_month_key` for a date-windowed key, but only once operators request it.
+- **Per-profile budget** (vs. per-provider) — per-provider is sufficient. When multiple profiles share the same provider, the budget should be shared too (since the actual cost attributes to the provider), so provider-level attribution is also semantically correct.
 
 ---
 
-## [v1.9.1] — 2026-05-01 (Patch — v1.10 候補から quick win 2 件先行刈取り)
+## [v1.9.1] — 2026-05-01 (Patch — pre-emptively harvesting 2 quick wins from the v1.10 candidate list)
 
-**Theme: v1.9.0 GA で「v1.10 候補」と整理した backlog のうち、構造的負債を伴わない quick win 2 件 (streaming cache 観測の完成形 + agent-driven model 識別子で profile 分岐) を patch として束ねる。** 観測ループの埋め残しと、Claude Code / Cursor 等 agent 側の設定 (Opus / Sonnet / Haiku 使い分け) が CodeRouter の declarative routing に反映できる経路を、完全互換で追加。両機能とも v1.9.0 既存 framework (`cache-observed` log / `auto_router.rules`) の延長線で、新 framework / 依存追加なし。
+**Theme: bundle 2 quick wins from the backlog organized as "v1.10 candidates" at v1.9.0 GA — completing streaming cache observation and letting agent-driven model identifiers branch profiles — into a patch, since neither carries structural debt.** Adds, with full compatibility, a path for closing the gap left in the observation loop and for letting agent-side settings (Claude Code / Cursor etc. choosing between Opus / Sonnet / Haiku) feed into CodeRouter's declarative routing. Both features extend v1.9.0's existing framework (`cache-observed` log / `auto_router.rules`) — no new framework, no new dependencies.
 
-含まれる出荷 2 件 (`docs/inside/future.md §6.6` の v1.10 着手順序 #1, #2):
+2 shipments included (items #1, #2 in the v1.10 work order in `docs/inside/future.md §6.6`):
 
-| # | sub-release | テーマ | LOC | tests |
+| # | sub-release | Theme | LOC | tests |
 |---|---|---|---|---|
-| 1 | **v1.9-B2** | streaming 経路の usage 集約 — `_StreamUsageAccumulator` + `_emit_cache_observed_streaming` で `outcome=unknown` placeholder を観測値に置換 | ~150 | +3 |
-| 2 | **per-model auto-routing** | `RuleMatcher.model_pattern` 5 番目 matcher 追加、`re.fullmatch` で body model id を評価 (free-claude-code 由来) | ~120 | +5 |
+| 1 | **v1.9-B2** | Usage aggregation for the streaming path — `_StreamUsageAccumulator` + `_emit_cache_observed_streaming` replace the `outcome=unknown` placeholder with observed values | ~150 | +3 |
+| 2 | **per-model auto-routing** | Added `RuleMatcher.model_pattern` as the 5th matcher, evaluating the body's model id via `re.fullmatch` (from free-claude-code) | ~120 | +5 |
 
-- Tests: 830 → **838** (+8 累積、v1.9-B2 +3 / per-model +5)
-- Runtime deps: 5 → 5 (30 sub-release 連続据え置き)
-- Backward compat: 完全互換、既存 yaml / API / log payload 全部既存と同じ schema、新フィールド (`model_pattern`) を使わない deployment は挙動完全一致
+- Tests: 830 → **838** (+8 cumulative: v1.9-B2 +3 / per-model +5)
+- Runtime deps: 5 → 5 (30 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; existing yaml / API / log payloads all use the same schema as before; deployments that don't use the new `model_pattern` field behave exactly as before
 - pyproject version: 1.9.0 → 1.9.1
 
 ### Migration
 
-不要。**v1.9.0 / v1.9.0a* からの自然なアップグレード**:
+None needed. **A natural upgrade from v1.9.0 / v1.9.0a\***:
 
-- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
-- streaming で `cache-observed` log を読んでいる外部 consumer (例: dashboard / Prometheus / 自前 JSONL parser) には、v1.9.0a6 までゼロ固定だった `cache_read_input_tokens` / `cache_creation_input_tokens` / `input_tokens` / `output_tokens` / `outcome` / `cost_usd` / `cost_savings_usd` が観測値に置き換わる。consumer 側は **値が増えた** だけで schema は同じ、ロジック変更不要
-- `auto_router.rules[].if.model_pattern` を使い始めるには yaml に 1 行足すだけ、既存 rule に影響なし
+- The `coderouter` command name / Python import name / providers.yaml format / env vars / ingress URL are all unchanged
+- For external consumers reading the `cache-observed` log on the streaming path (e.g., dashboard / Prometheus / a custom JSONL parser), the fields that were previously fixed at zero through v1.9.0a6 (`cache_read_input_tokens` / `cache_creation_input_tokens` / `input_tokens` / `output_tokens` / `outcome` / `cost_usd` / `cost_savings_usd`) now carry observed values. On the consumer side, this is purely **more accurate numbers** — the schema is unchanged, no logic changes needed
+- Adopting `auto_router.rules[].if.model_pattern` only requires adding one line to the yaml; no effect on existing rules
 
-### Out of scope (v1.10 / v1.9.x 続編)
+### Out of scope (v1.10 / v1.9.x follow-up)
 
-[v1.9.0] GA ノートと `docs/inside/future.md §6.6` で示した v1.10 候補から残り 3 件:
+The remaining 3 v1.10 candidates noted in the v1.9.0 GA notes and `docs/inside/future.md §6.6`:
 
-- **provider 月次予算上限** (LiteLLM 由来、v1.9-D の累積版) — `monthly_budget_usd` で provider 単位の running total + 超過時 skip + log。~400 LOC、3-5 日。
-- **v1.9-E phase 2** — L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder)。**Vision の核心 (8 時間 agent ループでも止まらない)** を完成させる pillar。~900 LOC、1-2 週間。
-- **longContext auto-switch** — `auto_router` rule type 5 として `content_token_count_min` matcher 追加 (claude-code-router task-based 取込)。~200 LOC、3-5 日。
+- **Provider monthly budget cap** (from LiteLLM, cumulative version of v1.9-D) — a per-provider running total via `monthly_budget_usd`, with skip + log on overage. ~400 LOC, 3-5 days.
+- **v1.9-E phase 2** — L2 Memory pressure (LM Studio / Ollama backend OOM detection) / L5 Backend health (continuous probing + chain reorder). The pillar that completes **the core of the Vision (the agent loop won't stop even after 8 hours)**. ~900 LOC, 1-2 weeks.
+- **longContext auto-switch** — adding a `content_token_count_min` matcher as the 5th `auto_router` rule type (incorporating a claude-code-router task-based idea). ~200 LOC, 3-5 days.
 
-これら 3 件は構造拡張を伴うため v1.9.1 patch ではなく v1.10.0 minor で個別 sub-release にして出荷する想定。
+Since these 3 involve structural extensions, they're planned to ship as individual sub-releases in the v1.10.0 minor rather than this v1.9.1 patch.
 
 ### Files touched
 
@@ -1705,11 +1708,11 @@ M  tests/test_fallback_cache_observed.py
 
 ---
 
-### per-model auto-routing (v1.10 候補 #2、free-claude-code 由来)
+### per-model auto-routing (v1.10 candidate #2, from free-claude-code)
 
-**Theme: agent が送ってきた `model` フィールドそのものを auto_router の判定軸に追加。** Claude Code / Cursor 等の agent 側設定 (Opus / Sonnet / Haiku の使い分け) を、CodeRouter 側 profile chain の選択にも反映できるようにする。`auto_router.rules[].if.model_pattern` を 5 番目の matcher として導入、既存 4 種 (`has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex`) と同じ "exactly one" 規約と eager regex compile (typo は startup で fast-fail) を継承。
+**Theme: add the `model` field the agent sends as another axis auto_router can decide on.** Lets agent-side settings (Claude Code / Cursor etc. choosing between Opus / Sonnet / Haiku) also drive which profile chain CodeRouter selects. Introduces `auto_router.rules[].if.model_pattern` as the 5th matcher, inheriting the same "exactly one" contract and eager regex compile (typos fast-fail at startup) as the existing 4 (`has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex`).
 
-ユースケース例:
+Example use case:
 
 ```yaml
 auto_router:
@@ -1721,31 +1724,31 @@ auto_router:
   default_rule_profile: writing
 ```
 
-agent 側で「モデルの使い分けは決まってる」状況に CodeRouter が綺麗に乗れる。`free-claude-code` repo の同様機能を CodeRouter の declarative auto_router framework に取り込んだ形。
+This lets CodeRouter cleanly ride along in situations where "the choice of model is already decided" on the agent side. It brings a similar feature from the `free-claude-code` repo into CodeRouter's declarative auto_router framework.
 
-- Tests: 833 → **838** (+5: Sonnet→coding / Haiku→lightweight / no-model field → fallthrough / 不正 regex は schema load で fast-fail / model_pattern と content rule の first-match-wins precedence)
-- Runtime deps: 5 → 5 (30 sub-release 連続据え置き)
-- Backward compat: 完全互換、既存 `auto_router` rule は何も変わらない、`model_pattern` を使わない deployment は挙動完全一致
+- Tests: 833 → **838** (+5: Sonnet→coding / Haiku→lightweight / no-model-field fallthrough / invalid regex fast-fails at schema load / first-match-wins precedence between model_pattern and a content rule)
+- Runtime deps: 5 → 5 (30 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; existing `auto_router` rules are unaffected; deployments that don't use `model_pattern` behave exactly as before
 
 #### Changes
 
 - `coderouter/config/schemas.py`:
-  - `RuleMatcher` に `model_pattern: str | None = None` を追加、`_MATCHER_FIELDS` tuple に追加 (zero/multiple-fields の "exactly one" バリデータが自動適用)。
-  - `_compile_regex_eagerly` バリデータを `model_pattern` も覆うよう拡張、不正な regex は schema load で `ValueError("Invalid regex for model_pattern ...")` を発火 (`content_regex` と同じ fast-fail パターン)。
-  - docstring の Variants セクションに 5 番目として `model_pattern` を追記、`re.fullmatch` semantics と `content_regex` の `re.search` との違い (model 識別子は "structured tokens" であり全体描写型) を明示。
+  - Added `model_pattern: str | None = None` to `RuleMatcher`, added to the `_MATCHER_FIELDS` tuple (the existing zero/multiple-fields "exactly one" validator applies automatically).
+  - Extended the `_compile_regex_eagerly` validator to also cover `model_pattern`; an invalid regex fires `ValueError("Invalid regex for model_pattern ...")` at schema load (same fast-fail pattern as `content_regex`).
+  - Documented `model_pattern` as the 5th entry in the docstring's Variants section, clarifying `re.fullmatch` semantics versus `content_regex`'s `re.search` (model identifiers are "structured tokens," so full-match semantics fit better).
 
 - `coderouter/routing/auto_router.py`:
-  - `_extract_model(body)` ヘルパを新設 — 両 ingress (Anthropic `/v1/messages` / OpenAI `/v1/chat/completions`) で body の top-level `model` field を 1 ヶ所で抽出、空文字列 / 非 str は None 扱い。
-  - `_match_rule(rule, message, text, model)` シグネチャに `model: str | None` を追加、`model_pattern` matcher を 5 番目の分岐として実装。`re.fullmatch` で評価 (model id は構造的 token なので部分一致より全体記述型の方が直観に合う)。`model is None` の時は False を返して fallthrough させる (空 body などの test fixtures 対策)。
-  - `classify(...)` 内で `_extract_model(body)` を一度だけ呼び、`_match_rule` に流す。`user_msg is None` でも `model_pattern` rule は評価する (空 messages でも model 経路で route 可能)。
-  - `_emit_resolved` / `_emit_fallthrough` の `signals` payload に `model` を追記、auto-router-resolved log で何の model id で routing 判断したかが dashboard / Prometheus exporter から見える。
+  - Added a `_extract_model(body)` helper — extracts the body's top-level `model` field in one place for both ingress shapes (Anthropic `/v1/messages` / OpenAI `/v1/chat/completions`); empty string / non-str values resolve to None.
+  - Added `model: str | None` to the `_match_rule(rule, message, text, model)` signature, implementing the `model_pattern` matcher as the 5th branch. Evaluated via `re.fullmatch` (since model ids are structured tokens, full-match semantics are more intuitive than partial match). Returns False when `model is None`, falling through (guards against test fixtures with an empty body, etc.).
+  - `classify(...)` now calls `_extract_model(body)` once and threads it into `_match_rule`. The `model_pattern` rule is evaluated even when `user_msg is None` (allows routing via the model even with empty messages).
+  - Added `model` to the `signals` payload in `_emit_resolved` / `_emit_fallthrough`, so the auto-router-resolved log lets the dashboard / Prometheus exporter see which model id drove a routing decision.
 
-- `tests/test_auto_router.py` Group 6 (per-model auto-routing) を新設、5 ケース:
-  - `test_classify_model_pattern_sonnet_routes_to_coding` — 基本ケース、`claude-3-5-sonnet.*` → coding profile。content は writing 寄りでも model rule が勝つ。
-  - `test_classify_model_pattern_haiku_routes_to_lightweight` — 4-profile fixture (`_model_pattern_config` で lightweight 追加)、Haiku id → lightweight profile。
-  - `test_classify_model_pattern_no_model_field_falls_through` — body に `model` field がない時、`r".+"` でも match せず default_rule_profile に落ちる (fixtures / test harness 用 robustness)。
-  - `test_model_pattern_invalid_regex_fast_fails_at_load` — `r"([unclosed"` → `RuleMatcher` 構築時に `ValueError(model_pattern)` (`content_regex` と同じ eager compile path)。
-  - `test_model_pattern_first_match_wins_over_later_content_rule` — model_pattern rule を content_contains rule より前に置くと、両方 match する body でも先勝、global "first match wins" を pin。
+- Added Group 6 (per-model auto-routing) to `tests/test_auto_router.py`, 5 cases:
+  - `test_classify_model_pattern_sonnet_routes_to_coding` — basic case: `claude-3-5-sonnet.*` → coding profile, with the model rule winning even when content leans toward writing.
+  - `test_classify_model_pattern_haiku_routes_to_lightweight` — a 4-profile fixture (adding lightweight via `_model_pattern_config`), Haiku id → lightweight profile.
+  - `test_classify_model_pattern_no_model_field_falls_through` — when the body has no `model` field, even `r".+"` doesn't match, falling through to default_rule_profile (robustness for fixtures / test harnesses).
+  - `test_model_pattern_invalid_regex_fast_fails_at_load` — `r"([unclosed"` raises `ValueError(model_pattern)` at `RuleMatcher` construction (same eager compile path as `content_regex`).
+  - `test_model_pattern_first_match_wins_over_later_content_rule` — placing the model_pattern rule before a content_contains rule makes it win even on a body that matches both, pinning the global "first match wins" rule.
 
 #### Files touched
 
@@ -1758,42 +1761,42 @@ M  tests/test_auto_router.py
 
 #### Why now
 
-`docs/inside/future.md §6.6` の v1.10 着手順序で 2 番目に推奨されていた quick win。実装規模 ~120 LOC (見積 ~150-200 LOC を下回って収束)、tests +5、半日工数。既存 auto_router framework の 1 matcher 追加なので構造的負債なし、`free-claude-code` 由来要望を CodeRouter の declarative 思想を崩さずに取り込めた。次の v1.10 候補 (provider 月次予算 / longContext auto-switch / v1.9-E phase 2) の前段階として位置付け。
+The second-recommended quick win in the v1.10 work order in `docs/inside/future.md §6.6`. Implementation size ~120 LOC (came in under the ~150-200 LOC estimate), +5 tests, half a day of effort. Adding a single matcher to the existing auto_router framework carries no structural debt, and it incorporates the `free-claude-code`-derived request without compromising CodeRouter's declarative design. Positioned as groundwork ahead of the next v1.10 candidates (provider monthly budget / longContext auto-switch / v1.9-E phase 2).
 
 ---
 
-### v1.9-B2: streaming 経路の usage 集約 (v1.10 候補 #1)
+### v1.9-B2: usage aggregation for the streaming path (v1.10 candidate #1)
 
-**Theme: v1.9.0 で意図的に v1.10 候補へ繰り越した quick win を回収。** v1.9.0a6 で「streaming パスでも `cache-observed` log を emit する」ところまでは揃えたが、token 数は `outcome=unknown` + ゼロ固定の placeholder だった。本 patch は `message_start.message.usage` + 終端 `message_delta.usage` を accumulator で max-merge 集約し、非 streaming (`generate_anthropic`) と同じ outcome 分類 + cost 計算 + ログ payload 形状に揃える。`/dashboard` / Prometheus / MetricsCollector 側は branch 不要で streaming 経路の数字が取れるようになる。
+**Theme: recover the quick win that v1.9.0 deliberately deferred to the v1.10 candidate list.** v1.9.0a6 got as far as "emitting the `cache-observed` log on the streaming path too," but the token counts were still an `outcome=unknown` placeholder fixed at zero. This patch aggregates `message_start.message.usage` plus the terminal `message_delta.usage` via an accumulator using per-field max-merge, matching the same outcome classification + cost calculation + log payload shape as the non-streaming path (`generate_anthropic`). `/dashboard` / Prometheus / MetricsCollector can now get real numbers from the streaming path with no branching needed.
 
-- Tests: 830 → **833** (+3: cache_hit / cache_creation / no_cache の streaming 集約 — `tests/test_fallback_cache_observed.py`)
-- Runtime deps: 5 → 5 (29 sub-release 連続据え置き)
-- Backward compat: 完全互換、log payload は v1.9-A と同じ schema、`streaming=true` flag のみ意味的に "観測値" になる (ゼロ placeholder ではなくなる)
+- Tests: 830 → **833** (+3: streaming aggregation for cache_hit / cache_creation / no_cache — in `tests/test_fallback_cache_observed.py`)
+- Runtime deps: 5 → 5 (29 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; the log payload uses the same schema as v1.9-A; only the meaning of the `streaming=true` flag changes, now reflecting "observed values" rather than a zero placeholder
 
 #### Changes
 
 - `coderouter/routing/fallback.py`:
-  - `_StreamUsageAccumulator` を新設 — `message_start.message.usage` と `message_delta.usage` から `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` を per-field max-merge で集約。`output_tokens` は終端 `message_delta` で最終値が決まるため max が安全、cache fields は API minor version によって `message_start` / `message_delta` どちらにも現れる可能性があるため両方を観測。`usage_present` は「upstream が空 dict も含めて usage を返したか」を保持し、何も流れてこなかった streaming は引き続き `outcome=unknown` に分類。
-  - `_emit_cache_observed_streaming(...)` を追加 — accumulator 値を `classify_cache_outcome` / `compute_cost_for_attempt` に通して `log_cache_observed` を呼ぶ。非 streaming `_emit_cache_observed` と同じ outcome 分類 + cost 計算ロジック。
-  - `stream_anthropic(...)` 内のループで `acc = _StreamUsageAccumulator()` を初期化、`first` および後続 `event_iter` の各 event に `acc.observe(...)` を呼ぶ。完了時の `log_cache_observed(..., outcome="unknown", *=0)` を `_emit_cache_observed_streaming(acc, ..., provider_config=adapter.config)` に置換。
-  - `_emit_cache_observed` の docstring を更新 — `streaming=True` arg は openai_compat 経路 (downgrade で 1 つの response に collapse される) 用に残す説明に改訂。
+  - New `_StreamUsageAccumulator` — aggregates `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` from `message_start.message.usage` and `message_delta.usage` via per-field max-merge. `output_tokens` is only final at the terminal `message_delta`, so max is safe; cache fields may appear in either `message_start` or `message_delta` depending on API minor version, so both are observed. `usage_present` tracks whether upstream returned usage at all (including an empty dict), so a streaming response with nothing observed still classifies as `outcome=unknown`.
+  - Added `_emit_cache_observed_streaming(...)` — feeds accumulator values through `classify_cache_outcome` / `compute_cost_for_attempt` and calls `log_cache_observed`, using the same outcome classification + cost calculation logic as the non-streaming `_emit_cache_observed`.
+  - In the loop inside `stream_anthropic(...)`, initializes `acc = _StreamUsageAccumulator()` and calls `acc.observe(...)` for `first` and every subsequent `event_iter` event. Replaces the completion-time `log_cache_observed(..., outcome="unknown", *=0)` with `_emit_cache_observed_streaming(acc, ..., provider_config=adapter.config)`.
+  - Updated the `_emit_cache_observed` docstring — revised to explain that the `streaming=True` arg remains for the openai_compat path (which collapses into a single response via downgrade).
 
 - `tests/test_fallback_cache_observed.py`:
-  - `_CacheAnthropicAdapter.stream_anthropic` を constructor 引数駆動に変更 (`message_start.message.usage` に input_tokens + cache 系、`message_delta.usage` に input_tokens + output_tokens を流す、ゼロ時は空 dict を出して "usage 一切なし" を再現可能)。
-  - 既存 `test_cache_observed_fires_on_streaming_with_unknown_outcome` の docstring を v1.9-B2 文脈に更新 (上流から usage が 1 件も流れない時の `unknown` 床をピン留め)。
-  - 新規 3 ケース:
-    - `test_streaming_aggregates_cache_hit_usage` — `cache_read_input_tokens=2048` を含む stream → `outcome=cache_hit` + 入出力カウンタ集約。
-    - `test_streaming_aggregates_cache_creation_usage` — `cache_creation_input_tokens=1500` の stream → `outcome=cache_creation`。
-    - `test_streaming_aggregates_no_cache_outcome` — non-zero usage + cache fields なし → `outcome=no_cache` (本番最頻 case、v1.9.0a6 の placeholder では拾えていなかった)。
+  - Changed `_CacheAnthropicAdapter.stream_anthropic` to be constructor-argument driven (feeding input_tokens + cache fields into `message_start.message.usage`, and input_tokens + output_tokens into `message_delta.usage`; emits an empty dict when zero, so "no usage at all" can be reproduced).
+  - Updated the docstring of the existing `test_cache_observed_fires_on_streaming_with_unknown_outcome` test to the v1.9-B2 context (pinning the `unknown` floor for when upstream never sends any usage).
+  - 3 new cases:
+    - `test_streaming_aggregates_cache_hit_usage` — a stream including `cache_read_input_tokens=2048` → `outcome=cache_hit` + input/output counter aggregation.
+    - `test_streaming_aggregates_cache_creation_usage` — a stream with `cache_creation_input_tokens=1500` → `outcome=cache_creation`.
+    - `test_streaming_aggregates_no_cache_outcome` — non-zero usage with no cache fields → `outcome=no_cache` (the most common production case, which the v1.9.0a6 placeholder failed to capture).
 
 #### Why now
 
-v1.9.0 GA ノートで明示した「v1.10 候補」のうち最も短期に取れる quick win。実装サイズ ~150 LOC、半日工数で `outcome=unknown` placeholder を観測値に置き換えられるため、cost dashboard / cache-hit rate panel の streaming 経路カバレッジが完成する。`v1.9-E phase 2` (L2/L5) や per-model auto-routing といった上位 priority 作業の前段で済ませておくと、その後の adaptive routing / Vision pillar 完成度が上がる。
+The shortest-term quick win among those explicitly flagged as "v1.10 candidates" in the v1.9.0 GA notes. At ~150 LOC and half a day of effort, replacing the `outcome=unknown` placeholder with observed values completes streaming-path coverage for the cost dashboard / cache-hit rate panel. Clearing this ahead of higher-priority work like `v1.9-E phase 2` (L2/L5) or per-model auto-routing raises the completeness of subsequent adaptive routing / Vision pillar work.
 
 #### Out of scope
 
-- ChatRequest.stream() 経路 (OpenAI-shaped streaming) は対象外 — `stream_anthropic` の sibling であり、Anthropic 経由の cache observation は未対応の領域。Anthropic prompt cache を利用する client は実質 `/v1/messages` 経由なので影響範囲は限定的。
-- v1.9.0a6 で論じた "downgrade 後の synthesize_anthropic_stream_from_response" 経路 — 元になる AnthropicResponse から `message_start` event が usage 付きで再構築されるため、accumulator が自動でカバーする (追加実装不要)。
+- The `ChatRequest.stream()` path (OpenAI-shaped streaming) is out of scope — it's a sibling of `stream_anthropic`, and cache observation via Anthropic remains unaddressed there. Clients that use Anthropic prompt caching effectively go through `/v1/messages`, so the impact is limited.
+- The "`synthesize_anthropic_stream_from_response` after downgrade" path discussed in v1.9.0a6 — since the `message_start` event is reconstructed with usage from the underlying AnthropicResponse, the accumulator covers it automatically (no additional implementation needed).
 
 #### Files touched
 
@@ -1807,36 +1810,36 @@ M  tests/test_fallback_cache_observed.py
 
 ## [v1.9.0] — 2026-04-29 (Umbrella tag — Cache observability + Adaptive routing + Cost-aware + Long-run reliability)
 
-**Theme: 「観測 → 理解 → 行動 → 信頼性」を 1 minor で揃える、observability pillar の成熟。** v1.9.0 は 6 sub-release (v1.9-A〜E) を通じて、CodeRouter を「動いてはいるが何が起きているか分からない」状態から、「**何にいくら使った / どこで遅くなった / 何で詰まった**」が運用ログ 1 行で分かる状態に押し上げる。具体的には:
+**Theme: align "observe → understand → act → reliability" in a single minor release, maturing the observability pillar.** Across 6 sub-releases (v1.9-A through E), v1.9.0 lifts CodeRouter from "it's running but we can't tell what's happening" to a state where **"how much was spent on what / where it slowed down / where it got stuck"** is visible from a single operational log line. Specifically:
 
-- **観測 (v1.9-A)** — Anthropic prompt cache の hit/miss を全リクエストで `cache-observed` ログに記録、`/dashboard` から hit_rate / saved tokens が見える
-- **透過 (v1.9-B)** — openai_compat 経路でも cache_control / thinking 等の Anthropic 拡張を可能な限り保持、不可能な場合は `capability-degraded` で明示
-- **動的最適化 (v1.9-C)** — profile に `adaptive: true` を付けると、normally-fast な provider が一時的に遅くなったとき自動で後ろに送り、user-felt latency を保護
-- **コスト把握 (v1.9-D)** — providers.yaml の `cost:` で USD pricing を宣言、cache savings は別計算 (LiteLLM 等の競合品が落としている粒度) で dashboard に出る
-- **信頼性ガード (v1.9-E phase 1, L3)** — 同じツールを同じ引数で連続呼び出しする「stuck loop」を検出、profile-level policy (`warn` / `inject` / `break`) で対処
+- **Observation (v1.9-A)** — records Anthropic prompt cache hit/miss for every request in the `cache-observed` log; hit_rate / saved tokens are visible from `/dashboard`
+- **Transparency (v1.9-B)** — preserves Anthropic extensions like cache_control / thinking as much as possible even on the openai_compat path, explicitly flagging with `capability-degraded` when not possible
+- **Dynamic optimization (v1.9-C)** — setting `adaptive: true` on a profile automatically demotes a normally-fast provider that's temporarily slowed down, protecting user-felt latency
+- **Cost visibility (v1.9-D)** — declare USD pricing via `cost:` in providers.yaml; cache savings are computed separately (a granularity that competing products like LiteLLM miss) and shown on the dashboard
+- **Reliability guard (v1.9-E phase 1, L3)** — detects "stuck loops" where the same tool is called repeatedly with the same arguments, handled via profile-level policy (`warn` / `inject` / `break`)
 
-最後の v1.9.0 GA では v1.9.0a6 以降の実機検証で発見された **L3 `break` action の ingress 取りこぼし** (`ToolLoopBreakError` が catch されず 500 が返っていた) を 400 + 構造化 detail に修正、両 ingress 経路 (非 streaming HTTPException / streaming SSE error event) で揃えました。
+For this final v1.9.0 GA, a real-machine verification issue discovered after v1.9.0a6 — **the L3 `break` action failing to catch at ingress** (`ToolLoopBreakError` went uncaught, returning a 500) — was fixed to return 400 with structured detail, aligned across both ingress paths (non-streaming HTTPException / streaming SSE error event).
 
-- Tests: 828 → **830** (+2: break action 非 streaming 400 / streaming SSE error event)
-- Runtime deps: 5 → 5 (29 sub-release 連続据え置き)
-- Backward compat: 完全互換、profile / providers.yaml / API 全部変化なし
-- v1.9.0a1〜a6 をまとめての GA、各 sub-release の詳細は本ファイル下部の alpha entry を参照
+- Tests: 828 → **830** (+2: break action non-streaming 400 / streaming SSE error event)
+- Runtime deps: 5 → 5 (29 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no changes to profile / providers.yaml / API
+- This GA rolls up v1.9.0a1 through a6; see the alpha entries further down this file for details of each sub-release
 
-### Changes since v1.9.0a6 — E-4 break action の ingress 修正
+### Changes since v1.9.0a6 — fixing the E-4 break-action ingress gap
 
 #### `coderouter/guards/tool_loop.py`
 
-- `ToolLoopBreakError.__init__` に `threshold: int` / `window: int` をキーワード必須で追加。ingress 側で 400 detail を組むときに config を再 lookup せずに済むよう、検出パラメータを exception 自体に carry させる
-- docstring に「Anthropic ingress が catch して 400 + 構造化 detail に変換する」を明記 (a3 で約束していたが実装が伴っていなかった)
+- Added `threshold: int` / `window: int` as required keyword arguments to `ToolLoopBreakError.__init__`. Carries the detection parameters on the exception itself so the ingress side doesn't need to re-look-up config when building the 400 detail
+- Documented in the docstring that "the Anthropic ingress catches this and converts it to 400 + structured detail" (promised in a3 but not actually implemented until now)
 
 #### `coderouter/routing/fallback.py`
 
-- `_apply_tool_loop_guard` の `raise ToolLoopBreakError(...)` で `threshold=profile.tool_loop_threshold, window=profile.tool_loop_window` を渡すよう更新
+- Updated `_apply_tool_loop_guard`'s `raise ToolLoopBreakError(...)` to pass `threshold=profile.tool_loop_threshold, window=profile.tool_loop_window`
 
 #### `coderouter/ingress/anthropic_routes.py`
 
-- `ToolLoopBreakError` を import
-- 非 streaming `messages()` に `except ToolLoopBreakError → HTTPException(status_code=400, detail=_tool_loop_break_detail(exc))` を追加。`detail` は flat dict:
+- Imports `ToolLoopBreakError`
+- Adds `except ToolLoopBreakError → HTTPException(status_code=400, detail=_tool_loop_break_detail(exc))` to the non-streaming `messages()` handler. `detail` is a flat dict:
 
   ```json
   {
@@ -1850,17 +1853,17 @@ M  tests/test_fallback_cache_observed.py
   }
   ```
 
-  クライアントは `detail.error == "tool_loop_detected"` で branch 可能、`message` は `str(exc)` と同一でログ grep フレンドリー
-- streaming `_anthropic_sse_iterator` に `except ToolLoopBreakError` ブランチを追加、Anthropic 標準 envelope (`error.type == "invalid_request_error"`) + `error.tool_loop` ネストで構造化フィールドを露出。HTTP は 200 のまま (StreamingResponse はヘッダ確定後で 4xx に切り替えられない、midstream-error と同じ事情)
-- helper 2 つ: `_tool_loop_break_extension(exc)` (両形式で共有する detection payload) / `_tool_loop_break_detail(exc)` (非 streaming flat dict 構築)
-- `args_canonical` は両形式から意図的に除外 (tool input にはユーザデータが含まれうるため、400 detail / SSE error event に流出させない)
+  Clients can branch on `detail.error == "tool_loop_detected"`; `message` is identical to `str(exc)`, log-grep friendly
+- Adds an `except ToolLoopBreakError` branch to the streaming `_anthropic_sse_iterator`, exposing structured fields via the standard Anthropic envelope (`error.type == "invalid_request_error"`) nested under `error.tool_loop`. HTTP status stays 200 (a StreamingResponse can't switch to 4xx once headers are committed — same constraint as the existing mid-stream-error handling)
+- Two helpers: `_tool_loop_break_extension(exc)` (the detection payload shared by both formats) / `_tool_loop_break_detail(exc)` (builds the non-streaming flat dict)
+- `args_canonical` is deliberately excluded from both formats (tool input can contain user data, so it must not leak into the 400 detail / SSE error event)
 
 #### Tests
 
-- **`tests/test_ingress_anthropic.py`** + 2:
-  - `_LoopBreakingEngine` クラス + `client_and_loop_breaking_engine` fixture を追加
-  - `test_break_action_non_streaming_returns_400_with_structured_detail` — 400 + `detail.error="tool_loop_detected"` + 5 detection field + `args_canonical` 不在を検証
-  - `test_break_action_streaming_emits_invalid_request_error_event` — 200 + 単発 SSE error event + Anthropic 標準 envelope + `error.tool_loop` ネスト + `args_canonical` 不在を検証
+- **`tests/test_ingress_anthropic.py`** +2:
+  - Added `_LoopBreakingEngine` class + `client_and_loop_breaking_engine` fixture
+  - `test_break_action_non_streaming_returns_400_with_structured_detail` — verifies 400 + `detail.error="tool_loop_detected"` + the 5 detection fields + absence of `args_canonical`
+  - `test_break_action_streaming_emits_invalid_request_error_event` — verifies 200 + a single SSE error event + the standard Anthropic envelope + `error.tool_loop` nesting + absence of `args_canonical`
 
 ### v1.9 series summary
 
@@ -1871,46 +1874,46 @@ M  tests/test_fallback_cache_observed.py
 | a3 | v1.9-E phase 1 | L3 Tool-loop detection guard (warn / inject / break) |
 | a4 | v1.9-C | Adaptive Routing — health-based dynamic chain priority |
 | a5 | v1.9-D | Cost-aware Dashboard — Anthropic prompt-cache aware |
-| a6 | v1.9-A streaming patch | `_emit_cache_observed` を `stream_anthropic` に追加 (実装漏れ修正) |
-| **GA** | **v1.9-E phase 1 patch** | **`break` action の ingress 400 取りこぼし修正** (本 entry) |
+| a6 | v1.9-A streaming patch | Added `_emit_cache_observed` to `stream_anthropic` (fixing a missed implementation) |
+| **GA** | **v1.9-E phase 1 patch** | **Fixed the `break` action's ingress 400 gap** (this entry) |
 
-### Real-machine verification (2026-04-29, LM Studio + ollama)
+### Real-machine verification (2026-04-29, LM Studio + Ollama)
 
 ```
-E-2 (warn):    tool-loop-detected ... action: "warn"   → 200 OK + provider 応答
-E-3 (inject):  tool-loop-detected ... action: "inject" → system に hint 追加 + 200 OK
-                                                         + cache_read_input_tokens: 453 (prefix キャッシュ命中)
+E-2 (warn):    tool-loop-detected ... action: "warn"   → 200 OK + provider response
+E-3 (inject):  tool-loop-detected ... action: "inject" → hint appended to system + 200 OK
+                                                         + cache_read_input_tokens: 453 (prefix cache hit)
 E-4 (break, non-stream): 400 + {"detail":{"error":"tool_loop_detected","profile":"test-loop-break",
                                            "tool_name":"Read","repeat_count":3,...}}
 E-4 (break, stream):     200 + event: error
                                data: {"type":"error","error":{"type":"invalid_request_error",
                                       "tool_loop":{"profile":"test-loop-break","repeat_count":3,...}}}
 
-C  (adaptive, 静止):  全 provider 同速 → static order 維持、`adaptive-routing-applied` 出ない
-C  (adaptive, 発火):  サイズ差 chain (lmstudio 27B-dense 474ms / ollama qwen-coder-1.5b 134ms / openrouter-free n/a)
-                      → global_median 304ms × 1.5 = 456ms、lmstudio 474ms ≥ 456ms → demote +1
+C  (adaptive, idle):  all providers same speed → static order maintained, no `adaptive-routing-applied` fired
+C  (adaptive, triggered): a chain with mixed sizes (lmstudio 27B-dense 474ms / ollama qwen-coder-1.5b 134ms / openrouter-free n/a)
+                      → global_median 304ms × 1.5 = 456ms; lmstudio's 474ms ≥ 456ms → demote +1
                       → effective_order: [ollama-qwen-coder-1_5b, openrouter-free, lmstudio-...]
-                      → 試験 4 回目から ollama-qwen-coder-1_5b 行きに切り替わって着地、
-                         debounce 30s で oscillation も観察されず
+                      → switched to routing through ollama-qwen-coder-1_5b starting from the 4th trial run,
+                         and no oscillation was observed with the 30s debounce
 ```
 
-E-2/E-3 は a3 で観察済み、E-4 (両形式) と C 発火パスは GA 直前に実機で初観察。verification.md には MoE モデルの罠 (Qwen3.6-35B-A3B は active 3.8B で速い) と rolling-window タイミング制約の注意を後追いで加筆予定 (本リリースには含まず)。
+E-2/E-3 were already observed in a3; E-4 (both formats) and the C trigger path were observed on real hardware for the first time just before GA. verification.md is planned to get a follow-up addendum covering the MoE model trap (Qwen3.6-35B-A3B is fast because only 3.8B is active) and rolling-window timing caveats (not included in this release).
 
 ### Migration
 
-不要。**v1.8.x / v1.9.0a* からの自然なアップグレード**:
+None needed. **A natural upgrade from v1.8.x / v1.9.0a\***:
 
-- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
-- `tool_loop_action` を未指定または `warn` / `inject` で運用していた profile は挙動完全変化なし
-- `tool_loop_action: break` を既に使っていた profile のみ status code が 5xx → 4xx に変化 (a3〜a6 では実装バグで 500 Internal Server Error が返っていた、1.9.0 で docstring が約束する 400 + 構造化 detail に修正)。実運用で `break` を本番投入していたケースは想定されにくく、検証用途であれば修正後の方が期待挙動
+- The `coderouter` command name / Python import name / providers.yaml format / env vars / ingress URL are all unchanged
+- Profiles that left `tool_loop_action` unset or set to `warn` / `inject` see no behavior change at all
+- Only profiles that were already using `tool_loop_action: break` see a status-code change from 5xx to 4xx (a3 through a6 had an implementation bug that returned a 500 Internal Server Error; 1.9.0 fixes it to the 400 + structured detail the docstring already promised). It's unlikely anyone had `break` in production use for real traffic; for verification purposes, the fixed behavior is the expected one
 
-### Out of scope (v1.10 以降)
+### Out of scope (v1.10+)
 
-v1.9 series は意図的に閉じる:
+The v1.9 series deliberately closes here:
 
-- **v1.9-B2** — `message_delta` event の usage 集約で、streaming 経路でも実 token 数 / cache_read / cache_creation を取得 (現状は `outcome=unknown` 固定)
-- **v1.9-E phase 2** — L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder)
-- **v1.10-?** — plan.md §13 系 (multi-tenant routing, etc.) — 別 minor
+- **v1.9-B2** — aggregating usage from `message_delta` events to get real token counts / cache_read / cache_creation on the streaming path too (currently fixed at `outcome=unknown`)
+- **v1.9-E phase 2** — L2 Memory pressure (LM Studio / Ollama backend OOM detection) / L5 Backend health (continuous probing + chain reorder)
+- **v1.10-?** — the plan.md §13 lineage (multi-tenant routing, etc.) — a separate minor release
 
 ### Files touched
 
@@ -1925,44 +1928,44 @@ M  tests/test_ingress_anthropic.py
 
 ---
 
-## [v1.9.0a6] — 2026-04-28 (v1.9-A streaming パスの cache-observed emit 漏れ patch)
+## [v1.9.0a6] — 2026-04-28 (Patch for a missed v1.9-A cache-observed emit on the streaming path)
 
-**Theme: 実機検証で発見した v1.9-A の小さな実装ギャップを潰す。** v1.9-A の CHANGELOG / `CacheOutcome` docstring で「streaming レスポンスは `outcome=unknown` で記録される」と約束していたが、`stream_anthropic` 経路に `_emit_cache_observed` の呼び出しが実装漏れしていた (非 streaming `generate_anthropic` のみ実装済み)。実機で `curl -N stream:true` を投げても JSONL に `cache-observed` event が現れない事で発覚。doc で約束していた動作に実装を揃える。
+**Theme: close a small implementation gap in v1.9-A found during real-machine verification.** The v1.9-A CHANGELOG / `CacheOutcome` docstring promised that "streaming responses are recorded with `outcome=unknown`," but the call to `_emit_cache_observed` was never actually added to the `stream_anthropic` path (only the non-streaming `generate_anthropic` had it). This was discovered when a real `curl -N stream:true` request produced no `cache-observed` event in the JSONL. This patch brings the implementation in line with what the docs already promised.
 
-- Tests: 826 → **828** (+2: streaming 成功時 emit / streaming 失敗時 emit せず)
-- Runtime deps: 5 → 5 (28 sub-release 連続据え置き)
-- Backward compat: 完全互換、profile / API 全部変更なし
+- Tests: 826 → **828** (+2: emit on streaming success / no emit on streaming failure)
+- Runtime deps: 5 → 5 (28 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no changes to profile / API
 - Pre-release: `1.9.0a6`
 
 ### Changes
 
-#### `coderouter/routing/fallback.py` `stream_anthropic` に cache-observed emit を追加
+#### Added cache-observed emit to `stream_anthropic` in `coderouter/routing/fallback.py`
 
-- `_apply_tool_loop_guard` 直後に `request_had_cache_control = anthropic_request_has_cache_control(request)` を変数化 (v0.5-B の inline call と新規 emit 用 caller の二重評価を回避)
-- successful stream の最後 (`async for ev in event_iter` 完走後、`return` の直前) に `log_cache_observed(...)` を呼ぶ
-  - `outcome="unknown"` (v1.9-B が `message_delta` 集約するまで streaming は usage 取得しない約束)
+- Right after `_apply_tool_loop_guard`, hoisted `request_had_cache_control = anthropic_request_has_cache_control(request)` into a variable (avoiding double evaluation between the existing v0.5-B inline call and the new emit caller)
+- Calls `log_cache_observed(...)` at the end of a successful stream (right before `return`, after `async for ev in event_iter` completes)
+  - `outcome="unknown"` (per the promise that streaming won't get real usage until v1.9-B aggregates `message_delta`)
   - `streaming=True`
-  - tokens は all 0 (engine は streaming 経路の usage を集約していない、cost も 0)
-- 非 streaming `generate_anthropic` の挙動には影響なし
+  - All token counts are 0 (the engine doesn't aggregate usage on the streaming path yet, so cost is also 0)
+- No effect on the non-streaming `generate_anthropic` behavior
 
 #### Tests
 
-- **`tests/test_fallback_cache_observed.py`** + 2:
-  - `test_cache_observed_fires_on_streaming_with_unknown_outcome` — 成功 streaming で `outcome=unknown` / `streaming=True` / `request_had_cache_control=True` が記録される
-  - `test_cache_observed_streaming_does_not_fire_on_provider_failure` — provider 失敗時は emit しない (非 streaming と同じ contract)
-- 上記のため `_CacheAnthropicAdapter.stream_anthropic` を `NotImplementedError` raise から「3 events (start / delta / stop) を yield する minimal stream」に拡張
+- **`tests/test_fallback_cache_observed.py`** +2:
+  - `test_cache_observed_fires_on_streaming_with_unknown_outcome` — a successful stream records `outcome=unknown` / `streaming=True` / `request_had_cache_control=True`
+  - `test_cache_observed_streaming_does_not_fire_on_provider_failure` — no emit on provider failure (same contract as non-streaming)
+- To support the above, extended `_CacheAnthropicAdapter.stream_anthropic` from raising `NotImplementedError` to a "minimal stream yielding 3 events (start / delta / stop)"
 
 ### Why
 
-v1.9-A 検証中に「stream:true の curl を投げても `cache-observed` log が JSONL に出ない」を発見 (`docs/inside/verification.md` の A-3 検証パス)。v1.9-A の `CacheOutcome` docstring を読み直すと「streaming responses always pair with `outcome=unknown` until v1.9-B aggregates `message_delta`」と書いてあったが、実装が `generate_anthropic` のみで `stream_anthropic` には emit を入れ忘れていた。
+Discovered during v1.9-A verification that "sending a stream:true curl produces no `cache-observed` log in the JSONL" (verification path A-3 in `docs/inside/verification.md`). Re-reading the v1.9-A `CacheOutcome` docstring showed it said "streaming responses always pair with `outcome=unknown` until v1.9-B aggregates `message_delta`," but the implementation only covered `generate_anthropic` — the emit call had simply been forgotten in `stream_anthropic`.
 
-これは **doc-implementation gap**: dashboard / metrics dashboard 利用者から見ると「streaming で動いているはずなのに observation が記録されない」という不整合になる。v1.9.0a6 は約束と実装を揃える小 patch。
+This is a **doc-implementation gap**: from a dashboard / metrics dashboard user's perspective, it looked inconsistent — "streaming is supposedly working, but no observation is recorded." v1.9.0a6 is a small patch to align the promise with the implementation.
 
-副次的効果として A-3 (`hit_rate=null when only `unknown` observations`) の実機検証もこの patch で初めて可能になった。
+As a side effect, this patch also made real-machine verification of A-3 (`hit_rate=null when only "unknown" observations`) possible for the first time.
 
 ### Migration
 
-`pyproject.toml version 1.9.0a5 → 1.9.0a6`、`coderouter --version` は 1.9.0a6 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。Streaming 経路のレスポンス内容も変化なし — log line が 1 件追加されるだけ。
+`pyproject.toml version 1.9.0a5 → 1.9.0a6`, `coderouter --version` returns 1.9.0a6. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** No change to streaming-path response content either — just one additional log line.
 
 ### Files touched
 
@@ -1973,90 +1976,90 @@ M  pyproject.toml
 M  tests/test_fallback_cache_observed.py
 ```
 
-### Out of scope (v1.9-B 送り)
+### Out of scope (deferred to v1.9-B)
 
-- `message_delta` event aggregation で streaming 時にも実 token 数 / cache_read / cache_creation を取得する → outcome を unknown 固定でなく実値で出せるようにする
+- Aggregating `message_delta` events to get real token counts / cache_read / cache_creation on streaming too → surfacing real values for outcome instead of a fixed unknown
 
 ---
 
 ## [v1.9.0a5] — 2026-04-28 (v1.9-D: Cost-aware Dashboard — Anthropic prompt-cache aware)
 
-**Theme: 「いくら使ってる」を可視化、cache savings を別枠で。** v1.9-A で観測、v1.9-B で透過保証、v1.9-D で **金額に翻訳**。Anthropic の prompt-cache 価格モデル (cache_read 90% 割引、cache_creation 25% 増し) を最初から正確に実装、LiteLLM 競合品が **cache savings を別計算しない** 弱点を構造的にカバー。
+**Theme: make "how much is being spent" visible, with cache savings broken out separately.** v1.9-A observed it, v1.9-B guaranteed transparency, and v1.9-D **translates it into money**. Implements Anthropic's prompt-cache pricing model (90% discount on cache_read, 25% premium on cache_creation) accurately from the start, structurally covering a weakness in competing products like LiteLLM, which **don't compute cache savings separately**.
 
-`docs/inside/future.md` §5.5 の v1.9-D 範囲を実装。
+Implements the v1.9-D scope from `docs/inside/future.md` §5.5.
 
-- Tests: 811 → **826** (+15: pure compute_cost 8 / collector dispatch 4 / Prometheus exposition 3)
-- Runtime deps: 5 → 5 (27 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` の `cost:` フィールドは optional (unset = 0 contribution)
+- Tests: 811 → **826** (+15: 8 pure compute_cost / 4 collector dispatch / 3 Prometheus exposition)
+- Runtime deps: 5 → 5 (27 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; the `cost:` field in `providers.yaml` is optional (unset = 0 contribution)
 - Pre-release: `1.9.0a5`
 
 ### Changes
 
-#### `coderouter/cost.py` 新規 (~150 LOC)
+#### New `coderouter/cost.py` (~150 LOC)
 
 - `CostBreakdown` dataclass — per-attempt cost components (input/output/cache_read/cache_creation USD + total + savings)
-- `compute_cost_for_attempt(cost_config, *, input_tokens, ..., cache_creation)` 純関数:
-  - 4 token bucket をそれぞれの rate で計算
-  - cache_read tokens を `input_rate × cache_read_discount` で割引
-  - cache_creation tokens を `input_rate × cache_creation_premium` で premium
-  - savings = `cache_read tokens × input_rate × (1 - cache_read_discount)` (cache_creation は premium なので savings には入らない)
-  - 負の token / None config / partial config に対する defensive 処理
+- `compute_cost_for_attempt(cost_config, *, input_tokens, ..., cache_creation)` pure function:
+  - Computes each of the 4 token buckets at its respective rate
+  - Discounts cache_read tokens by `input_rate × cache_read_discount`
+  - Applies a premium to cache_creation tokens via `input_rate × cache_creation_premium`
+  - savings = `cache_read tokens × input_rate × (1 - cache_read_discount)` (cache_creation carries a premium, so it isn't counted toward savings)
+  - Defensive handling for negative tokens / None config / partial config
 
-#### Schema: `CostConfig` 新設
+#### Schema: new `CostConfig`
 
-- **`coderouter/config/schemas.py`**: `CostConfig` BaseModel に `input_tokens_per_million` / `output_tokens_per_million` / `cache_read_discount=0.10` / `cache_creation_premium=1.25` を declare
-- `ProviderConfig.cost: CostConfig | None = None` 追加 — opt-in、unset の provider (local 等) は dashboard に 0 contribution
+- **`coderouter/config/schemas.py`**: `CostConfig` BaseModel declaring `input_tokens_per_million` / `output_tokens_per_million` / `cache_read_discount=0.10` / `cache_creation_premium=1.25`
+- Added `ProviderConfig.cost: CostConfig | None = None` — opt-in; providers that leave it unset (e.g., local ones) contribute 0 to the dashboard
 
 #### Engine integration
 
-- **`coderouter/routing/fallback.py`**: `_emit_cache_observed` を拡張、`provider_config: ProviderConfig | None = None` パラメータを受けて `compute_cost_for_attempt()` で per-attempt USD cost + savings を計算、log payload に折り込む
-- `generate_anthropic` の call site で `adapter.config` を渡す
+- **`coderouter/routing/fallback.py`**: extended `_emit_cache_observed` to accept a `provider_config: ProviderConfig | None = None` parameter, computing per-attempt USD cost + savings via `compute_cost_for_attempt()` and folding it into the log payload
+- The `generate_anthropic` call site passes `adapter.config`
 
-#### Logging schema 拡張
+#### Logging schema extension
 
-- **`coderouter/logging.py`** `CacheObservedPayload` に `cost_usd: float` / `cost_savings_usd: float` フィールド追加 (default 0.0、pre-v1.9-D caller は zero contribution で互換)
-- `log_cache_observed` helper の signature にも optional kwargs 追加
+- **`coderouter/logging.py`**: added `cost_usd: float` / `cost_savings_usd: float` fields to `CacheObservedPayload` (default 0.0; pre-v1.9-D callers remain compatible with zero contribution)
+- Added the corresponding optional kwargs to the `log_cache_observed` helper's signature
 
 #### MetricsCollector: per-provider cost aggregation
 
-- **`coderouter/metrics/collector.py`**: `cache-observed` event の dispatch で cost を集計
+- **`coderouter/metrics/collector.py`**: aggregates cost in the `cache-observed` event dispatch
   - `_cost_total_usd: dict[str, float]` (per-provider)
   - `_cost_savings_usd: dict[str, float]` (per-provider)
   - `_cost_total_usd_aggregate: float` / `_cost_savings_usd_aggregate: float` (process-wide)
-- `snapshot()` 拡張:
+- Extended `snapshot()`:
   - `counters.cost_total_usd` / `cost_savings_usd` (per-provider dict)
   - `counters.cost_total_usd_aggregate` / `cost_savings_usd_aggregate` (process-wide)
-  - 各 provider row に `cost: {total_usd, savings_usd}` panel
-- `reset()` で v1.9-D state も clear
-- 防御的: malformed cost values (str/None) → 0.0 default、handler は raise しない
+  - A `cost: {total_usd, savings_usd}` panel on each provider row
+- `reset()` also clears v1.9-D state
+- Defensive: malformed cost values (str/None) default to 0.0; the handler never raises
 
 #### Prometheus exposition
 
-- **`coderouter/metrics/prometheus.py`**: 新 helper `_counter_float()` (float-valued counter、`.10g` formatter で trailing zero trim) + 2 つの新 metric:
+- **`coderouter/metrics/prometheus.py`**: new `_counter_float()` helper (float-valued counter, `.10g` formatter trimming trailing zeros) + 2 new metrics:
   - `coderouter_cost_total_usd_total{provider}` — cumulative USD billed
   - `coderouter_cost_savings_usd_total{provider}` — cumulative cache savings USD
 
 #### Tests (+15)
 
-- **`tests/test_metrics_cost.py`** 新規:
-  - `compute_cost_for_attempt`: None config / no cache / cache read discount / cache creation premium / combined / negative tokens defensive / partial config (7)
-  - Collector dispatch: per-provider aggregation / zero cost no entry / per-row cost panel / reset / malformed values (5)
+- New **`tests/test_metrics_cost.py`**:
+  - `compute_cost_for_attempt`: None config / no cache / cache read discount / cache creation premium / combined / negative-tokens defensive / partial config (7)
+  - Collector dispatch: per-provider aggregation / zero cost produces no entry / per-row cost panel / reset / malformed values (5)
   - Prometheus: HELP+TYPE / per-provider labels / `_total` suffix (3)
 
 ### Why
 
-`docs/inside/future.md` §5.5 で確立した「LiteLLM ですら未対応の cache savings 計算を最初から正確に実装」の具体実装。Anthropic 価格モデルを 4 token bucket × 4 multiplier で正確に表現、operator が「ローカル LLM 併用でいくら浮いたか」「Anthropic prompt cache でいくら節約できたか」を 1 画面で見える状態を実現。
+The concrete implementation of the plan established in `docs/inside/future.md` §5.5: "accurately compute cache savings from day one, something even LiteLLM doesn't support." Represents the Anthropic pricing model precisely as 4 token buckets x 4 multipliers, letting operators see on a single screen how much they've saved by mixing in local LLMs, and how much Anthropic prompt caching has saved them.
 
-**競合状況**:
-- LiteLLM の cost tracker は `cache_read_input_tokens` を full input rate で billing (= overstate)、savings 別計算なし
-- claude-code-router は cost tracking 自体なし
-- v1.9-D は **Claude Code 系 OSS で唯一、cache-aware cost dashboard を持つ**
+**Competitive landscape**:
+- LiteLLM's cost tracker bills `cache_read_input_tokens` at the full input rate (overstating cost), with no separate savings computation
+- claude-code-router has no cost tracking at all
+- v1.9-D is **the only Claude-Code-family OSS project with a cache-aware cost dashboard**
 
 ### Migration
 
-`pyproject.toml version 1.9.0a4 → 1.9.0a5`、`coderouter --version` は 1.9.0a5 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+`pyproject.toml version 1.9.0a4 → 1.9.0a5`, `coderouter --version` returns 1.9.0a5. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
 
-明示的に有効化する operator は paid provider に `cost:` ブロックを追加:
+Operators who want to opt in explicitly add a `cost:` block to a paid provider:
 
 ```yaml
 providers:
@@ -2066,14 +2069,14 @@ providers:
     model: claude-sonnet-4-8
     api_key_env: ANTHROPIC_API_KEY
     paid: true
-    cost:                              # v1.9-D 新フィールド
+    cost:                              # new field in v1.9-D
       input_tokens_per_million: 3.00
       output_tokens_per_million: 15.00
-      cache_read_discount: 0.10        # default、省略可
-      cache_creation_premium: 1.25     # default、省略可
+      cache_read_discount: 0.10        # default, can be omitted
+      cache_creation_premium: 1.25     # default, can be omitted
 ```
 
-`coderouter serve` 起動後、`/metrics.json` の `counters.cost_total_usd` / `cost_savings_usd` で per-provider cost を取得可能。Prometheus scrape は `coderouter_cost_total_usd_total{provider="anthropic-direct"}` で取れる。
+After starting `coderouter serve`, per-provider cost is available at `/metrics.json` under `counters.cost_total_usd` / `cost_savings_usd`. A Prometheus scrape gets it via `coderouter_cost_total_usd_total{provider="anthropic-direct"}`.
 
 ### Files touched
 
@@ -2089,80 +2092,80 @@ A  coderouter/cost.py
 A  tests/test_metrics_cost.py
 ```
 
-### Out of scope (次回以降)
+### Out of scope (future)
 
-- **`/dashboard` HTML cost panel**: snapshot schema は揃ったが UI 描画は v1.9-D2 で
-- **`coderouter stats --cost` TUI**: 5 行サマリ CLI コマンドは v1.9-D2 で
-- **期間別累積 (1 day / 1 week / 1 month)**: 現在 process-lifetime のみ。期間集計は SQLite persistence と組み合わせて v1.10 候補
-- **OpenAI-shaped engine paths のコスト集計**: Anthropic 非 streaming 経路のみ。OpenAI ingress + streaming 対応は v1.9-C2 と同じ follow-up
+- **`/dashboard` HTML cost panel**: the snapshot schema is ready, but UI rendering is planned for v1.9-D2
+- **`coderouter stats --cost` TUI**: a 5-line summary CLI command, planned for v1.9-D2
+- **Period-based accumulation (1 day / 1 week / 1 month)**: currently process-lifetime only. Period-based aggregation is a v1.10 candidate to pair with SQLite persistence
+- **Cost aggregation for OpenAI-shaped engine paths**: only the Anthropic non-streaming path is covered. OpenAI ingress + streaming support is the same follow-up item as v1.9-C2
 
 ---
 
 ## [v1.9.0a4] — 2026-04-28 (v1.9-C: Adaptive Routing — health-based dynamic chain priority)
 
-**Theme: 「平常時の最適化」を chain に持ち込む。** 静的に declare した `providers` 順序を、live observed の median latency / error rate に基づいて自動再優先化。L5 (v1.9-E phase 3 予定) は二値 (HEALTHY/UNHEALTHY) で crash 対応するのに対し、C は連続値 gradient で **平常時の遅さ** を吸収する。両方とも同じ observation stream から動くが、適用ロジックが直交。
+**Theme: bring "steady-state optimization" into the chain.** Automatically re-prioritizes the statically declared `providers` order based on live-observed median latency / error rate. Whereas L5 (planned for v1.9-E phase 3) handles crashes as a binary (HEALTHY/UNHEALTHY), C absorbs **steady-state slowness** as a continuous gradient. Both run off the same observation stream, but their application logic is orthogonal.
 
-`docs/inside/future.md` §5.4 の v1.9-C 範囲を MVP 実装。**Anthropic 非 streaming パスのみ** 対応 (v1.9-C2 で OpenAI-shaped + streaming follow-up 予定)。
+Implements the v1.9-C MVP scope from `docs/inside/future.md` §5.4. **Only the Anthropic non-streaming path** is covered (OpenAI-shaped + streaming follow-up planned for v1.9-C2).
 
-- Tests: 795 → **811** (+16: stats 4 / no-demote 3 / latency demote 2 / error-rate demote 2 / debounce 2 / engine integration 2 / constants pin 1)
-- Runtime deps: 5 → 5 (26 sub-release 連続据え置き)
-- Backward compat: 完全互換、既存 profile は default の `adaptive: false` で従来挙動を維持
-- Pre-release: `1.9.0a4`、`pip install --pre coderouter-cli` で取得可能
+- Tests: 795 → **811** (+16: 4 stats / 3 no-demote / 2 latency demote / 2 error-rate demote / 2 debounce / 2 engine integration / 1 constants pin)
+- Runtime deps: 5 → 5 (26 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; existing profiles keep prior behavior via the `adaptive: false` default
+- Pre-release: `1.9.0a4`, available via `pip install --pre coderouter-cli`
 
 ### Changes
 
-#### `coderouter/routing/adaptive.py` 新規 (~360 LOC)
+#### New `coderouter/routing/adaptive.py` (~360 LOC)
 
-- `AdaptiveAdjuster` クラス — per-process singleton (engine が 1 つ保持)
-  - `record_attempt(provider, *, latency_ms, success, now=None)` — observation 記録、append on each engine attempt
-  - `stats_for(provider, *, now=None) -> ProviderStats` — rolling-window から median latency + error rate 計算
-  - `compute_effective_order(adapters, *, now=None) -> list[BaseAdapter]` — 静的 chain → 動的順序、debounce 適用
-- `_ProviderObservation` / `_AdjusterState` / `ProviderStats` データクラス
-- `_apply_debounce` 内部メソッド — `last_committed_rank` 比較で debounce window 内の rank 変更を pinning (両方向、demote→promote と promote→demote 両方)
-- 定数:
+- `AdaptiveAdjuster` class — a per-process singleton (the engine holds one)
+  - `record_attempt(provider, *, latency_ms, success, now=None)` — records an observation, appended on every engine attempt
+  - `stats_for(provider, *, now=None) -> ProviderStats` — computes median latency + error rate from the rolling window
+  - `compute_effective_order(adapters, *, now=None) -> list[BaseAdapter]` — turns the static chain into a dynamic order, applying debounce
+- `_ProviderObservation` / `_AdjusterState` / `ProviderStats` dataclasses
+- `_apply_debounce` internal method — pins rank changes within the debounce window by comparing against `last_committed_rank` (in both directions, demote→promote and promote→demote)
+- Constants:
   - `ROLLING_WINDOW_S = 60.0`
-  - `LATENCY_DEMOTE_FACTOR = 1.5` (median × 1.5 を超えたら -1 段)
-  - `ERROR_RATE_DEMOTE_THRESHOLD = 0.10` (10% 失敗で -2 段)
+  - `LATENCY_DEMOTE_FACTOR = 1.5` (demote 1 rank once median × 1.5 is exceeded)
+  - `ERROR_RATE_DEMOTE_THRESHOLD = 0.10` (demote 2 ranks at 10% failure)
   - `DEBOUNCE_S = 30.0`
   - `MIN_SAMPLES_FOR_LATENCY = 3` / `MIN_SAMPLES_FOR_ERROR_RATE = 5`
 
 #### Engine integration (`coderouter/routing/fallback.py`)
 
-- `FallbackEngine.__init__` で `_adaptive_adjuster: AdaptiveAdjuster` を eager 構築。`@property` の `_adaptive` で lazy-fallback も用意 (legacy test `__new__` bypass パターンに対する resilience)
-- `_resolve_anthropic_chain`: profile が `adaptive: true` のときに `_adaptive.compute_effective_order(base)` で chain を再優先化、その後 thinking-capable bucket logic に渡す
-- `_profile_is_adaptive(profile_name)` ヘルパ — chain resolver と recording 側で同じ profile lookup を共有
-- `generate_anthropic` の adapter 呼び出しを `time.monotonic()` で wrap、success/failure 両方で `record_attempt(...)` 呼び出し。auth-flavored failures (401/403) は latency_ms=None で記録 (短絡応答なので latency 信号として無意味)
+- Eagerly constructs `_adaptive_adjuster: AdaptiveAdjuster` in `FallbackEngine.__init__`. Also provides a lazy-fallback `@property` `_adaptive` (resilient against the legacy test `__new__`-bypass pattern)
+- `_resolve_anthropic_chain`: when a profile has `adaptive: true`, re-prioritizes the chain via `_adaptive.compute_effective_order(base)` before passing it on to the thinking-capable bucket logic
+- `_profile_is_adaptive(profile_name)` helper — shared profile lookup between the chain resolver and the recording side
+- Wraps the adapter call in `generate_anthropic` with `time.monotonic()`, calling `record_attempt(...)` on both success and failure. Auth-flavored failures (401/403) are recorded with latency_ms=None (a short-circuit response, meaningless as a latency signal)
 
 #### Logging
 
-- 新 event `adaptive-routing-applied` (info-level) — 静的 chain と effective chain order が異なるときのみ fire。payload に static_order / effective_order / per-provider stats を含む
+- New `adaptive-routing-applied` (info-level) event — fires only when the static chain and effective chain order differ. Payload includes static_order / effective_order / per-provider stats
 
 #### Config schema
 
-- `FallbackChain.adaptive: bool = False` 追加。既存 yaml はそのまま動く (default false)
+- Added `FallbackChain.adaptive: bool = False`. Existing yaml keeps working unchanged (defaults to false)
 
 #### Tests
 
-- **`tests/test_routing_adaptive.py`** 新規 (+16 tests):
-  - **Stats**: unseen / median は success のみ / window roll-off / error rate zero on empty (4)
+- New **`tests/test_routing_adaptive.py`** (+16 tests):
+  - **Stats**: unseen / median uses only successes / window roll-off / error rate zero on empty (4)
   - **No demote**: empty chain / no obs / all fast (3)
-  - **Latency demote**: 1.5× threshold / min samples gate (2)
+  - **Latency demote**: 1.5x threshold / min samples gate (2)
   - **Error rate demote**: 10% threshold / min samples gate (2)
   - **Debounce**: pin within window / release after window (2)
-  - **Engine integration**: static profile not invoking adjuster / adaptive profile invoking adjuster (2)
+  - **Engine integration**: static profile doesn't invoke the adjuster / adaptive profile invokes the adjuster (2)
   - **Constants pin**: ROLLING_WINDOW_S / LATENCY_DEMOTE_FACTOR / ERROR_RATE_DEMOTE_THRESHOLD / DEBOUNCE_S / MIN_SAMPLES_* (1)
 
 ### Why
 
-`docs/inside/future.md` §5.4 で確立した「task-based (auto_router、v1.6-A) + health-based (v1.9-C) の両軸対応」のうち health-based を実装。auto_router は request shape (intent) で profile を選ぶが、profile の chain 内 priority は static のまま。v1.9-C で chain 内 priority が live observed health に追従するようになり、両軸が初めて補完関係を成す。
+Implements the health-based half of the "task-based (auto_router, v1.6-A) + health-based (v1.9-C) dual axis" plan established in `docs/inside/future.md` §5.4. auto_router picks a profile by request shape (intent), but priority within a profile's chain stayed static. v1.9-C lets in-chain priority track live-observed health, so the two axes finally complement each other.
 
-**競合状況**: claude-code-router は task-based 単独、LiteLLM は session-cost-based、何れも latency-aware adaptive routing を持たない。CodeRouter は v1.9-C で **task-based + health-based 両軸** を持つ唯一の Claude Code 系 OSS という位置づけ。
+**Competitive landscape**: claude-code-router is task-based only, LiteLLM is session-cost-based; neither has latency-aware adaptive routing. With v1.9-C, CodeRouter is positioned as the only Claude-Code-family OSS with **both task-based and health-based axes**.
 
 ### Migration
 
-`pyproject.toml version 1.9.0a3 → 1.9.0a4`、`coderouter --version` は 1.9.0a4 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。新フィールド `adaptive: false` がデフォルトなので、既存 profile はゼロ変更で従来動作を維持。
+`pyproject.toml version 1.9.0a3 → 1.9.0a4`, `coderouter --version` returns 1.9.0a4. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** Since the new `adaptive: false` field defaults to false, existing profiles keep prior behavior with zero changes.
 
-明示的に有効化する operator は profile に追加:
+Operators who want to opt in explicitly add this to a profile:
 
 ```yaml
 profiles:
@@ -2171,7 +2174,7 @@ profiles:
       - lmstudio-qwen3-5-9b
       - ollama-gemma4-26b
       - openrouter-free
-    adaptive: true   # 平常時の latency / error rate に基づく動的優先度
+    adaptive: true   # dynamic priority based on steady-state latency / error rate
 ```
 
 ### Files touched
@@ -2185,77 +2188,77 @@ A  coderouter/routing/adaptive.py
 A  tests/test_routing_adaptive.py
 ```
 
-### Out of scope (次回以降の v1.9-C2)
+### Out of scope (future v1.9-C2)
 
-- **OpenAI-shaped engine paths**: `generate` / `stream` (非 Anthropic ingress) からの `record_attempt` 呼び出し。MVP では Anthropic 非 streaming のみカバー
-- **Anthropic streaming**: `stream_anthropic` の latency 計測 (mid-stream success の境界をどこに置くか設計余地あり)
-- **Dashboard panel**: `/dashboard` に effective chain order の可視化 (「static order vs current effective order」の差分強調表示)
-- **MetricsCollector への adaptive 集計**: 現在は `adaptive-routing-applied` log のみ。将来 dashboard panel 用に reorder 回数 / 直近 reorder timestamp などを集計
-- **L5 (v1.9-E phase 3)**: binary HEALTHY/UNHEALTHY backend swap。本実装の continuous gradient と棲み分け、両方とも同じ observation stream を消費する設計
+- **OpenAI-shaped engine paths**: `record_attempt` calls from `generate` / `stream` (non-Anthropic ingress). The MVP covers only Anthropic non-streaming
+- **Anthropic streaming**: latency measurement for `stream_anthropic` (design question of where to draw the mid-stream success boundary)
+- **Dashboard panel**: visualizing the effective chain order in `/dashboard` (highlighting the diff between "static order vs. current effective order")
+- **Adaptive aggregation in MetricsCollector**: currently only the `adaptive-routing-applied` log exists; future work would aggregate reorder counts / most-recent reorder timestamp for a dashboard panel
+- **L5 (v1.9-E phase 3)**: binary HEALTHY/UNHEALTHY backend swap. Designed to coexist with this implementation's continuous gradient, both consuming the same observation stream
 
 ---
 
 ## [v1.9.0a3] — 2026-04-28 (v1.9-E phase 1: L3 Tool-loop detection guard)
 
-**Theme: Long-run reliability の最初の guard。** `docs/inside/future.md` §5.3 の v1.9-E は L2/L3/L5 の 3 系統障害を扱う 1-2 週間のまとまった作業。1 commit で全部やると重いので **L3 (Tool loop detection) → L2 (Memory pressure) → L5 (Backend health)** の 3 段階で alpha pre-release を切る。
+**Theme: the first Long-run reliability guard.** v1.9-E in `docs/inside/future.md` §5.3 is a 1-2 week chunk of work covering 3 failure classes: L2/L3/L5. Doing it all in one commit would be too heavy, so it's split into an alpha pre-release across 3 stages: **L3 (Tool loop detection) → L2 (Memory pressure) → L5 (Backend health)**.
 
-L3 は最も isolated で HTTP 系の依存なし、~300 LOC、self-contained。「Claude Code を 8 時間連続で local LLM に向けて使っても止まらない」を訴求するための最初の具体実装。
+L3 is the most isolated, with no HTTP-related dependencies, ~300 LOC, self-contained. It's the first concrete implementation toward the pitch of "keep using Claude Code against a local LLM for 8 hours straight without it getting stuck."
 
-- Tests: 779 → **795** (+16: pure detect 8 / inject mutation 3 / engine helper 5)
-- Runtime deps: 5 → 5 (25 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` 編集不要 (新フィールドはすべて default 値あり)
-- Pre-release: `1.9.0a3`、`pip install --pre coderouter-cli` で取得可能
+- Tests: 779 → **795** (+16: 8 pure detect / 3 inject mutation / 5 engine helper)
+- Runtime deps: 5 → 5 (25 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no `providers.yaml` edits required (all new fields have defaults)
+- Pre-release: `1.9.0a3`, available via `pip install --pre coderouter-cli`
 
 ### Changes
 
-#### `coderouter/guards/` 新パッケージ + L3 detector
+#### New `coderouter/guards/` package + L3 detector
 
-- **`coderouter/guards/__init__.py`** 新規 — Long-run guards のパッケージドッジ。L2 / L5 が今後追加される予定地。
-- **`coderouter/guards/tool_loop.py`** 新規 (~250 LOC):
-  - `detect_tool_loop(request, *, window, threshold) -> ToolLoopDetection | None` 純関数。直近 `window` 件の assistant `tool_use` ブロックの**末尾連続**で同一 `(name, args)` が `threshold` 回以上発生していると検知
-  - `ToolUseRecord` / `ToolLoopDetection` データクラス
-  - `inject_loop_break_hint(request, *, hint)` — system フィールドに hint を append (str / None / list-of-blocks の 3 形を吸収)
-  - `ToolLoopBreakError` (CodeRouterError 派生) — `break` action 用 exception
-  - `DEFAULT_LOOP_INJECT_HINT` 定数 — 「You appear to be calling the same tool with the same arguments repeatedly...」
-  - **canonical-form JSON 比較** (`json.dumps(args, sort_keys=True)`) で `{"a":1,"b":2}` と `{"b":2,"a":1}` を同一視
-  - **trailing-run only** 検出 — 過去に脱出済みの streak は無視 (現在状態のみが actionable)
+- New **`coderouter/guards/__init__.py`** — package home for Long-run guards. Reserves space for L2 / L5 to be added later.
+- New **`coderouter/guards/tool_loop.py`** (~250 LOC):
+  - `detect_tool_loop(request, *, window, threshold) -> ToolLoopDetection | None` pure function. Detects when the same `(name, args)` occurs `threshold`+ times in the **trailing consecutive run** of assistant `tool_use` blocks within the last `window` entries
+  - `ToolUseRecord` / `ToolLoopDetection` dataclasses
+  - `inject_loop_break_hint(request, *, hint)` — appends a hint to the system field (handles all 3 shapes: str / None / list-of-blocks)
+  - `ToolLoopBreakError` (a `CodeRouterError` subclass) — the exception for the `break` action
+  - `DEFAULT_LOOP_INJECT_HINT` constant — "You appear to be calling the same tool with the same arguments repeatedly..."
+  - **Canonical-form JSON comparison** (`json.dumps(args, sort_keys=True)`) treats `{"a":1,"b":2}` and `{"b":2,"a":1}` as identical
+  - **Trailing-run-only** detection — ignores streaks that were already broken in the past (only the current state is actionable)
 
 #### Engine integration
 
-- **`coderouter/routing/fallback.py`**: `_apply_tool_loop_guard(request, config)` ヘルパ追加。`generate_anthropic` / `stream_anthropic` の chain dispatch 直前で呼ばれる。Action 別の挙動:
-  - `warn`: log のみ、request はそのまま
-  - `inject`: log + `inject_loop_break_hint` で system 注入された新 request を返す
+- **`coderouter/routing/fallback.py`**: added an `_apply_tool_loop_guard(request, config)` helper, called right before chain dispatch in `generate_anthropic` / `stream_anthropic`. Behavior by action:
+  - `warn`: log only, request passed through unchanged
+  - `inject`: log + returns a new request with the system prompt modified via `inject_loop_break_hint`
   - `break`: log + `raise ToolLoopBreakError`
-- profile lookup 失敗時は silent no-op (chain resolution が別経路で error を出すので二重診断にならない)
+- Silent no-op on profile lookup failure (chain resolution surfaces the error through a separate path, avoiding double diagnostics)
 
 #### Config schema
 
-- **`coderouter/config/schemas.py`** `FallbackChain` 拡張:
+- Extended `FallbackChain` in **`coderouter/config/schemas.py`**:
   - `tool_loop_window: int = 5` (range 2-50)
   - `tool_loop_threshold: int = 3` (range 2-50)
   - `tool_loop_action: Literal["warn", "inject", "break"] = "warn"`
-- 既存 profile はすべて default で warn-only として動作 → 既存 deployment はゼロ変更
+- All existing profiles default to warn-only → zero change for existing deployments
 
 #### Logging
 
-- **`coderouter/logging.py`**: `tool-loop-detected` warn-level log shape を新設
+- **`coderouter/logging.py`**: new `tool-loop-detected` warn-level log shape
   - `ToolLoopDetectedPayload` TypedDict (profile / tool_name / repeat_count / threshold / window / action)
-  - `log_tool_loop_detected()` helper — 単一の chokepoint
-- 3 つの action すべてが同じ log line を fire するので dashboard は detection 全件を捕捉できる (action は label として区別)
+  - `log_tool_loop_detected()` helper — a single chokepoint
+- All 3 actions fire the same log line, so the dashboard can capture every detection (with action as a distinguishing label)
 
 ### Why
 
-`docs/inside/future.md` §1 で確立した Vision「Local LLM で agent を長時間回すための信頼性層」の P3 (Long-run Reliability) の最初の具体実装。L3 が最も isolated で実装シンプル / テスト容易 / 単独で価値があり、最初の sub-release に最適。
+The first concrete implementation of P3 (Long-run Reliability) from the Vision established in `docs/inside/future.md` §1 — "a reliability layer for running agents on local LLMs over long sessions." L3 is the most isolated, simplest to implement, easiest to test, and valuable on its own, making it the natural first sub-release.
 
-「Claude Code が同じファイルを 5 回 Read し続ける」「Bash で同じコマンドを 3 回叩いて止まらない」というのは長時間 agent loop で頻出する典型症状で、L3 はその検知を request shape だけで完結させる (Claude Code は full conversation history を毎回送るので tail inspection で十分)。
+"Claude Code keeps Reading the same file 5 times" or "keeps hitting the same Bash command 3 times without stopping" are typical symptoms in long-running agent loops, and L3 closes the detection loop using request shape alone (Claude Code sends the full conversation history every time, so tail inspection is sufficient).
 
-**競合状況** (future.md §3 referenced): L3 を体系的に対処する Claude Code 系 OSS は 2026-04-27 時点で調査リスト中ゼロ。本実装は単独差別化軸として位置づく。
+**Competitive landscape** (referenced in future.md §3): as of 2026-04-27, zero Claude-Code-family OSS projects in the survey list systematically address L3. This implementation stands as a distinct differentiator.
 
 ### Migration
 
-`pyproject.toml version 1.9.0a2 → 1.9.0a3`、`coderouter --version` は 1.9.0a3 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。新 schema フィールドはすべて default 値ありなので、既存 yaml はそのままロード可能で、警告の挙動も warn level (ログ出力のみ) なので既存処理に副作用なし。
+`pyproject.toml version 1.9.0a2 → 1.9.0a3`, `coderouter --version` returns 1.9.0a3. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** All new schema fields have defaults, so existing yaml loads as-is, and since the default action is warn level (logging only), there's no side effect on existing processing.
 
-明示的に有効化したい operator は profile に以下を追加:
+Operators who want to opt in explicitly add this to a profile:
 
 ```yaml
 profiles:
@@ -2263,7 +2266,7 @@ profiles:
     providers: [...]
     tool_loop_window: 5
     tool_loop_threshold: 3
-    tool_loop_action: inject   # または warn / break
+    tool_loop_action: inject   # or warn / break
 ```
 
 ### Files touched
@@ -2279,74 +2282,74 @@ A  coderouter/guards/tool_loop.py
 A  tests/test_guards_tool_loop.py
 ```
 
-### Out of scope (次回以降の v1.9-E phase)
+### Out of scope (future v1.9-E phases)
 
-- **L2 (Memory pressure awareness)**: Ollama `/api/ps` / LM Studio `/v1/models` / llama.cpp `/proc/meminfo` 直読みで backend memory probe、95% 超で軽量 model に swap
-- **L5 (Backend health continuous monitoring)**: 60s 周期の健康 probe、UNHEALTHY を chain 末尾に降格 / 復帰時に元 priority 戻し、dashboard に effective chain order
-- **MetricsCollector への loop event 集計**: 現在は構造化 log のみ、将来 dashboard panel で「直近 24h の loop 検知 N 件」表示
-- **inject hint の operator override**: 現在 `DEFAULT_LOOP_INJECT_HINT` のみ、将来 profile-level `tool_loop_inject_hint` で日本語化等可能に
+- **L2 (Memory pressure awareness)**: backend memory probing by reading Ollama `/api/ps` / LM Studio `/v1/models` / llama.cpp `/proc/meminfo` directly, swapping to a lighter model above 95%
+- **L5 (Backend health continuous monitoring)**: a 60s-cycle health probe, demoting UNHEALTHY to the end of the chain / restoring original priority on recovery, with effective chain order shown on the dashboard
+- **Loop-event aggregation in MetricsCollector**: currently structured logs only; future dashboard panel would show "N loop detections in the last 24h"
+- **Operator override of the inject hint**: currently only `DEFAULT_LOOP_INJECT_HINT`; a future profile-level `tool_loop_inject_hint` would allow localization (e.g., Japanese) etc.
 
 ---
 
 ## [v1.9.0a2] — 2026-04-28 (v1.9-B: Cross-backend cache passthrough + capability gate + doctor cache probe)
 
-**Theme: v1.9-A の「観測」を「保証」へ。** capability registry に `cache_control` フィールドを新設し、Claude 4 family + LM Studio 経由 Qwen3.5/3.6 を bundled で宣言。doctor に新 probe `_probe_cache` を追加し、cache_control の round-trip (1 回目 creation → 2 回目 read) を実機 verify。
+**Theme: upgrade v1.9-A's "observation" into a "guarantee."** Introduces a `cache_control` field in the capability registry, bundling declarations for the Claude 4 family + Qwen3.5/3.6 via LM Studio. Adds a new doctor probe, `_probe_cache`, verifying the cache_control round trip on real hardware (1st call creates, 2nd call reads).
 
-`docs/inside/future.md` §5.2 の v1.9-B 範囲を実装。挙動変更は capability gate 拡張のみで、既存の `provider_supports_cache_control` 呼び出しは下位互換 (registry 未宣言 anthropic-kind は引き続き True)。
+Implements the v1.9-B scope from `docs/inside/future.md` §5.2. The only behavior change is the extended capability gate; existing `provider_supports_cache_control` calls remain backward compatible (an anthropic-kind provider not declared in the registry still returns True).
 
-- Tests: 759 → **779** (+20: registry resolution 12 / doctor cache probe 8)
-- Runtime deps: 5 → 5 (24 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` / API 全部変更なし
-- Pre-release: `1.9.0a2`、`pip install --pre coderouter-cli` で取得可能
+- Tests: 759 → **779** (+20: 12 registry resolution / 8 doctor cache probe)
+- Runtime deps: 5 → 5 (24 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no changes to `providers.yaml` / API
+- Pre-release: `1.9.0a2`, available via `pip install --pre coderouter-cli`
 
 ### Changes
 
-#### Capability registry: `cache_control` フィールド新設
+#### Capability registry: new `cache_control` field
 
-- **`coderouter/config/capability_registry.py`**: `RegistryCapabilities` / `ResolvedCapabilities` に `cache_control: bool | None` フィールド追加。lookup walker に同フィールドを追加 (first-match-per-flag 既存 semantics に従う)。
-- **`coderouter/data/model-capabilities.yaml`**: bundled で 5 rule 宣言:
-  - `claude-opus-4-*` / `claude-sonnet-4-*` / `claude-haiku-4-*` (kind=anthropic): `cache_control: true` — api.anthropic.com で実機検証済 (2026-04-20、1321 tokens 書き / 1321 tokens 読み)
-  - `qwen3.5-*` / `qwen3.6-*` (kind=anthropic): `cache_control: true` — LM Studio 0.4.12 `/v1/messages` で v1.8.4 実機検証済 (`cache_read_input_tokens: 280` 観測)
-  - openai_compat 系は意図的に未宣言 (= None) → 既存の v0.5-B `capability-degraded reason=translation-lossy` log がそのまま fire
+- **`coderouter/config/capability_registry.py`**: added a `cache_control: bool | None` field to `RegistryCapabilities` / `ResolvedCapabilities`. Added the same field to the lookup walker (following the existing first-match-per-flag semantics).
+- **`coderouter/data/model-capabilities.yaml`**: 5 bundled rule declarations:
+  - `claude-opus-4-*` / `claude-sonnet-4-*` / `claude-haiku-4-*` (kind=anthropic): `cache_control: true` — verified on real hardware against api.anthropic.com (2026-04-20, 1321 tokens written / 1321 tokens read)
+  - `qwen3.5-*` / `qwen3.6-*` (kind=anthropic): `cache_control: true` — verified on real hardware via LM Studio 0.4.12 `/v1/messages` in v1.8.4 (`cache_read_input_tokens: 280` observed)
+  - openai_compat variants are deliberately left undeclared (= None) → the existing v0.5-B `capability-degraded reason=translation-lossy` log continues to fire as-is
 
-#### Capability gate: registry を consult
+#### Capability gate: consults the registry
 
-- **`coderouter/routing/capability.py`**: `provider_supports_cache_control` に `registry: CapabilityRegistry | None = None` kwarg を追加。解決順序を 3 段に:
+- **`coderouter/routing/capability.py`**: added a `registry: CapabilityRegistry | None = None` kwarg to `provider_supports_cache_control`. Resolution order now has 3 tiers:
   1. `provider.capabilities.prompt_cache: true` → True (explicit per-provider)
-  2. registry の `cache_control: true|false` → 即決
-  3. fallback: `provider.kind == "anthropic"` → True (pre-v1.9-B 互換)
-- registry が `False` を返したら kind=anthropic でも False を返すので、upstream regression 時に operator が一時的に `cache_control: false` を user yaml で declare → `capability-degraded` log が fire するという escape hatch が成立
+  2. Registry `cache_control: true|false` → decides immediately
+  3. Fallback: `provider.kind == "anthropic"` → True (pre-v1.9-B compatible)
+- If the registry returns `False`, it returns False even for kind=anthropic, establishing an escape hatch where operators can temporarily declare `cache_control: false` in user yaml on upstream regression → firing the `capability-degraded` log
 
-#### Doctor: `_probe_cache` 新 probe 追加
+#### Doctor: new `_probe_cache` probe
 
-- **`coderouter/doctor.py`**: `_probe_cache` 関数を新設、orchestrator の最後 (streaming probe の後) に組み込み。auth fail 時の SKIP list にも追加。
-  - 動作: 同一 body (~1900 token system prompt + `cache_control: ephemeral`) を 2 回 POST、1 回目で `cache_creation_input_tokens > 0`、2 回目で `cache_read_input_tokens > 0` を期待
-  - **Verdict 4 種**:
-    - **OK**: 2 回目で read > 0 → cache_control 配管が end-to-end 機能している
-    - **NEEDS_TUNING**: 1 回目 creation 観測 / 2 回目 read=0 → TTL 短すぎ or cache key mismatch
-    - **NEEDS_TUNING**: 両方とも creation/read 観測なし → upstream が cache_control を silent ignore (Anthropic compat 不完全) or 1024 token 最低未達
-    - **SKIP**: not anthropic / 未宣言 / upstream 5xx / auth fail
-  - **Gate は意図的に tight**: 2 paid HTTP call を消費するので、registry に `cache_control: true` 明示宣言 OR `providers.yaml capabilities.prompt_cache: true` のときのみ実行。kind=anthropic だけで自動実行はしない (unverified model に対して無駄な call を避ける)
+- **`coderouter/doctor.py`**: new `_probe_cache` function, wired in at the end of the orchestrator (after the streaming probe). Also added to the SKIP list on auth failure.
+  - Behavior: POSTs the same body (~1900-token system prompt + `cache_control: ephemeral`) twice, expecting `cache_creation_input_tokens > 0` on the 1st call and `cache_read_input_tokens > 0` on the 2nd
+  - **4 verdicts**:
+    - **OK**: read > 0 on the 2nd call → cache_control plumbing works end-to-end
+    - **NEEDS_TUNING**: creation observed on the 1st call / read=0 on the 2nd → TTL too short or a cache key mismatch
+    - **NEEDS_TUNING**: neither creation nor read observed on either call → upstream silently ignores cache_control (incomplete Anthropic compat) or the 1024-token minimum wasn't met
+    - **SKIP**: not anthropic / undeclared / upstream 5xx / auth failure
+  - **The gate is deliberately tight**: since it consumes 2 paid HTTP calls, it only runs when the registry explicitly declares `cache_control: true` OR `providers.yaml capabilities.prompt_cache: true` is set. It doesn't auto-run just because kind=anthropic (avoiding wasted calls against unverified models)
 
 #### Tests
 
-- **`tests/test_capability_registry_cache_control.py`** 新規 (+12): registry resolution 4 / capability gate 5 / bundled YAML 検証 3
-  - bundled が `claude-opus-4-8` / `claude-sonnet-4-7` / `claude-haiku-4-1` で `cache_control=true` を返すこと
-  - bundled が `qwen3.5-9b` / `qwen3.6-35b-a3b` で `cache_control=true` を返すこと
-  - bundled が `openai_compat` の `qwen2.5-coder:7b` で undeclared (None) のまま → translation-lossy gate fire を確実にする
-- **`tests/test_doctor_cache_probe.py`** 新規 (+8): probe gate / OK round-trip / NEEDS_TUNING (no hit / no creation) / explicit prompt_cache opt-in / 1st call 5xx → SKIP / auth fail → SKIP
+- New **`tests/test_capability_registry_cache_control.py`** (+12): 4 registry resolution / 5 capability gate / 3 bundled YAML verification
+  - Confirms bundled returns `cache_control=true` for `claude-opus-4-8` / `claude-sonnet-4-7` / `claude-haiku-4-1`
+  - Confirms bundled returns `cache_control=true` for `qwen3.5-9b` / `qwen3.6-35b-a3b`
+  - Confirms bundled leaves `openai_compat`'s `qwen2.5-coder:7b` undeclared (None), ensuring the translation-lossy gate still fires
+- New **`tests/test_doctor_cache_probe.py`** (+8): probe gate / OK round-trip / NEEDS_TUNING (no hit / no creation) / explicit prompt_cache opt-in / 5xx on 1st call → SKIP / auth failure → SKIP
 
 ### Why
 
-v1.9-A で「観測」した cache の動作を、v1.9-B で **どの (kind, model) が cache_control を保証するか** という contract に格上げ。doctor cache probe は **どの競合 (LiteLLM / claude-code-router / etc.) にもない機能** で、operator が「LM Studio で本当に cache が効いてるのか」を 1 コマンドで確認できる単独差別化軸。
+Upgrades the cache behavior "observed" in v1.9-A into a v1.9-B contract of **which (kind, model) combinations guarantee cache_control**. The doctor cache probe is a feature **no competitor (LiteLLM / claude-code-router / etc.) has**, letting operators confirm in a single command whether caching is really working on LM Studio, for example — a standalone differentiator.
 
-LM Studio 0.4.12 を bundled YAML に組み込んだのは、v1.8.4 で実機確認した「Anthropic compat `/v1/messages` 経由で `cache_read_input_tokens: 280` が end-to-end 透過する」という事実を CodeRouter として保証宣言する意味がある。Qwen3.5/3.6 を `kind: anthropic` で declare している operator なら、`coderouter doctor --check-model lmstudio-qwen3-5-9b-anthropic` で OK が出れば prompt caching 実利用可能、という保証関係。
+Including LM Studio 0.4.12 in the bundled YAML formalizes, as a CodeRouter guarantee, the fact verified on real hardware in v1.8.4 that "`cache_read_input_tokens: 280` passes through end-to-end via the Anthropic-compatible `/v1/messages`." For operators declaring Qwen3.5/3.6 as `kind: anthropic`, an OK from `coderouter doctor --check-model lmstudio-qwen3-5-9b-anthropic` is the guarantee that prompt caching is genuinely usable.
 
 ### Migration
 
-`pyproject.toml version 1.9.0a1 → 1.9.0a2`、`coderouter --version` は 1.9.0a2 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+`pyproject.toml version 1.9.0a1 → 1.9.0a2`, `coderouter --version` returns 1.9.0a2. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
 
-`provider_supports_cache_control` は kwarg `registry=None` を追加したので signature は backward-compatible (既存 caller は変更なし)。registry を consult した結果 `False` で hard-disable できるのが新機能だが、bundled YAML は positive 宣言のみ ship なので default 挙動は変化なし。
+`provider_supports_cache_control` adds the `registry=None` kwarg, so the signature stays backward-compatible (no changes needed for existing callers). The new capability is being able to hard-disable via a `False` from the registry, but since the bundled YAML only ships positive declarations, default behavior is unchanged.
 
 ### Files touched
 
@@ -2361,81 +2364,81 @@ A  tests/test_capability_registry_cache_control.py
 A  tests/test_doctor_cache_probe.py
 ```
 
-### Out of scope (次回以降)
+### Out of scope (future)
 
-- **v1.9-E (前倒し)**: Long-run Guards 三段 (L2 memory pressure / L3 tool loop / L5 backend health continuous) — Vision の核心実装
+- **v1.9-E (moved up)**: the 3-stage Long-run Guards (L2 memory pressure / L3 tool loop / L5 backend health continuous) — the core Vision implementation
 - **v1.9-C**: Adaptive Routing (rolling latency window + health-based dynamic priority)
 - **v1.9-D**: Cost-aware Dashboard
-- streaming aggregation: cache 観測の streaming 時 `outcome` 値を `cache_hit/creation/no_cache` に格上げ (v1.9-A の `unknown` から)
+- Streaming aggregation: upgrading the streaming-time `outcome` value for cache observation to `cache_hit/creation/no_cache` (from v1.9-A's `unknown`)
 
 ---
 
-## [v1.9.0a1] — 2026-04-28 (v1.9-A: Cache Observability — Anthropic prompt caching を観測可能に)
+## [v1.9.0a1] — 2026-04-28 (v1.9-A: Cache Observability — making Anthropic prompt caching observable)
 
-**Theme: v1.9 シリーズ最初の alpha pre-release。Anthropic prompt caching の動作を CodeRouter 側で観測可能にし、`cache_read_input_tokens` / `cache_creation_input_tokens` を 4 分類 (cache_hit / cache_creation / no_cache / unknown) で per-provider 集計。**
+**Theme: the first alpha pre-release of the v1.9 series. Makes Anthropic prompt caching behavior observable from CodeRouter's side, aggregating `cache_read_input_tokens` / `cache_creation_input_tokens` per provider across 4 classes (cache_hit / cache_creation / no_cache / unknown).**
 
-`docs/inside/future.md` §5.1 の v1.9-A 範囲を実装。挙動は変えず、観測経路を追加するだけの安全な追加。LiteLLM の `cache_creation_input_tokens` undercounting バグ (future.md §3) を最初から避ける厳密 4 分類集計を導入。次の v1.9-B (cross-backend cache passthrough + capability gate / doctor cache probe) で能動的な cache 制御を追加予定。
+Implements the v1.9-A scope from `docs/inside/future.md` §5.1. A safe addition that changes no behavior — it only adds an observation path. Introduces strict 4-class aggregation that avoids from the start LiteLLM's `cache_creation_input_tokens` undercounting bug (future.md §3). Active cache control (cross-backend cache passthrough + capability gate / doctor cache probe) is planned for the following v1.9-B.
 
 - Tests: 737 → **759** (+22: classify_cache_outcome / collector dispatch / snapshot cache panel / Prometheus exposition / engine emission)
-- Runtime deps: 5 → 5 (23 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` / API 全部変更なし
-- Pre-release: `1.9.0a1` の `a1` は PEP 440 alpha pre-release。`pip install --pre coderouter-cli` で取得可能。`v1.9.0` 正式版は v1.9-B/E/C/D も完了次第
+- Runtime deps: 5 → 5 (23 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no changes to `providers.yaml` / `~/.coderouter/model-capabilities.yaml` / API
+- Pre-release: the `a1` in `1.9.0a1` is a PEP 440 alpha pre-release, available via `pip install --pre coderouter-cli`. The formal `v1.9.0` release will follow once v1.9-B/E/C/D are also complete
 
 ### Changes
 
-#### `cache-observed` 構造化ログイベント新設
+#### New `cache-observed` structured log event
 
-- **`coderouter/logging.py`**: `CacheOutcome` Literal + `CacheObservedPayload` TypedDict + `log_cache_observed()` helper + `classify_cache_outcome()` 4 分類関数を追加。
-  - `cache_hit`: `cache_read_input_tokens > 0` (cache 再利用、〜10% input rate)
-  - `cache_creation`: `cache_creation_input_tokens > 0` かつ hit ではない (cache 書き込み、〜125% input rate)
-  - `no_cache`: usage 受信したが cache フィールド 0/欠損 (cache_control 無し or upstream が握り潰した)
-  - `unknown`: response に usage block 自体無し (streaming / openai_compat 経由 / pre-v1.9-A upstream)
-- **理由**: `provider-ok` event に cache フィールドを混ぜると downstream consumers (collector / JSONL mirror / tests) すべてが新 schema 検証必要。専用 event なら streaming 時の `outcome=unknown` も自然に表現できる
+- **`coderouter/logging.py`**: added a `CacheOutcome` Literal + `CacheObservedPayload` TypedDict + `log_cache_observed()` helper + `classify_cache_outcome()` 4-class classification function.
+  - `cache_hit`: `cache_read_input_tokens > 0` (cache reused, ~10% of input rate)
+  - `cache_creation`: `cache_creation_input_tokens > 0` and not a hit (cache written, ~125% of input rate)
+  - `no_cache`: usage was received but cache fields are 0/missing (no cache_control, or upstream silently dropped it)
+  - `unknown`: the response has no usage block at all (streaming / via openai_compat / pre-v1.9-A upstream)
+- **Rationale**: mixing cache fields into the `provider-ok` event would require every downstream consumer (collector / JSONL mirror / tests) to validate the new schema. A dedicated event naturally represents `outcome=unknown` for the streaming case too
 
-#### Engine (`fallback.py`): 成功 response 毎に cache-observed を emit
+#### Engine (`fallback.py`): emits cache-observed on every successful response
 
-- **`coderouter/routing/fallback.py`**: `generate_anthropic` の `provider-ok` 直後に `_emit_cache_observed()` 呼び出しを追加。`AnthropicResponse.usage.model_extra` から `cache_read_input_tokens` / `cache_creation_input_tokens` を抽出 (Pydantic `extra="allow"` 経由でラウンドトリップ済み)。
-  - native Anthropic + LM Studio `/v1/messages` (`kind: anthropic`) → cache フィールド付き → 4 分類正しく出る
-  - openai_compat → anthropic 変換経由 → cache フィールド無し → `outcome=no_cache` or `unknown`
-- streaming aggregation は v1.9-B 送り (`message_delta` イベント集約が必要)、v1.9-A では非 streaming パスのみ対応
+- **`coderouter/routing/fallback.py`**: added a call to `_emit_cache_observed()` right after `provider-ok` in `generate_anthropic`. Extracts `cache_read_input_tokens` / `cache_creation_input_tokens` from `AnthropicResponse.usage.model_extra` (round-tripped via Pydantic's `extra="allow"`).
+  - Native Anthropic + LM Studio `/v1/messages` (`kind: anthropic`) → cache fields present → 4-class classification comes out correctly
+  - openai_compat → converted via anthropic conversion → no cache fields → `outcome=no_cache` or `unknown`
+- Streaming aggregation is deferred to v1.9-B (requires aggregating `message_delta` events); v1.9-A covers only the non-streaming path
 
-#### MetricsCollector: per-provider cache 集計
+#### MetricsCollector: per-provider cache aggregation
 
-- **`coderouter/metrics/collector.py`**: `cache-observed` event を dispatch table に追加。新カウンタ:
+- **`coderouter/metrics/collector.py`**: added the `cache-observed` event to the dispatch table. New counters:
   - `_cache_read_tokens: Counter[str]` (per-provider)
   - `_cache_creation_tokens: Counter[str]` (per-provider)
-  - `_cache_outcomes: dict[str, Counter[str]]` (per-provider × 4-class)
-  - `_cache_read_tokens_total: int` / `_cache_creation_tokens_total: int` (aggregate、毎 event で incremental 更新、snapshot 時の re-fold コスト回避)
-- `snapshot()` 拡張: `counters.cache_*` (per-provider + aggregate) + 各 provider row に `cache: {read_tokens, creation_tokens, outcomes, hit_rate, observations}` panel を追加
-  - **`hit_rate`** は `cache_hit / (cache_hit + cache_creation + no_cache)`、`unknown` は分母から除外 (signal 無しを 0% 表示するのを回避)
-  - 観測無しなら `hit_rate=None`、dashboard で「—」表示できる
-- `reset()` で v1.9-A state も clear
+  - `_cache_outcomes: dict[str, Counter[str]]` (per-provider x 4-class)
+  - `_cache_read_tokens_total: int` / `_cache_creation_tokens_total: int` (aggregate, incrementally updated on every event, avoiding a re-fold cost at snapshot time)
+- Extended `snapshot()`: added `counters.cache_*` (per-provider + aggregate) plus a `cache: {read_tokens, creation_tokens, outcomes, hit_rate, observations}` panel on each provider row
+  - **`hit_rate`** is `cache_hit / (cache_hit + cache_creation + no_cache)`, excluding `unknown` from the denominator (avoids showing 0% when there's simply no signal)
+  - `hit_rate=None` when there are no observations, letting the dashboard show "—"
+- `reset()` also clears v1.9-A state
 
-#### Prometheus exposition: 3 つの新 counter
+#### Prometheus exposition: 3 new counters
 
 - **`coderouter/metrics/prometheus.py`**:
-  - `coderouter_cache_read_tokens_total{provider="..."}` — cache 再利用された input token 累計
-  - `coderouter_cache_creation_tokens_total{provider="..."}` — cache 書き込み input token 累計
-  - `coderouter_cache_observed_total{provider="...", outcome="cache_hit|cache_creation|no_cache|unknown"}` — 4 分類イベント数
-- `hit_rate` を gauge で expose しないのは Prometheus 慣習に従い (`rate()` で derivative を計算する方が時間窓を正しく扱える)
+  - `coderouter_cache_read_tokens_total{provider="..."}` — cumulative input tokens served from cache
+  - `coderouter_cache_creation_tokens_total{provider="..."}` — cumulative input tokens written to cache
+  - `coderouter_cache_observed_total{provider="...", outcome="cache_hit|cache_creation|no_cache|unknown"}` — event counts per class
+- `hit_rate` is deliberately not exposed as a gauge, following Prometheus convention (deriving it via `rate()` handles time windows correctly)
 
 #### Tests (+22)
 
-- **`tests/test_metrics_cache.py`** (+11): `classify_cache_outcome` 4 cases / collector dispatch / snapshot cache panel / hit_rate=None for idle / unknown-only keeps None / reset clears state / 防御的非 int 受け入れ
-- **`tests/test_metrics_prometheus_cache.py`** (+5): empty-snapshot HELP/TYPE / per-provider read/creation labels / outcome label pair / `_total` suffix
-- **`tests/test_fallback_cache_observed.py`** (+6): cache_hit / cache_creation / no_cache outcome 別 / openai_compat 経路で no_cache or unknown / 失敗時 emit せず / chain fallthrough 時 winning provider のみ emit
+- **`tests/test_metrics_cache.py`** (+11): 4 `classify_cache_outcome` cases / collector dispatch / snapshot cache panel / hit_rate=None when idle / unknown-only keeps None / reset clears state / defensive handling of non-int inputs
+- **`tests/test_metrics_prometheus_cache.py`** (+5): empty-snapshot HELP/TYPE / per-provider read/creation labels / outcome label pairing / `_total` suffix
+- **`tests/test_fallback_cache_observed.py`** (+6): separate outcomes for cache_hit / cache_creation / no_cache / no_cache or unknown via the openai_compat path / no emit on failure / only the winning provider emits on chain fallthrough
 
 ### Why
 
-`docs/inside/future.md` §1 で確立した Vision「Local LLM で agent を長時間回すための信頼性層」の 3 pillar 中、**P1 Connection Stability** の核心要素である Anthropic prompt caching を **観測可能に** することが v1.9 シリーズの最初のステップ。LM Studio 0.4.12 の Anthropic 互換 `/v1/messages` 経由で v1.8.4 に observed した `cache_read_input_tokens: 280` を、CodeRouter 側で **per-provider hit 率として集計・可視化** できるようになった。
+The first step of the v1.9 series is making Anthropic prompt caching — a core element of **P1 Connection Stability**, one of the 3 pillars of the Vision established in `docs/inside/future.md` §1 ("a reliability layer for running agents on local LLMs over long sessions") — **observable**. The `cache_read_input_tokens: 280` observed via LM Studio 0.4.12's Anthropic-compatible `/v1/messages` in v1.8.4 can now be **aggregated and visualized as a per-provider hit rate** on CodeRouter's side.
 
-LiteLLM cluster は `cache_creation_input_tokens` を `no_cache` に丸めて undercount する既知バグ (future.md §3 referenced) があり、CodeRouter は最初から 4 分類厳密集計でこれを回避。Claude Code 特化 OSS の中で **唯一の cache 観測機能** として位置づけ。
+The LiteLLM cluster has a known bug (referenced in future.md §3) that rounds `cache_creation_input_tokens` down into `no_cache`, undercounting it; CodeRouter avoids this from the start with strict 4-class aggregation. This positions CodeRouter as **the only Claude-Code-focused OSS with cache observability**.
 
 ### Migration
 
-`pyproject.toml version 1.8.5 → 1.9.0a1`、`coderouter --version` は 1.9.0a1 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+`pyproject.toml version 1.8.5 → 1.9.0a1`, `coderouter --version` returns 1.9.0a1. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
 
-`/metrics.json` の counters / providers schema は **追加のみ** (新 key `cache_read_tokens` / `cache_creation_tokens` / `cache_outcomes`、provider rows に `cache` panel)、既存 dashboards は壊れない。Prometheus scraper は新メトリクス自動 discovery。
+The `/metrics.json` counters / providers schema changes are **additive only** (new keys `cache_read_tokens` / `cache_creation_tokens` / `cache_outcomes`, plus a `cache` panel on provider rows), so existing dashboards won't break. Prometheus scrapers auto-discover the new metrics.
 
 ### Files touched
 
@@ -2451,50 +2454,50 @@ A  tests/test_metrics_cache.py
 A  tests/test_metrics_prometheus_cache.py
 ```
 
-### Out of scope (次回以降)
+### Out of scope (future)
 
-- **v1.9-B**: cross-backend cache passthrough + capability gate (`capabilities.cache_control` registry / doctor cache probe / openai_compat strip warn) — 「観測」から「保証」へ
-- **v1.9-E (前倒し)**: Long-run Guards 三段 (L2 memory pressure / L3 tool loop / L5 backend health) — Vision の核心実装
-- streaming aggregation: `message_delta` event を集約して streaming 時も `outcome=cache_hit/creation/no_cache` を出せるようにする (v1.9-B 範囲)
+- **v1.9-B**: cross-backend cache passthrough + capability gate (`capabilities.cache_control` registry / doctor cache probe / openai_compat strip warn) — from "observation" to "guarantee"
+- **v1.9-E (moved up)**: the 3-stage Long-run Guards (L2 memory pressure / L3 tool loop / L5 backend health) — the core Vision implementation
+- Streaming aggregation: aggregating `message_delta` events so streaming can also report `outcome=cache_hit/creation/no_cache` (v1.9-B scope)
 
 ---
 
-## [v1.8.5] — 2026-04-28 (doctor NEEDS_TUNING メッセージを v1.8.3 thinking-aware budget の事実に揃える + `docs/lmstudio-direct.md` 新規)
+## [v1.8.5] — 2026-04-28 (Align doctor NEEDS_TUNING messages with the v1.8.3 thinking-aware budget facts + new `docs/lmstudio-direct.md`)
 
-**Theme: 文言の整合 patch + ドキュメント補完。**v1.8.3 で `tool_calls` / `num_ctx` / `streaming` の 3 probe に thinking-aware budget (256 / 1024) を入れた。今回はその事実を NEEDS_TUNING 時の detail メッセージに反映し、operator が「probe budget が小さすぎたのでは」と疑う余地をなくす。あわせて v1.8.4 で実機検証した LM Studio 0.4.12 経由経路を `docs/llamacpp-direct.md` と対をなす形で `docs/lmstudio-direct.md` (+ `.en.md`) として正式化。
+**Theme: a wording-consistency patch plus documentation completion.** v1.8.3 introduced a thinking-aware budget (256 / 1024) across the `tool_calls` / `num_ctx` / `streaming` probes. This release reflects that fact in the NEEDS_TUNING detail messages, removing any room for operators to suspect "maybe the probe budget was too small." It also formalizes the LM Studio 0.4.12 path verified on real hardware in v1.8.4 as `docs/lmstudio-direct.md` (+ `.en.md`), pairing it with `docs/llamacpp-direct.md`.
 
-- Tests: 737 → 737 (既存 assert は phrase-substring を見ていないので追従不要、新規 assertion は不足分を 1 件追加)
-- Runtime deps: 5 → 5 (22 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` / コード側 API 変更なし
+- Tests: 737 → 737 (existing assertions don't check the phrase substring, so no update needed there; added 1 new assertion for the missing case)
+- Runtime deps: 5 → 5 (22 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no changes to `providers.yaml` / `~/.coderouter/model-capabilities.yaml` / code-side API
 
 ### Changes
 
-#### Doctor NEEDS_TUNING 文言更新 (suggestion を thinking-aware budget 前提に揃える)
+#### Doctor NEEDS_TUNING wording update (aligning suggestions with the thinking-aware budget)
 
-- **`coderouter/doctor.py` `_probe_tool_calls`**: 「Common for quantized small models」を残しつつ、thinking モデル時は `Probed with thinking-aware budget (1024 tokens, covers reasoning_content plus the call) — this is a true tools=false case, not budget exhaustion.` を前置。非 thinking 時は `Probed with default budget (256 tokens) — the model produced no tool-shaped output at all.` を前置
-- **`coderouter/doctor.py` `_probe_streaming`**: `finish_reason='length'` 偽陽性回避のため、thinking 時は `Probe sent max_tokens=1024 (thinking-aware), so the cap is server-side options.num_predict rather than the probe budget.` を前置。非 thinking 時は `Probe sent max_tokens=512;` 系を前置
-- **`coderouter/doctor.py` `_probe_num_ctx`**: 「canary missing」3 ケース (declared=None / declared<threshold / declared>=threshold) すべてに、thinking モデル時は `Probe sent max_tokens=1024 (thinking-aware), so the miss is prompt-side truncation rather than reply truncation.` の budget note を追加。これで operator が「probe の reply budget が足りなかったのでは」という疑問を即座に消せる
+- **`coderouter/doctor.py` `_probe_tool_calls`**: keeps "Common for quantized small models," but for thinking models it now prepends `Probed with thinking-aware budget (1024 tokens, covers reasoning_content plus the call) — this is a true tools=false case, not budget exhaustion.` For non-thinking models it prepends `Probed with default budget (256 tokens) — the model produced no tool-shaped output at all.`
+- **`coderouter/doctor.py` `_probe_streaming`**: to avoid a `finish_reason='length'` false positive, prepends `Probe sent max_tokens=1024 (thinking-aware), so the cap is server-side options.num_predict rather than the probe budget.` for thinking models, and a `Probe sent max_tokens=512;`-style note for non-thinking models
+- **`coderouter/doctor.py` `_probe_num_ctx`**: adds a budget note to all 3 "canary missing" cases (declared=None / declared<threshold / declared>=threshold) for thinking models: `Probe sent max_tokens=1024 (thinking-aware), so the miss is prompt-side truncation rather than reply truncation.` This immediately removes any operator doubt about whether the probe's reply budget was insufficient
 
-#### Documentation 補完: `docs/lmstudio-direct.md` 新規
+#### Documentation completion: new `docs/lmstudio-direct.md`
 
-- **`docs/lmstudio-direct.md` / `.en.md` 新規** — v1.8.4 で実機検証した LM Studio 0.4.12 経由経路を `docs/llamacpp-direct.md` と対をなす形で 7 step + Troubleshooting で。M3 Max 64GB / Q4_K_M / Metal 想定 + GUI 操作前提の canonical recipe
-  - Step 1: LM Studio install & Discover タブで Q4_K_M モデルダウンロード (Qwen3.5 9B / Qwen3.6 35B-A3B / Jackrong/Qwopus3.5-9B-v3-GGUF)
-  - Step 2: Chat タブで Load Model (Context 32768 / GPU max / Flash Attention ON)
-  - Step 3: Local Server タブで Port 1234 / Just-in-time Model Loading: ON / Start Server
-  - Step 4: curl 直叩き (OpenAI 互換 + Anthropic 互換 両ルート、native tool_calls / native tool_use 両方確認)
-  - Step 5: CodeRouter に provider 登録 (`kind: openai_compat` 経路 + `kind: anthropic` 経路の 2 種)
-  - Step 6: doctor 6 probe で動作確認 (両ルートとも全 probe OK)
-  - Step 7: CodeRouter 経由 end-to-end (Anthropic prompt caching `cache_read_input_tokens: 280` 観測も含む)
+- New **`docs/lmstudio-direct.md` / `.en.md`** — documents the LM Studio 0.4.12 path verified on real hardware in v1.8.4, pairing it with `docs/llamacpp-direct.md` as 7 steps plus Troubleshooting. A canonical recipe assuming M3 Max 64GB / Q4_K_M / Metal and GUI-driven operation
+  - Step 1: install LM Studio & download a Q4_K_M model via the Discover tab (Qwen3.5 9B / Qwen3.6 35B-A3B / Jackrong/Qwopus3.5-9B-v3-GGUF)
+  - Step 2: Load Model from the Chat tab (Context 32768 / GPU max / Flash Attention ON)
+  - Step 3: Port 1234 / Just-in-time Model Loading: ON / Start Server from the Local Server tab
+  - Step 4: raw curl calls (both OpenAI-compatible and Anthropic-compatible routes, confirming native tool_calls / native tool_use on both)
+  - Step 5: register the provider with CodeRouter (both the `kind: openai_compat` route and the `kind: anthropic` route)
+  - Step 6: verify with the 6 doctor probes (all probes OK on both routes)
+  - Step 7: end-to-end via CodeRouter (including observing Anthropic prompt caching's `cache_read_input_tokens: 280`)
 
 ### Why
 
-v1.8.3 で `tool_calls` probe の active-harmful 誤診断 (thinking モデルに対して `tools: false` 提案) を fix したが、メッセージ文面はそのまま v1.8.2 以前の言い回し (「Common for quantized small models」のみ) を残していた。operator が NEEDS_TUNING を見たときに「probe budget が小さすぎたのでは」「v1.8.2 のバグの再発では」と疑う余地が文面上残っていたのを、**実装が既に thinking-aware なので断定できる** という事実に文言を揃える。診断ツールの出力は実装の confidence を反映すべき。
+v1.8.3 fixed the `tool_calls` probe's active-harmful misdiagnosis (suggesting `tools: false` for thinking models), but the message wording still carried over the pre-v1.8.2 phrasing ("Common for quantized small models" only). This left room for an operator seeing NEEDS_TUNING to suspect "maybe the probe budget was too small" or "maybe the v1.8.2 bug resurfaced." This release aligns the wording with the fact that **the implementation can now state this definitively, since it's already thinking-aware**. A diagnostic tool's output should reflect the implementation's actual confidence.
 
-`docs/lmstudio-direct.md` は v1.8.4 で実機検証 + `examples/providers.yaml` に provider 例追加までは済ませていたが、`docs/llamacpp-direct.md` と並ぶレベルの canonical recipe ドキュメントが欠けていた。LM Studio 経由が現時点で最も `qwen35` / `qwen35moe` architecture を安定して動かせる経路 (Anthropic prompt caching まで透過) なので、operator が辿り着けるドキュメントとして正式化。
+`docs/lmstudio-direct.md` had already been verified on real hardware and added as a provider example to `examples/providers.yaml` in v1.8.4, but a canonical recipe document on par with `docs/llamacpp-direct.md` was still missing. Since the LM Studio path is currently the most stable way to run the `qwen35` / `qwen35moe` architectures (with Anthropic prompt caching passing through transparently), it's formalized as documentation operators can actually find.
 
 ### Migration
 
-`pyproject.toml version 1.8.3 → 1.8.5`、`coderouter --version` は 1.8.5 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。doctor 出力の文面が変わるが verdict と suggested_patch の semantic は完全互換。
+`pyproject.toml version 1.8.3 → 1.8.5`, `coderouter --version` returns 1.8.5. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** The doctor output wording changes, but the verdict and suggested_patch semantics remain fully compatible.
 
 ### Files touched
 
@@ -2508,56 +2511,56 @@ A  docs/lmstudio-direct.en.md
 
 ---
 
-## [v1.8.3] — 2026-04-26 (tool_calls probe も thinking モデル対応 + adapter で `reasoning_content` strip — llama.cpp 直叩き対応)
+## [v1.8.3] — 2026-04-26 (tool_calls probe also made thinking-aware + adapter strips `reasoning_content` — supports llama.cpp direct)
 
-**Theme: v1.8.2 と同日リリースの第 2 弾 patch。Qwen3.6:35b-a3b on llama.cpp の実機検証で発見した 2 つの追加課題 — `tool_calls` probe の thinking モデル偽陽性 + llama.cpp が emit する `reasoning_content` フィールドの adapter strip 不足 — を解消。**
+**Theme: the second patch released the same day as v1.8.2. Resolves 2 additional issues discovered during real-hardware verification of Qwen3.6:35b-a3b on llama.cpp — a thinking-model false positive in the `tool_calls` probe, and the adapter's failure to strip the `reasoning_content` field emitted by llama.cpp.**
 
-v1.8.2 リリース直後、note 記事 v1.8.2「自分が作った診断ツールに自分が騙された話」の続編として **「Ollama 経由で詰んだ Qwen3.6 を Unsloth GGUF + llama.cpp 直叩きで動かしたら native tool_calls が完璧に出た」** を実機検証中、CodeRouter doctor で `tool_calls [NEEDS TUNING]` が依然として出る矛盾に直面。深掘りで `tool_calls` probe の `max_tokens=64` が thinking モデルで `reasoning_content` トークン消費に食い切られる **v1.8.2 で num_ctx / streaming に対して直したのと完全に同じバグ pattern が tool_calls probe にも残っていた** ことが判明。あわせて llama.cpp の `reasoning_content` フィールド (Ollama / OpenRouter は `reasoning`) が openai_compat adapter の strip 対象に入っていなかった事実も発見。両者を v1.8.3 として 1 patch に統合。
+Right after the v1.8.2 release, while verifying on real hardware — as a follow-up to the note article v1.8.2, "How my own diagnostic tool fooled me" — the claim that **"Qwen3.6, stuck via Ollama, produced perfect native tool_calls once run directly through Unsloth GGUF + llama.cpp"**, a contradiction surfaced: CodeRouter's doctor still reported `tool_calls [NEEDS TUNING]`. Digging deeper revealed that the `tool_calls` probe's `max_tokens=64` gets entirely consumed by `reasoning_content` token usage on thinking models — **exactly the same bug pattern already fixed for num_ctx / streaming in v1.8.2, still present in the tool_calls probe.** It also turned up that llama.cpp's `reasoning_content` field (Ollama / OpenRouter use `reasoning`) wasn't included in the openai_compat adapter's strip list. Both are bundled into a single v1.8.3 patch.
 
-**Ollama 経由詰みの真因が完全確定**: Ollama の chat template / tool 仕様未成熟、モデル本体は健全。llama.cpp 直叩きでは Qwen3.6 系の `tool_calls` が native で動作。
+**The real root cause of the Ollama-path failure is now fully confirmed**: Ollama's chat template / tool spec support is immature; the model itself is healthy. Run directly via llama.cpp, the Qwen3.6 family's `tool_calls` works natively.
 
-- Tests: 733 → **737** (+4: tool_calls probe budget thinking variant / reasoning_content strip 3 件)
-- Runtime deps: 5 → 5 (21 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` 編集不要
+- Tests: 733 → **737** (+4: thinking-variant tool_calls probe budget / 3 reasoning_content strip cases)
+- Runtime deps: 5 → 5 (21 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no edits needed to `providers.yaml` / `~/.coderouter/model-capabilities.yaml`
 
 ### Changes
 
-#### Doctor `tool_calls` probe: thinking モデル対応バジェット
+#### Doctor `tool_calls` probe: thinking-aware budget
 
-- **`coderouter/doctor.py`**: `_probe_tool_calls` の `max_tokens` を `64` 固定から **thinking 検出付きの動的選択** (256 default / 1024 thinking) に変更。`_TOOL_CALLS_PROBE_MAX_TOKENS_DEFAULT/_THINKING` 定数を新設、既存の `_is_reasoning_model(provider, resolved)` ヘルパで分岐。
-  - 旧 64 では Qwen3.6:35b-a3b on llama.cpp が `reasoning_content` で 64 token 食い切り → `tool_calls` 出力前に length cap → **NEEDS_TUNING + suggested patch 「`tools: false` にしろ」という真逆の推奨** を出していた
-  - 新 1024 で thinking + tool_call が両方収まる headroom
+- **`coderouter/doctor.py`**: changed `_probe_tool_calls`'s `max_tokens` from a fixed `64` to a **dynamic choice with thinking detection** (256 default / 1024 thinking). Added `_TOOL_CALLS_PROBE_MAX_TOKENS_DEFAULT/_THINKING` constants, branching via the existing `_is_reasoning_model(provider, resolved)` helper.
+  - With the old 64, Qwen3.6:35b-a3b on llama.cpp would consume all 64 tokens on `reasoning_content` → hit the length cap before producing `tool_calls` output → producing **NEEDS_TUNING with a suggested patch to set `tools: false`, exactly the wrong recommendation**
+  - The new 1024 gives enough headroom for both thinking and the tool call
 
-#### Adapter: `reasoning_content` フィールド strip 追加
+#### Adapter: added `reasoning_content` field stripping
 
-- **`coderouter/adapters/openai_compat.py`**: `_strip_reasoning_field` を `_NON_STANDARD_REASONING_KEYS = ("reasoning", "reasoning_content")` の両方を strip するように拡張。
-  - `reasoning` (Ollama / OpenRouter 命名) と `reasoning_content` (llama.cpp `llama-server` 命名) は同じ概念で、ベンダー命名が違うだけ
-  - 厳格な OpenAI client はどちらも unknown key として reject するので、両方 strip するのが正しい
-  - `capability-degraded` log の `dropped` フィールドも `["reasoning", "reasoning_content"]` に更新 (両方 strip し得ることを表現)
+- **`coderouter/adapters/openai_compat.py`**: extended `_strip_reasoning_field` to strip both keys in `_NON_STANDARD_REASONING_KEYS = ("reasoning", "reasoning_content")`.
+  - `reasoning` (Ollama / OpenRouter naming) and `reasoning_content` (llama.cpp `llama-server` naming) represent the same concept, just with different vendor naming
+  - Strict OpenAI clients reject either as an unknown key, so stripping both is correct
+  - Updated the `capability-degraded` log's `dropped` field to `["reasoning", "reasoning_content"]` (reflecting that either may be stripped)
 
-#### Doctor `reasoning-leak` probe: `reasoning_content` 検出
+#### Doctor `reasoning-leak` probe: detects `reasoning_content`
 
-- **`coderouter/doctor.py`**: `_probe_reasoning_leak` の `has_reasoning` 判定を `"reasoning" in msg or "reasoning_content" in msg` に拡張。llama.cpp 経由 provider でも reasoning leak を informational に検出可能に。
+- **`coderouter/doctor.py`**: extended `_probe_reasoning_leak`'s `has_reasoning` check to `"reasoning" in msg or "reasoning_content" in msg`, so reasoning leaks can now be detected informationally on llama.cpp-based providers too.
 
 #### Tests
 
-- **`tests/test_doctor.py`** + 1: `test_tool_calls_max_tokens_bumped_for_thinking_provider` (thinking provider で tool_calls probe が 1024 を要求、native tool_calls 応答で OK 判定)
-- **`tests/test_reasoning_strip.py`** + 3: `test_strip_helper_removes_reasoning_content_field` / `test_strip_helper_removes_both_reasoning_and_reasoning_content` / `test_strip_helper_removes_reasoning_content_from_delta` (各 layer で `reasoning_content` 除去確認)
-- 既存 `tests/test_reasoning_strip.py` の `recs[0].dropped == ["reasoning"]` を `["reasoning", "reasoning_content"]` に更新 (log の表現変更に追従)
+- **`tests/test_doctor.py`** +1: `test_tool_calls_max_tokens_bumped_for_thinking_provider` (confirms the tool_calls probe requests 1024 for a thinking provider and gets an OK verdict from a native tool_calls response)
+- **`tests/test_reasoning_strip.py`** +3: `test_strip_helper_removes_reasoning_content_field` / `test_strip_helper_removes_both_reasoning_and_reasoning_content` / `test_strip_helper_removes_reasoning_content_from_delta` (confirming `reasoning_content` removal at each layer)
+- Updated the existing `tests/test_reasoning_strip.py` assertion `recs[0].dropped == ["reasoning"]` to `["reasoning", "reasoning_content"]` (following the log representation change)
 
 ### Why
 
-v1.8.2 で「diagnostic ツール自身も diagnostic され続ける必要がある」というメタ教訓を書いた直後、まさにそのことを実証する形で残バグが発見された。`tool_calls` probe は num_ctx / streaming probe と同じ「thinking モデルの reasoning トークン消費を考慮していない `max_tokens=64`」問題を抱えていて、しかも doctor の出した suggested patch (`tools: false` に倒せ) は **完全に逆の対処を勧めていた** — false-positive どころか、誠実なユーザーが従うと healthy なモデルを抑制してしまう **active-harmful な誤診断**。
+Right after writing in v1.8.2 the meta-lesson that "the diagnostic tool itself needs to keep being diagnosed," a remaining bug surfaced that proved exactly that point. The `tool_calls` probe carried the same "`max_tokens=64` doesn't account for reasoning token consumption on thinking models" problem already fixed for the num_ctx / streaming probes — and worse, doctor's suggested patch (set `tools: false`) was **recommending exactly the wrong fix** — not just a false positive, but an **active-harmful misdiagnosis** that would suppress a healthy model if a well-meaning user followed it.
 
-これは v1.8.2 の patch を当てる時点で見つけるべきだった見落としで、note 記事 v1.8.2 のメタ教訓「diagnostic ツール自身も diagnostic され続ける」が現実に試された格好。素早く v1.8.3 で潰す。
+This was an oversight that should have been caught while landing the v1.8.2 patch, and the note article v1.8.2's meta-lesson — "the diagnostic tool itself needs ongoing diagnosis" — got tested for real. Fixed promptly in v1.8.3.
 
-`reasoning_content` strip 追加は llama.cpp 直叩き経路を CodeRouter から綺麗に使えるようにする ergonomic 改善で、`v1.8.x` patch 候補で plan.md に記録済みだった項目を実機発見と同時に消化。
+Adding the `reasoning_content` strip is an ergonomic improvement letting the llama.cpp-direct path be used cleanly from CodeRouter, an item already recorded as a v1.8.x patch candidate in plan.md, resolved at the same time as the real-hardware discovery.
 
 ### Migration
 
-`pyproject.toml version 1.8.2 → 1.8.3`、`coderouter --version` は 1.8.3 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+`pyproject.toml version 1.8.2 → 1.8.3`, `coderouter --version` returns 1.8.3. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
 
-v1.8.2 で Qwen3.6 / Gemma 4 系 thinking provider に対して `tool_calls [NEEDS TUNING]` が出ていたユーザーは v1.8.3 で再実行すると **OK** 判定 (実機で動いていた provider が doctor 上でも妥当に評価される)。llama.cpp 直叩き provider を使っているユーザーは `reasoning_content` が client に流れることなく綺麗に strip される。
+Users who saw `tool_calls [NEEDS TUNING]` for Qwen3.6 / Gemma 4-family thinking providers in v1.8.2 will get an **OK** verdict on re-running in v1.8.3 (a provider that was actually working gets a fair evaluation from doctor too). Users on an llama.cpp-direct provider will have `reasoning_content` cleanly stripped without it reaching the client.
 
 ### Files touched
 
@@ -2572,64 +2575,64 @@ M  tests/test_doctor.py
 M  tests/test_reasoning_strip.py
 ```
 
-### Post-release docs followup (同 commit ではなく追加 commit で)
+### Post-release docs followup (a separate commit, not the same one)
 
-llama.cpp 直叩き経路を canonical な救済路として正式採用したのを受け、関連ドキュメントを v1.8.3 後に整理:
+Having formally adopted the llama.cpp-direct path as the canonical escape route, related docs were cleaned up after v1.8.3:
 
-- **`docs/llamacpp-direct.md` / `.en.md` 新規** — `llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter 接続を 7 step + Troubleshooting で。M3 Max 64GB / Q4_K_M / Metal 想定の canonical recipe
-- **`setup.sh`**: 48 GB+ tier の推奨を旧 `qwen3.6:35b` → `gemma4:26b` に変更 (Ollama 経由詰みのため)。upgrade hint からも Qwen3.6 系を撤去、代わりに `docs/llamacpp-direct.md` への誘導を追加
-- **`docs/quickstart.md` / `.en.md`**: 「より良いモデル」セクションの `ollama pull qwen3.6:35b` を撤去、`docs/llamacpp-direct.md` への誘導追加
-- **`docs/hf-ollama-models.md`**: `ollama pull qwen3.6:35b` を「⚠️ Qwen3.6 系は Ollama 経由で詰みやすい」警告に置換、llama.cpp 直叩き経路の案内を追加
-- **`README.md` / `.en.md`**: ドキュメント目次に「llama.cpp 直叩きガイド」行を追加、英語版言語スイッチャーにも `llama.cpp direct` リンクを追加
-- **`examples/providers.yaml`**: `llamacpp-qwen3-6-35b-a3b` provider 例を追加 + `coding` profile chain primary に組み込み (詳細コメント付き)。Qwen3.6 系 Ollama 経路のコメントも v1.8.3 結果反映で更新
-- **`tests/test_setup_sh.py`**: 48 GB / 64 GB tier の expected_model assertion を `qwen3.6:35b` → `gemma4:26b` に追従更新
+- New **`docs/llamacpp-direct.md` / `.en.md`** — covers `llama.cpp` build → Unsloth GGUF → `llama-server` → connecting CodeRouter, in 7 steps plus Troubleshooting. A canonical recipe assuming M3 Max 64GB / Q4_K_M / Metal
+- **`setup.sh`**: changed the recommendation for the 48 GB+ tier from the old `qwen3.6:35b` to `gemma4:26b` (since the Ollama path is a dead end). Also removed the Qwen3.6 family from the upgrade hint, pointing instead to `docs/llamacpp-direct.md`
+- **`docs/quickstart.md` / `.en.md`**: removed `ollama pull qwen3.6:35b` from the "better models" section, added a pointer to `docs/llamacpp-direct.md`
+- **`docs/hf-ollama-models.md`**: replaced `ollama pull qwen3.6:35b` with a "⚠️ the Qwen3.6 family tends to get stuck via Ollama" warning, added guidance toward the llama.cpp-direct path
+- **`README.md` / `.en.md`**: added a "llama.cpp direct guide" line to the docs table of contents, and a `llama.cpp direct` link to the English language switcher
+- **`examples/providers.yaml`**: added a `llamacpp-qwen3-6-35b-a3b` provider example and wired it into the `coding` profile chain's primary slot (with detailed comments). Also updated the Qwen3.6-via-Ollama comments to reflect the v1.8.3 findings
+- **`tests/test_setup_sh.py`**: updated the 48 GB / 64 GB tier's expected_model assertions from `qwen3.6:35b` to `gemma4:26b`
 
 ---
 
-## [v1.8.2] — 2026-04-26 (doctor probe を thinking モデル対応に — Gemma 4 偽陽性の解消)
+## [v1.8.2] — 2026-04-26 (Make doctor probes thinking-model aware — resolving a Gemma 4 false positive)
 
-**Theme: v1.8.1 リリース直後の深掘りで `doctor` の `num_ctx` / `streaming` probe が thinking モデルに対して偽陽性 NEEDS_TUNING を出していた事実を発見、probe の `max_tokens` バジェットを reasoning トークン消費分込みで設計し直した patch。**
+**Theme: while digging in right after the v1.8.1 release, discovered that the `doctor`'s `num_ctx` / `streaming` probes were producing false-positive NEEDS_TUNING verdicts for thinking models, and redesigned the probes' `max_tokens` budget to account for reasoning token consumption.**
 
-v1.8.1 で `coding` profile primary に置いた Gemma 4 26B の doctor 結果が `tool_calls [OK]` + `num_ctx [NEEDS TUNING]` + `streaming [NEEDS TUNING]` で「中途半端に動く」と判定されていたが、実機で curl 直叩きすると **Ollama OpenAI-compat 経由でも 5K トークンの canary echo-back に成功** することが判明。原因切り分けの結果、Gemma 4 が emit する非標準 `reasoning` フィールドが doctor probe の `max_tokens=32` (num_ctx) / `max_tokens=128` (streaming) を**思考トークンで食い切って `content=""` で `finish_reason='length'`** を返していた偽陽性と確定。実機検証 (M3 Max 64GB / Ollama 0.21.2) で Anthropic 互換 `/v1/messages` 経由 Gemma 4 26B が "Hello." を 2 秒で返すことも確認、**Gemma 4 26B は実用 OK** と最終判定。
+In v1.8.1, Gemma 4 26B, placed as the primary of the `coding` profile, got a doctor verdict of `tool_calls [OK]` + `num_ctx [NEEDS TUNING]` + `streaming [NEEDS TUNING]`, judged as "working only partially." But hitting it directly with curl on real hardware showed that **a 5K-token canary echo-back succeeded even via Ollama's OpenAI-compat interface.** Isolating the cause confirmed it as a false positive: the non-standard `reasoning` field Gemma 4 emits was **entirely consuming the doctor probe's `max_tokens=32` (num_ctx) / `max_tokens=128` (streaming) budget with thinking tokens, returning `content=""` with `finish_reason='length'`.** Real-hardware verification (M3 Max 64GB / Ollama 0.21.2) also confirmed that Gemma 4 26B returns "Hello." in 2 seconds via the Anthropic-compatible `/v1/messages` route, so the final verdict is: **Gemma 4 26B is genuinely usable.**
 
-- Tests: 730 → **733** (+3: thinking provider declaration / registry-based / streaming の 3 件)
-- Runtime deps: 5 → 5 (20 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` 編集不要
+- Tests: 730 → **733** (+3: thinking provider declaration / registry-based / streaming)
+- Runtime deps: 5 → 5 (20 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no edits needed to `providers.yaml` / `~/.coderouter/model-capabilities.yaml`
 
 ### Changes
 
-#### Doctor probe: thinking モデル対応バジェット選択
+#### Doctor probe: thinking-aware budget selection
 
-- **`coderouter/doctor.py`**: `_probe_num_ctx` / `_probe_streaming` の `max_tokens` を thinking 検出付きの動的選択に変更。新 helper `_is_reasoning_model(provider, resolved)` が provider declaration / registry resolved の両方から `thinking` / `reasoning_passthrough` の真偽を見て、reasoning モデルのときだけ大きいバジェットを選ぶ。
-  - `_NUM_CTX_PROBE_MAX_TOKENS_DEFAULT = 256` (旧 32)、`_NUM_CTX_PROBE_MAX_TOKENS_THINKING = 1024`
-  - `_STREAMING_PROBE_MAX_TOKENS_DEFAULT = 512` (旧 128)、`_STREAMING_PROBE_MAX_TOKENS_THINKING = 1024`
-  - 非 thinking モデルは natural stop で早期終了するので無駄消費なし、thinking モデルは reasoning trace + 答えが収まる headroom
+- **`coderouter/doctor.py`**: changed `_probe_num_ctx` / `_probe_streaming`'s `max_tokens` to a dynamic choice with thinking detection. A new `_is_reasoning_model(provider, resolved)` helper checks both the provider declaration and the registry-resolved capability for `thinking` / `reasoning_passthrough`, choosing the larger budget only for reasoning models.
+  - `_NUM_CTX_PROBE_MAX_TOKENS_DEFAULT = 256` (was 32), `_NUM_CTX_PROBE_MAX_TOKENS_THINKING = 1024`
+  - `_STREAMING_PROBE_MAX_TOKENS_DEFAULT = 512` (was 128), `_STREAMING_PROBE_MAX_TOKENS_THINKING = 1024`
+  - Non-thinking models still stop early at their natural stop point, so there's no wasted consumption; thinking models get enough headroom for both the reasoning trace and the answer
 
-#### Registry: 既知 thinking モデルに `thinking: true` 宣言
+#### Registry: declares `thinking: true` for known thinking models
 
-- **`coderouter/data/model-capabilities.yaml`**: `gemma4:*` / `google/gemma-4*` / `qwen3.6:*` / `qwen/qwen3.6-*` に `thinking: true` を追加。これらは Ollama 経由で `reasoning` フィールドにかなりのトークンを吐く設計と確認済み。registry 経由で渡るので user は `providers.yaml` を触らなくても doctor の thinking バジェットが効く
-- **Qwen3.6 セクションのコメント更新**: v1.8.1 時点で「Ollama silent cap」と書いていた part を「**v1.8.2 で num_ctx / streaming は doctor 偽陽性と判明、tool_calls [NEEDS TUNING] が真の課題として残る**」に整理。`claude_code_suitability` 撤回判断は維持 (Qwen3.6 の tool_calls 不全は thinking 起因ではない別の真の課題)
+- **`coderouter/data/model-capabilities.yaml`**: added `thinking: true` for `gemma4:*` / `google/gemma-4*` / `qwen3.6:*` / `qwen/qwen3.6-*`. These are confirmed to emit a substantial number of tokens into the `reasoning` field via Ollama. Since this is delivered via the registry, users don't need to touch `providers.yaml` for doctor's thinking budget to apply
+- **Updated the Qwen3.6 section comment**: revised the part that said "Ollama silent cap" as of v1.8.1 to note that **"as of v1.8.2, num_ctx / streaming turned out to be doctor false positives; `tool_calls [NEEDS TUNING]` remains the genuine issue."** The decision to withdraw `claude_code_suitability` stands (Qwen3.6's tool_calls failure is a separate genuine issue, not caused by thinking)
 
 #### Tests
 
-- **`tests/test_doctor.py`**: 3 件追加
+- **`tests/test_doctor.py`**: 3 new cases
   - `test_num_ctx_max_tokens_bumped_for_thinking_provider_declaration`: `provider.capabilities.thinking=True` → 1024
-  - `test_num_ctx_max_tokens_bumped_when_registry_says_thinking`: provider 宣言なし + registry 宣言あり → 1024
-  - `test_streaming_max_tokens_bumped_for_thinking_provider`: streaming probe も同経路で 1024 になる
-- 既存 `test_num_ctx_request_body_merges_extra_body_options` の `max_tokens == 32` assertion を `== 256` に更新 (新 baseline)
-- 既存 `test_streaming_request_body_carries_stream_true_and_merges_extra_body` に `max_tokens == 512` assertion を追加 (streaming baseline)
+  - `test_num_ctx_max_tokens_bumped_when_registry_says_thinking`: no provider declaration but registry declares it → 1024
+  - `test_streaming_max_tokens_bumped_for_thinking_provider`: the streaming probe also gets 1024 via the same path
+- Updated the existing `test_num_ctx_request_body_merges_extra_body_options` assertion `max_tokens == 32` to `== 256` (new baseline)
+- Added a `max_tokens == 512` assertion to the existing `test_streaming_request_body_carries_stream_true_and_merges_extra_body` (streaming baseline)
 
 ### Why
 
-v1.8.1 article 執筆中に「note の流行モデル → ollama pull → 動かない」のうち Gemma 4 だけ `tool_calls [OK]` の **逆転勝利** だったはずが、`num_ctx [NEEDS TUNING]` も出ていて記事として煮え切らない状態だった。深掘りの結果、`/v1/chat/completions` 経由でも options は効く / `ollama ps` で context length 262144 が出る / **でも doctor は失敗** という矛盾を観測。`.choices[0].message.reasoning` フィールドに思考トークンが流れて `max_tokens=32` を消費していた事実を確認、**doctor 側の probe 設計が thinking モデル時代に追いついていない**ことが判明。
+While writing the v1.8.1 article, of the "note's trending model → ollama pull → doesn't work" cases, Gemma 4 was supposed to be the lone **reversal victory** with `tool_calls [OK]`, but `num_ctx [NEEDS TUNING]` was also showing up, leaving the article in an unsatisfying state. Digging further revealed a contradiction: options still take effect via `/v1/chat/completions`, `ollama ps` shows a context length of 262144, **yet doctor still fails.** Confirming that thinking tokens were flowing into the `.choices[0].message.reasoning` field and consuming the `max_tokens=32` budget revealed that **doctor's own probe design hadn't kept up with the thinking-model era.**
 
-これは「実機 evidence first」原則 (plan.md §5.4) の更に一段下のメタ教訓：**diagnostic ツール自身も diagnostic され続ける必要がある**。
+This is a meta-lesson one level below the "real-hardware evidence first" principle (plan.md §5.4): **the diagnostic tool itself needs to keep being diagnosed.**
 
 ### Migration
 
-`pyproject.toml version 1.8.1 → 1.8.2`、`coderouter --version` は 1.8.2 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+`pyproject.toml version 1.8.1 → 1.8.2`, `coderouter --version` returns 1.8.2. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
 
-v1.8.1 で Gemma 4 26B を `claude_code_suitability` 抑え目に運用していたユーザーは v1.8.2 で doctor 再実行すると `num_ctx [OK]` + `streaming [OK]` まで通るはず。Qwen3.6 系の `tool_calls [NEEDS TUNING]` は本物 (thinking 起因ではない) なので引き続き coding chain primary には推奨しない。
+Users who had been running Gemma 4 26B conservatively (with reduced `claude_code_suitability`) in v1.8.1 should now see `num_ctx [OK]` + `streaming [OK]` pass on re-running doctor in v1.8.2. Qwen3.6's `tool_calls [NEEDS TUNING]` is genuine (not caused by thinking), so it's still not recommended as the coding chain primary.
 
 ### Files touched
 
@@ -2646,53 +2649,53 @@ M  tests/test_doctor.py
 
 ---
 
-## [v1.8.1] — 2026-04-26 (実機検証反映 patch — mode_aliases 解決 + Gemma 4 第一候補化 + Ollama 既知問題ドキュメント化)
+## [v1.8.1] — 2026-04-26 (Patch reflecting real-hardware verification — resolving mode_aliases + promoting Gemma 4 + documenting known Ollama issues)
 
-**Theme: v1.8.0 出荷直後の実機検証 (M3 Max 32GB / Ollama 0.21.2) で踏んだ問題 3 件を patch で解消。**
+**Theme: a patch resolving 3 issues hit during real-hardware verification (M3 Max 32GB / Ollama 0.21.2) right after the v1.8.0 release.**
 
-v1.8.0 の用途別 4 プロファイルが、NIM example yaml ベースで運用しているユーザーで `coderouter serve --mode coding` が **`default_profile 'coding' is not declared in profiles`** エラーで起動失敗する loader bug が判明。あわせて `coding` profile の primary に置いていた Qwen3.6:27b/35b が Ollama 経由で実用厳しい (num_ctx silent cap / tool_calls 0 / streaming 0 chars) ことも実機検証で確認。**「note 記事や HF 評判が高くても Ollama 経由ですぐ動くとは限らない」現実**を troubleshooting.md §4-2 として明文化。
+For users running on the NIM example yaml base, v1.8.0's 4 use-case-based profiles were found to have a loader bug where `coderouter serve --mode coding` fails to start with **`default_profile 'coding' is not declared in profiles`**. Real-hardware verification also confirmed that Qwen3.6:27b/35b, placed as the `coding` profile's primary, is impractical via Ollama (num_ctx silent cap / tool_calls returning 0 / streaming returning 0 chars). This documents, as `troubleshooting.md §4-2`, the reality that **"a model being praised in a note article or on HF doesn't mean it'll work right away via Ollama."**
 
-- Tests: 729 → **730** (+1: loader の mode_aliases 解決テスト)
-- Runtime deps: 5 → 5 (19 sub-release 連続据え置き)
-- Backward compat: 完全互換、`providers.yaml` 編集不要 (loader が alias 経由で解決)
+- Tests: 729 → **730** (+1: a loader test for mode_aliases resolution)
+- Runtime deps: 5 → 5 (19 consecutive sub-releases unchanged)
+- Backward compat: fully compatible; no `providers.yaml` edits required (the loader resolves it via the alias)
 
 ### Changes
 
-#### Bug fixes (実機検証で踏んだもの)
+#### Bug fixes (hit during real-hardware verification)
 
-- **`coderouter/config/loader.py`**: `CODEROUTER_MODE` env (= `--mode` CLI) が **`mode_aliases` を解決せず直接 `default_profile` に代入** していた v0.6-A の素朴実装を修正。runtime の `X-CodeRouter-Mode` ヘッダ (v0.6-D) は alias 解決していたので、startup と runtime で semantic 非対称だった。v1.8.1 で env_mode を `mode_aliases` 経由で解決してから `default_profile` 代入する流れに揃え、両者を symmetric に。これで `cr serve --mode coding` が NIM example yaml (profiles=`[claude-code-nim, ...]`、mode_aliases=`{coding: claude-code-nim}`) でも validation エラーにならず起動する
-- **`examples/providers.nvidia-nim.yaml`**: v1.8.0 で main `providers.yaml` に追加した `mode_aliases` (default/coding/general/multi/reasoning/fast/cheap/think/vision) を NIM example yaml にも追加。NIM ユーザーも `--mode coding|general|reasoning|multi` を canonical な短縮 alias として使えるように
+- **`coderouter/config/loader.py`**: fixed a naive v0.6-A implementation where the `CODEROUTER_MODE` env var (= `--mode` CLI flag) was **assigned directly to `default_profile` without resolving `mode_aliases`.** The runtime `X-CodeRouter-Mode` header (v0.6-D) did resolve aliases, so startup and runtime had asymmetric semantics. v1.8.1 aligns both by resolving env_mode through `mode_aliases` before assigning it to `default_profile`, making the two symmetric. This lets `cr serve --mode coding` start without a validation error even against the NIM example yaml (profiles=`[claude-code-nim, ...]`, mode_aliases=`{coding: claude-code-nim}`)
+- **`examples/providers.nvidia-nim.yaml`**: added the `mode_aliases` (default/coding/general/multi/reasoning/fast/cheap/think/vision) that were added to the main `providers.yaml` in v1.8.0, to the NIM example yaml as well, so NIM users can also use `--mode coding|general|reasoning|multi` as canonical short aliases
 
-#### `coding` profile primary を実機検証反映に調整
+#### Adjusted `coding` profile primary to reflect real-hardware verification
 
-- **`examples/providers.yaml`**: `coding` profile の providers リスト先頭を Qwen3.6:35b/27b → **`ollama-qwen-coder-14b` / `ollama-gemma4-26b` / `ollama-qwen-coder-7b` / `ollama-qwen3-coder-30b`** の順に変更。Qwen3.6 系は末尾退避線にコメントアウトで降格 (LM/llama.cpp が後日対応強化されたら primary に戻す候補として残置)。順序原則「枯れて確実に動くもの」を上に、note 推奨の新しいものは安定確認後に昇格、を反映
-- **`coderouter/data/model-capabilities.yaml`**: `qwen3.6:*` / `qwen/qwen3.6-*` の `claude_code_suitability: ok` を**撤回**。v1.7-B 追加時は note 記事の伝聞ベースで先回り宣言していたが、v1.8.1 実機検証で num_ctx / tool_calls / streaming すべて NEEDS_TUNING 確認、確証ない以上 `tools` 宣言だけ残して suitability は出さない方針に。実機で動いた人は `~/.coderouter/model-capabilities.yaml` で `claude_code_suitability: ok` を user-side override 可能 (registry の first-match-per-flag walk が user → bundled の順序なので)
+- **`examples/providers.yaml`**: changed the order at the head of the `coding` profile's providers list from Qwen3.6:35b/27b to **`ollama-qwen-coder-14b` / `ollama-gemma4-26b` / `ollama-qwen-coder-7b` / `ollama-qwen3-coder-30b`**. The Qwen3.6 family is demoted, commented out at the tail (left in place as a candidate to promote back to primary once LM Studio/llama.cpp support improves). This reflects the ordering principle "well-established and reliably working things go first; newer note-recommended things get promoted only after stability is confirmed"
+- **`coderouter/data/model-capabilities.yaml`**: **withdrew** `claude_code_suitability: ok` for `qwen3.6:*` / `qwen/qwen3.6-*`. When added in v1.7-B it was a preemptive declaration based on secondhand reports from note articles, but v1.8.1 real-hardware verification confirmed NEEDS_TUNING across num_ctx / tool_calls / streaming, so without confirmation the policy is now to keep the `tools` declaration but not assert suitability. Users who do get it working on real hardware can still override `claude_code_suitability: ok` on their side via `~/.coderouter/model-capabilities.yaml` (since the registry's first-match-per-flag walk goes user → bundled)
 
-#### Documentation: 実機 Ollama 運用の Known Issues 追加
+#### Documentation: added known issues for real-world Ollama operation
 
-- **`docs/troubleshooting.md` §4-2 新設「ローカル Ollama 経由で踏みやすい既知問題」**:
-  - **§4-2-A**: Qwen3.6:27b/35b が Ollama 0.21.2 経由で実用厳しい (num_ctx silent cap / tool_calls 0 / streaming 0)、`/no_think` でも改善せず。回避は Gemma 4 / Qwen2.5-Coder を上位に
-  - **§4-2-B**: Qwen3.5 系 HF 蒸留モデル (Qwopus3.5 等) は llama.cpp が `qwen35` architecture (hybrid Transformer-SSM) 未対応で `unable to load model` 500 エラー。フレームワーク本体の対応待ち
-  - **§4-2-C**: Gemma 4 26B が無加工で tool_calls OK 確認、note 記事「日常の王者」評価が裏付け
-  - **§4-2-D**: ベスト実践「枯れたモデル + 観測ツール (doctor)」、HF で見つけた新モデルは `ollama run` → server log で `unknown model architecture` 確認、出たら今は諦め
+- New **`docs/troubleshooting.md` §4-2, "Known issues commonly hit via local Ollama"**:
+  - **§4-2-A**: Qwen3.6:27b/35b is impractical via Ollama 0.21.2 (num_ctx silent cap / tool_calls returning 0 / streaming returning 0), and `/no_think` doesn't help. Workaround: promote Gemma 4 / Qwen2.5-Coder above it
+  - **§4-2-B**: HF-distilled Qwen3.5-family models (Qwopus3.5 etc.) fail with an `unable to load model` 500 error because llama.cpp doesn't yet support the `qwen35` architecture (hybrid Transformer-SSM). Waiting on upstream framework support
+  - **§4-2-C**: confirmed Gemma 4 26B gets tool_calls OK with no tweaks, backing up the note article's "everyday champion" assessment
+  - **§4-2-D**: best practice is "well-established models + an observation tool (doctor)"; for a new model found on HF, run `ollama run` and check the server log for `unknown model architecture` — if it shows up, give up on it for now
 
 ### Why
 
-v1.8.0 出荷で「用途別 4 プロファイルで `--mode coding` が使える」と謳ったが、NIM example yaml ベースのユーザーが踏むことが分かった loader bug は**最初の実プロンプト到達前に validation で死ぬ**ので最重要修正。あわせて、v1.8.0 example の primary に置いていた Qwen3.6 系列が実機で 3 つの probe NEEDS_TUNING を出すこと、Qwen3.5 ベース HF 蒸留が llama.cpp 未対応であることは、**「先回り実装より実機 evidence」原則** (plan.md §5.4) を再確認させる結果。
+v1.8.0 shipped touting "use-case-based 4 profiles with a working `--mode coding`," but the loader bug hit by NIM-example-based users **fails at validation before the first real prompt even reaches the model**, making it the top-priority fix. Also, the fact that the Qwen3.6 family placed as the v1.8.0 example's primary produced 3 NEEDS_TUNING probe results on real hardware, and that Qwen3.5-based HF distillations aren't yet supported by llama.cpp, reaffirms the **"real-hardware evidence over preemptive implementation"** principle (plan.md §5.4).
 
 ### Migration
 
-`pyproject.toml version 1.8.0 → 1.8.1`、`coderouter --version` は 1.8.1 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+`pyproject.toml version 1.8.0 → 1.8.1`, `coderouter --version` returns 1.8.1. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
 
-NIM example ベースで `cr serve --mode coding` が動かなかったユーザーは、
+Users on the NIM-example base who couldn't get `cr serve --mode coding` working can:
 
 ```bash
-# 最新 example をコピー (v1.8.1 で mode_aliases 追加済み)
+# copy the latest example (mode_aliases already added in v1.8.1)
 cp examples/providers.nvidia-nim.yaml ~/.coderouter/providers.yaml
-# あるいは手で mode_aliases セクションを既存ファイルに追加
+# or manually add the mode_aliases section to your existing file
 ```
 
-または、`cr` をローカル開発版から再 install:
+Or reinstall `cr` from the local dev version:
 
 ```bash
 uv tool install --reinstall --force --from /path/to/CodeRouter coderouter-cli --with ruamel.yaml
@@ -2707,128 +2710,128 @@ $ pytest -q
 $ ruff check coderouter/ tests/
 All checks passed!
 
-$ cr serve --port 8088 --mode coding   # NIM example yaml でも起動成功
-$ cr doctor --check-model ollama-gemma4-26b --apply   # tool_calls OK 確認済み
+$ cr serve --port 8088 --mode coding   # starts successfully even on the NIM example yaml
+$ cr doctor --check-model ollama-gemma4-26b --apply   # confirmed tool_calls OK
 ```
 
-### Out of scope / 次回送り
+### Out of scope / deferred
 
-- Qwen3.5 系 HF 蒸留 (Qwopus / 類似): llama.cpp が `qwen35` architecture を実装したら再評価
-- Qwen3.6:27b/35b の Ollama 経由動作: Ollama / llama.cpp 側の改善があれば再評価、`claude_code_suitability` を再付与の検討
-- v1.7-C 候補 (network audit / launcher / 起動時 update check) は引き続き需要待ち
+- HF-distilled Qwen3.5 family (Qwopus / similar): revisit once llama.cpp implements the `qwen35` architecture
+- Qwen3.6:27b/35b via Ollama: revisit if Ollama / llama.cpp improve, consider re-granting `claude_code_suitability`
+- v1.7-C candidates (network audit / launcher / startup update check) still awaiting demand
 
 ---
 
-## [v1.8.0] — 2026-04-26 (用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化)
+## [v1.8.0] — 2026-04-26 (4 use-case-based profiles + officially adding GLM/Gemma 4/Qwen3.6 + apply automation)
 
-**Theme: 「Claude Code で意味合いがズレない代替モデル」を operator に渡す minor。** plan.md §11.B (v1.7-B umbrella) を 6 タスクで一気に消化:
+**Theme: a minor release delivering operators "substitute models that don't drift in feel from Claude Code."** Clears 6 tasks from plan.md §11.B (the v1.7-B umbrella) in one push:
 
-1. **PyPI Trusted Publishing** 自動化 — `git tag v* && git push` だけで release.yml が PyPI publish + GitHub Release 草稿を自動作成。API トークン不要 (OIDC)
-2. **`claude_code_suitability` hint** — capability registry に `Literal["ok", "degraded"] | None` フィールド新設、Llama-3.3-70B 系を `claude-code-*` profile に置くと startup で `chain-claude-code-suitability-degraded` warn を構造化 emit。v1.6.2 で docs 化した「`こんにちは` → `Skill(hello)` 暴走」罠の自動検出版
-3. **`coderouter doctor --check-model --apply` / `--dry-run`** — doctor 提案の YAML パッチを `providers.yaml` / `model-capabilities.yaml` に**非破壊**書き戻し (コメント・key 順序 100% 保持)。`--dry-run` は `git apply` 互換 unified diff、`--apply` は `.bak` バックアップ作成 + 冪等 (二回目は no-op)。`ruamel.yaml` を optional dep (`[doctor]` extras) で lazy import → base 5 deps streak 維持
-4. **`setup.sh` onboarding ウィザード** — RAM 自動検出 → 推奨ローカルモデル提案 → `ollama pull` → `~/.coderouter/providers.yaml` 生成。`--ram-gb N` / `--non-interactive` / `--no-pull` / `--dry-run` / `--force` のフラグ整備、bash 3.2 互換、新規依存ゼロ
-5. **examples/providers.yaml を 4 プロファイル構成に拡張** — `multi` (default) / `coding` / `general` / `reasoning`、各プロファイルに `append_system_prompt` で Claude 風応答を nudge、`mode_aliases` で `default/fast/vision/think/cheap` ショートカット
-6. **Gemma 4 / Qwen3.6 / Z.AI (GLM-4.7/5.1) を providers.yaml に登録** — Ollama 公式 tag 化された `gemma4:e4b/26b/31b` (note 推奨 26B-A4B 含む) と `qwen3.6:27b/35b` (note "local champ" 35b-a3b) を active stanza として登録、note 記事推奨モデルを各 profile primary に格上げ。Z.AI を OpenAI-compat で 2 base_url 提供 (Coding Plan / General API)、unauthorized-tool 警告込みで明文化。`bundled model-capabilities.yaml` に `qwen3.6:*` (claude_code_suitability=ok) / `gemma4:*` / `GLM-5*` / `GLM-4.[5-9]*` family を新規宣言
+1. **Automated PyPI Trusted Publishing** — a simple `git tag v* && git push` now has release.yml auto-publish to PyPI and draft a GitHub Release. No API token needed (OIDC)
+2. **`claude_code_suitability` hint** — a new `Literal["ok", "degraded"] | None` field in the capability registry; placing a Llama-3.3-70B-family model in a `claude-code-*` profile now emits a structured `chain-claude-code-suitability-degraded` warn at startup. An automated-detection version of the "`こんにちは` → runaway `Skill(hello)`" trap documented in v1.6.2
+3. **`coderouter doctor --check-model --apply` / `--dry-run`** — writes doctor's suggested YAML patches back into `providers.yaml` / `model-capabilities.yaml` **non-destructively** (100% preserving comments and key order). `--dry-run` produces a `git apply`-compatible unified diff; `--apply` creates a `.bak` backup and is idempotent (a second run is a no-op). `ruamel.yaml` is an optional dependency (the `[doctor]` extra) lazily imported, preserving the base 5-deps streak
+4. **`setup.sh` onboarding wizard** — auto-detects RAM → suggests a recommended local model → runs `ollama pull` → generates `~/.coderouter/providers.yaml`. Adds `--ram-gb N` / `--non-interactive` / `--no-pull` / `--dry-run` / `--force` flags, bash 3.2 compatible, zero new dependencies
+5. **Extended `examples/providers.yaml` to a 4-profile layout** — `multi` (default) / `coding` / `general` / `reasoning`, each nudged toward Claude-like responses via `append_system_prompt`, with `mode_aliases` shortcuts for `default/fast/vision/think/cheap`
+6. **Registered Gemma 4 / Qwen3.6 / Z.AI (GLM-4.7/5.1) in providers.yaml** — registers `gemma4:e4b/26b/31b` (now official Ollama tags, including the note-recommended 26B-A4B) and `qwen3.6:27b/35b` (the note's "local champ" 35b-a3b) as active stanzas, promoting note-recommended models to each profile's primary slot. Z.AI is offered via OpenAI-compat with 2 base_urls (Coding Plan / General API), documented along with the unauthorized-tool caveat. Newly declares the `qwen3.6:*` (claude_code_suitability=ok) / `gemma4:*` / `GLM-5*` / `GLM-4.[5-9]*` families in the bundled `model-capabilities.yaml`
 
-- Tests: 651 → **710** (+59, +9.1%): `tests/test_claude_code_suitability.py` (6, walker + payload + opt-out), `tests/test_capability_registry.py` (+11 schema/lookup/bundled-yaml), `tests/test_doctor_apply.py` (25, parse/merge/apply/idempotent), `tests/test_setup_sh.py` (17 + 1 shellcheck-skip, RAM 推奨 / 既存ファイル衝突 / dry-run / parent dir 作成), `tests/test_examples_yaml.py` (+5, 4 profiles 存在 / append_system_prompt 必須 / mode_aliases / coding head 検証)
-- Runtime deps: 5 → 5 (18 sub-release 連続据え置き; `ruamel.yaml` は `[project.optional-dependencies].doctor` の optional)
-- Backward compat: `default_profile: default` → `default_profile: multi` への変更を伴うため、**`examples/providers.yaml` を ~/.coderouter/providers.yaml にコピーし直すと挙動が変わります**。手元の `providers.yaml` は触らない限り変化なし。`mode_aliases.default → multi` で旧 default 呼び出しは multi に解決される後方互換あり
+- Tests: 651 → **710** (+59, +9.1%): `tests/test_claude_code_suitability.py` (6, walker + payload + opt-out), `tests/test_capability_registry.py` (+11 schema/lookup/bundled-yaml), `tests/test_doctor_apply.py` (25, parse/merge/apply/idempotent), `tests/test_setup_sh.py` (17 + 1 shellcheck-skip, RAM recommendation / existing-file collision / dry-run / parent dir creation), `tests/test_examples_yaml.py` (+5, 4-profile presence / append_system_prompt required / mode_aliases / coding head verification)
+- Runtime deps: 5 → 5 (18 consecutive sub-releases unchanged; `ruamel.yaml` is optional via `[project.optional-dependencies].doctor`)
+- Backward compat: since this includes a change from `default_profile: default` to `default_profile: multi`, **re-copying `examples/providers.yaml` over `~/.coderouter/providers.yaml` changes behavior.** Your local `providers.yaml` is unaffected unless you touch it. `mode_aliases.default → multi` provides backward compatibility, resolving old default calls to multi
 
-### Theme: 「意味合いがズレない代替モデル」を 3 段の対策で実現
+### Theme: achieving "substitute models that don't drift in feel" through 3 layers of measures
 
-Claude Code を主用途とするユーザーが直面する核心問題は、ローカル/オープンモデルへ fallback したときに **応答の "性格"** が Claude Sonnet/Opus と乖離して「なんでだろ?」と混乱することでした。v1.8.0 はこれに 3 段で対処:
+The core problem facing users whose primary use case is Claude Code is that, when falling back to a local/open model, **the response's "personality"** diverges from Claude Sonnet/Opus, leaving users confused about why. v1.8.0 addresses this in 3 layers:
 
-1. **モデル選定を Claude 風に寄せる** — Qwen3.6 35B-A3B (note 記事 "local champ") と Qwen3-Coder family を coding 主軸に。Llama-3.3-70B は引き続き `claude_code_suitability: degraded` で claude-code chain から自動退避。Gemma 4 26B-A4B (note "日常の王者") を multi/general に
-2. **`append_system_prompt` で nudge** — 4 プロファイルすべてに「Match Claude Sonnet's coding style」「Match Claude Haiku's style」等の指示を載せ、非 Claude モデルでも応答スタイルが寄るように。プロファイル単位で適用 (v0.6-B 既実装機能)
-3. **`output_filters` で表面差をクリーンアップ** — Qwen 系の `<think>` リーク・stop marker は引き続き strip (v1.0-A)。Qwen3.6 / Qwen3-Coder 30B には `[strip_thinking, strip_stop_markers]` を default で付与
+1. **Choosing models closer to Claude's feel** — Qwen3.6 35B-A3B (the note article's "local champ") and the Qwen3-Coder family become the coding backbone. Llama-3.3-70B continues to be automatically demoted from claude-code chains via `claude_code_suitability: degraded`. Gemma 4 26B-A4B (the note's "everyday champion") goes into multi/general
+2. **Nudging via `append_system_prompt`** — all 4 profiles carry instructions like "Match Claude Sonnet's coding style" / "Match Claude Haiku's style," so response style leans toward Claude even for non-Claude models. Applied per profile (a feature already implemented in v0.6-B)
+3. **Cleaning up surface differences with `output_filters`** — Qwen-family `<think>` leaks and stop markers continue to be stripped (v1.0-A). `[strip_thinking, strip_stop_markers]` is applied by default for Qwen3.6 / Qwen3-Coder 30B
 
-### Z.AI (GLM family) — Coding Plan の落とし穴と回避策
+### Z.AI (GLM family) — Coding Plan pitfalls and workarounds
 
-Z.AI の GLM-4.7 / 5.1 は note 記事で「intent 理解が Claude Opus 級」と評価される強力な選択肢。OpenAI 互換エンドポイントなので CodeRouter は `kind: openai_compat` でそのまま接続できますが、Coding Plan の規約に注意:
+Z.AI's GLM-4.7 / 5.1 is a strong option, rated by note articles as having "Claude Opus-level intent understanding." Since it's an OpenAI-compatible endpoint, CodeRouter can connect directly via `kind: openai_compat`, but the Coding Plan terms need attention:
 
-公式 docs (docs.z.ai/devpack/overview) は「**未認可サードパーティツール経由のアクセスは benefit が制限される可能性**」と明記しています。CodeRouter は Anthropic API 互換 ingress を持つので Claude Code から見て認可ツールに見えるはずですが、Z.AI 側の検出ロジック次第で「router 経由」と判定されるリスクは残ります。
+The official docs (docs.z.ai/devpack/overview) explicitly state that **"access via unauthorized third-party tools may have benefits restricted."** Since CodeRouter has an Anthropic-API-compatible ingress, it should look like an authorized tool from Claude Code's perspective, but there remains a risk that Z.AI's detection logic flags it as "routed through a proxy."
 
-`examples/providers.yaml` には 2 種類の base_url stanza を用意:
+`examples/providers.yaml` provides 2 kinds of base_url stanzas:
 
-- `zai-coding-glm-4-7/5-1/4-5-air`: Coding Plan 用 (`api/coding/paas/v4`) — 加入者向け、CodeRouter 経由でも Claude Code 直結に見えるはず
-- `zai-paas-glm-4-7` (commented): General API 用 (`api/paas/v4`) — pay-as-you-go、制限対象外。CodeRouter 経由で安心して使える
+- `zai-coding-glm-4-7/5-1/4-5-air`: for the Coding Plan (`api/coding/paas/v4`) — for subscribers, should still look like a direct Claude Code connection even via CodeRouter
+- `zai-paas-glm-4-7` (commented): for the General API (`api/paas/v4`) — pay-as-you-go, not subject to the restriction. Safe to use via CodeRouter
 
-**推奨運用**: Coding Plan 加入者で確実性を取るなら Claude Code に Z.AI を直結 (CodeRouter 経由しない) または General API stanza を有効化。General API は使用量比例課金。
+**Recommended practice**: Coding Plan subscribers who want certainty should either connect Z.AI directly to Claude Code (bypassing CodeRouter) or enable the General API stanza. The General API is billed proportional to usage.
 
 ### Changes
 
-#### v1.8-A: Trusted Publishing 自動化 (ドキュメントのみ、PyPI 側 1 回登録)
+#### v1.8-A: automated Trusted Publishing (docs only, one-time registration on the PyPI side)
 
-- PyPI 側で trusted publisher を登録 (Owner: zephel01, Repo: CodeRouter, Workflow: release.yml, Environment: pypi)
-- GitHub 側で `pypi` environment を作成 (protection rules なし、シークレットなし)
-- `docs/inside/release-pypi.md` §0-6 に登録手順 + 自動化後フローを追記、§11 のチェックリストを `[x]` 完了に
+- Registered a trusted publisher on the PyPI side (Owner: zephel01, Repo: CodeRouter, Workflow: release.yml, Environment: pypi)
+- Created a `pypi` environment on the GitHub side (no protection rules, no secrets)
+- Added registration steps + the post-automation flow to `docs/inside/release-pypi.md` §0-6, marking the §11 checklist items `[x]` complete
 
 #### v1.8-B: `claude_code_suitability` hint
 
-- `coderouter/config/capability_registry.py` の `RegistryCapabilities` / `ResolvedCapabilities` に `claude_code_suitability: Literal["ok", "degraded"] | None` フィールド追加。`lookup` メソッドの first-match-per-flag walk に新スロット
-- `coderouter/data/model-capabilities.yaml` に Llama-3.3-70B family (`*llama-3.3-70b*` / `*Llama-3.3-70B*`) を `claude_code_suitability: degraded` で宣言
-- `coderouter/logging.py` に `ChainClaudeCodeSuitabilityDegradedPayload` TypedDict + `log_chain_claude_code_suitability_degraded` helper 新設、msg は `chain-claude-code-suitability-degraded`
-- `coderouter/routing/capability.py` に `CLAUDE_CODE_PROFILE_PREFIX = "claude-code"` 定数 + `check_claude_code_chain_suitability(config, *, logger, registry=None)` 関数。プロファイル名 prefix gate + chain walk + プロファイル単位 aggregate WARN
-- `coderouter/ingress/app.py` の lifespan で startup 時に `check_claude_code_chain_suitability` を 1 行で呼び出し
+- Added a `claude_code_suitability: Literal["ok", "degraded"] | None` field to `RegistryCapabilities` / `ResolvedCapabilities` in `coderouter/config/capability_registry.py`, with a new slot in the `lookup` method's first-match-per-flag walk
+- Declared the Llama-3.3-70B family (`*llama-3.3-70b*` / `*Llama-3.3-70B*`) with `claude_code_suitability: degraded` in `coderouter/data/model-capabilities.yaml`
+- New `ChainClaudeCodeSuitabilityDegradedPayload` TypedDict + `log_chain_claude_code_suitability_degraded` helper in `coderouter/logging.py`, with the message `chain-claude-code-suitability-degraded`
+- New `CLAUDE_CODE_PROFILE_PREFIX = "claude-code"` constant + `check_claude_code_chain_suitability(config, *, logger, registry=None)` function in `coderouter/routing/capability.py`. Gates on profile name prefix, walks the chain, and aggregates a per-profile WARN
+- The lifespan in `coderouter/ingress/app.py` calls `check_claude_code_chain_suitability` in a single line at startup
 
 #### v1.8-C: `coderouter doctor --check-model --apply` / `--dry-run`
 
-- `coderouter/doctor_apply.py` 新設 — `parse_patch_yaml` (doctor の YAML literal をコメント strip + safe_load) / `deep_merge_dicts` (再帰マージ、idempotent 検出) / `merge_provider_patch_into_doc` / `merge_capabilities_rule_into_doc` / `apply_doctor_patches` (top-level entry, ApplyResult dataclass 返す) / `render_unified_diff` (stdlib `difflib.unified_diff`) / `DoctorApplyError` + `MissingDependencyError`
-- `pyproject.toml` `[project.optional-dependencies].doctor = ["ruamel.yaml>=0.18.6"]` 追加 (base 5 deps streak は維持、`[dev]` にも入れて test 用)
-- `coderouter/cli.py` の doctor subparser に `--apply` / `--dry-run` フラグ追加 + `_run_check_model` / `_resolve_config_path` / `_run_apply_or_dry_run` のヘルパ。doctor 提案の YAML パッチを 1 invocation で書き戻し可能に
-- 冪等性: 既に同じ値が入っていれば no-op (file mtime 不変、exit 0、"already up to date" メッセージ)
-- バックアップ: `--apply` 時に自動で `providers.yaml.bak` を作成 (overwriting 形式、git 派は git-diff で履歴管理)
+- New `coderouter/doctor_apply.py` — `parse_patch_yaml` (strips comments from doctor's YAML literal and safe_loads it) / `deep_merge_dicts` (recursive merge with idempotency detection) / `merge_provider_patch_into_doc` / `merge_capabilities_rule_into_doc` / `apply_doctor_patches` (top-level entry, returns an ApplyResult dataclass) / `render_unified_diff` (via stdlib `difflib.unified_diff`) / `DoctorApplyError` + `MissingDependencyError`
+- Added `[project.optional-dependencies].doctor = ["ruamel.yaml>=0.18.6"]` to `pyproject.toml` (preserving the base 5-deps streak; also added to `[dev]` for testing)
+- Added `--apply` / `--dry-run` flags to the doctor subparser in `coderouter/cli.py`, plus `_run_check_model` / `_resolve_config_path` / `_run_apply_or_dry_run` helpers. Doctor's suggested YAML patches can now be written back in a single invocation
+- Idempotency: a no-op if the same value is already present (file mtime unchanged, exit 0, "already up to date" message)
+- Backup: automatically creates `providers.yaml.bak` when `--apply` is used (overwrite style; git users can track history via git-diff)
 
-#### v1.8-D: `setup.sh` onboarding ウィザード
+#### v1.8-D: `setup.sh` onboarding wizard
 
-- リポジトリルートに `setup.sh` 新設 (bash 3.2 互換、新規依存ゼロ)
-- macOS (`sysctl hw.memsize`) / Linux (`/proc/meminfo`) で RAM 自動検出
-- RAM → 推奨モデル: ≥24GB→qwen2.5-coder:14b / ≥12GB→qwen2.5-coder:7b / ≥6GB→qwen2.5-coder:1.5b / <6GB→cloud-only バイル + cloud hint
-- `ollama` 不在チェック: 実 pull モード時のみ強制、`--no-pull` / `--dry-run` 時は許容
-- 既存 `providers.yaml` 保護: デフォルトは `.new` sidecar に書き、`--force` 時のみ `.bak` 残して overwrite
-- 生成 YAML が live `CodeRouterConfig` Pydantic schema で round-trip すること、を回帰テストで pin
+- New `setup.sh` at the repo root (bash 3.2 compatible, zero new dependencies)
+- Auto-detects RAM on macOS (`sysctl hw.memsize`) / Linux (`/proc/meminfo`)
+- RAM → recommended model: ≥24GB→qwen2.5-coder:14b / ≥12GB→qwen2.5-coder:7b / ≥6GB→qwen2.5-coder:1.5b / <6GB→cloud-only bundle + cloud hint
+- Missing-`ollama` check: enforced only in the actual pull mode, permitted under `--no-pull` / `--dry-run`
+- Protects the existing `providers.yaml`: writes to a `.new` sidecar file by default, only overwrites (leaving a `.bak`) under `--force`
+- Pinned via regression test that the generated YAML round-trips through the live `CodeRouterConfig` Pydantic schema
 
-#### v1.8-E: examples/providers.yaml の 4 プロファイル構成 + Gemma 4/Qwen3.6/Z.AI 登録
+#### v1.8-E: 4-profile layout for examples/providers.yaml + registering Gemma 4/Qwen3.6/Z.AI
 
-- `default_profile: default` → `default_profile: multi` に変更 (新 default はマルチモーダル対応 chain)
-- 4 プロファイル新設:
-  - `multi` (default): vision-capable、Gemma 4 26B local primary → Sonnet 4-6 with vision paid 終端
-  - `coding`: Qwen3.6 35B-A3B (note "local champ") → Qwen3-Coder 30B → ... → GLM-4.7 → Sonnet 4-6
-  - `general`: Gemma 4 E4B (laptop でも動く軽量) → Gemini Flash free → GLM-4.5-Air → Haiku 4-5
-  - `reasoning`: Qwen3.6 35B (thinking native) → ... → GLM-5.1 → Opus 4-1 with thinking
-- 全プロファイルに `append_system_prompt` で Claude 風応答を nudge
+- Changed `default_profile: default` → `default_profile: multi` (the new default is a multimodal-capable chain)
+- 4 new profiles:
+  - `multi` (default): vision-capable, Gemma 4 26B local primary → terminating at Sonnet 4-6 with vision (paid)
+  - `coding`: Qwen3.6 35B-A3B (note's "local champ") → Qwen3-Coder 30B → ... → GLM-4.7 → Sonnet 4-6
+  - `general`: Gemma 4 E4B (lightweight, runs even on a laptop) → Gemini Flash free → GLM-4.5-Air → Haiku 4-5
+  - `reasoning`: Qwen3.6 35B (native thinking) → ... → GLM-5.1 → Opus 4-1 with thinking
+- All profiles nudged toward Claude-like responses via `append_system_prompt`
 - `mode_aliases`: `default → multi`, `fast → general`, `vision → multi`, `think → reasoning`, `cheap → general`
-- 新規プロバイダ 11 種追加: Qwen3.6 (27b/35b), Gemma 4 (e4b/26b/31b), Z.AI (GLM-4.7/5.1/4.5-Air), Gemini Flash free, Claude Haiku/Opus direct
-- `coderouter/data/model-capabilities.yaml` に `qwen3.6:*` (tools=true, claude_code_suitability=ok), `gemma4:*` (tools=true), `GLM-5*` / `GLM-4.[5-9]*` (tools=true) family を新規登録
-- HF-on-Ollama コメント stanza は Gemma 4 / Qwen3.6 公式 tag 化に伴い縮小、GLM-4.5-Air は Z.AI cloud と HF GGUF の両方を案内
-- `docs/hf-ollama-models.md` 新設 (HF GGUF を Ollama に登録する手順、推奨モデル別レシピ、既知の落とし穴)
+- Added 11 new providers: Qwen3.6 (27b/35b), Gemma 4 (e4b/26b/31b), Z.AI (GLM-4.7/5.1/4.5-Air), Gemini Flash free, Claude Haiku/Opus direct
+- Newly registered `qwen3.6:*` (tools=true, claude_code_suitability=ok), `gemma4:*` (tools=true), `GLM-5*` / `GLM-4.[5-9]*` families in `coderouter/data/model-capabilities.yaml`
+- The HF-on-Ollama commented stanza is trimmed now that Gemma 4 / Qwen3.6 have official tags; GLM-4.5-Air documents both the Z.AI cloud route and the HF GGUF route
+- New `docs/hf-ollama-models.md` (steps for registering HF GGUF with Ollama, recipes per recommended model, known pitfalls)
 
 ### Migration
 
-`pyproject.toml version 1.7.0 → 1.8.0`、`coderouter --version` は 1.8.0 を返すように。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし** (新 example は `examples/providers.yaml` のみで、コピー操作は手動)。
+`pyproject.toml version 1.7.0 → 1.8.0`, `coderouter --version` now returns 1.8.0. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`** (the new example only lives in `examples/providers.yaml`; copying it over is a manual step).
 
-新 example を試したい場合:
+To try the new example:
 
 ```bash
-# 既存 config をバックアップしつつ新 example をコピー
+# back up your existing config while copying the new example
 cp ~/.coderouter/providers.yaml ~/.coderouter/providers.yaml.bak
 cp examples/providers.yaml ~/.coderouter/providers.yaml
 
-# Ollama に推奨モデルを pull (24GB+ VRAM の場合)
+# pull the recommended models into Ollama (if you have 24GB+ VRAM)
 ollama pull qwen3.6:35b
 ollama pull qwen3-coder:30b-a3b
 ollama pull gemma4:26b
 
-# Z.AI を使うなら API key を環境変数に
+# if using Z.AI, set the API key as an env var
 echo 'export Z_AI_API_KEY="your-key-here"' >> ~/.zshrc
 source ~/.zshrc
 
-# 確認
-coderouter doctor --check-model local --apply  # 自動 patch も試せる
-coderouter serve --port 8088 --mode coding    # 用途別に明示
+# verify
+coderouter doctor --check-model local --apply  # also try the auto-patch
+coderouter serve --port 8088 --mode coding    # be explicit about use case
 ```
 
-`--mode default` は新 example では `multi` (マルチモーダル chain) に解決されます。旧 example の意味合い (Qwen2.5-Coder + cloud chain) を維持したい場合は `--mode coding` を使うか、`mode_aliases` に独自 alias を追加してください。
+`--mode default` resolves to `multi` (the multimodal chain) in the new example. If you want to keep the old example's meaning (Qwen2.5-Coder + cloud chain), use `--mode coding` or add your own alias to `mode_aliases`.
 
 ### Real-machine verification
 
@@ -2843,68 +2846,68 @@ $ mypy --strict coderouter/doctor_apply.py coderouter/cli.py
 Success: no issues found in 4 source files
 ```
 
-`coderouter doctor --check-model X --apply` の冪等性 + バックアップ作成を smoke test で確認:
+Confirmed the idempotency and backup creation of `coderouter doctor --check-model X --apply` via a smoke test:
 
 ```
 $ coderouter doctor --check-model local --apply
 [probe report ...]
 Apply: 1 target file(s).
   1 patch(es) applied.
-[diff 表示]
+[diff shown]
   Backup: ~/.coderouter/providers.yaml → ~/.coderouter/providers.yaml.bak
 
-$ coderouter doctor --check-model local --apply  # 二回目は no-op
+$ coderouter doctor --check-model local --apply  # a no-op the second time
 Apply: 1 target file(s).
   All 1 patch(es) already applied — providers.yaml is up to date.
 ```
 
-### Out of scope / 次回送り (v1.9 候補)
+### Out of scope / deferred (v1.9 candidates)
 
-- v1.7-C 候補は引き続き需要待ち: `coderouter doctor --network`, `--check-config`/`--check-adapter` (引数なし全部回す mode), `recover_garbled_tool_json` 拡張, 起動時アップデートチェック
-- macOS `.command` / Linux `.sh` / Windows `.bat` launcher は `uvx coderouter-cli` で onboarding 摩擦が十分低くなったため再評価
-- PEP 541 reclamation (`coderouter` 名前空間) は引き続き審査待ち、進捗あれば plan.md §11.B に追記
-- Z.AI Coding Plan の "router 経由でも認可される" 保証取得 (Z.AI 側へのフィードバック)
+- v1.7-C candidates still awaiting demand: `coderouter doctor --network`, `--check-config`/`--check-adapter` (a no-argument mode that runs everything), extending `recover_garbled_tool_json`, a startup update check
+- The macOS `.command` / Linux `.sh` / Windows `.bat` launchers are being reconsidered now that `uvx coderouter-cli` has already lowered onboarding friction enough
+- PEP 541 reclamation (the `coderouter` namespace) is still pending review; progress will be recorded in plan.md §11.B
+- Obtaining a guarantee from Z.AI that Coding Plan access "is authorized even via a router" (feedback to Z.AI)
 
 ---
 
-## [v1.7.0] — 2026-04-25 (PyPI 公開: `uvx coderouter-cli` 一発で動く)
+## [v1.7.0] — 2026-04-25 (PyPI publication: works with a single `uvx coderouter-cli`)
 
-**Theme: 「git clone してから `uv tool install --from git+...`」の onboarding 摩擦をゼロにする minor リリース。** PyPI に **`coderouter-cli`** として公開、以降は `uvx coderouter-cli serve --port 8088` の 1 行で何処からでもインストール + 起動できるようになりました。配布インフラ整備のための小さなコード変更 (パッケージ名、`importlib.metadata` lookup 名追従) と、リリースを反復可能にする GitHub Actions workflow / `pyproject.toml` の sdist allowlist が同梱です。Runtime / API 挙動は v1.6.3 から完全に変化なし。
+**Theme: a minor release eliminating the onboarding friction of "git clone, then `uv tool install --from git+...`".** Now published on PyPI as **`coderouter-cli`**, so a single line, `uvx coderouter-cli serve --port 8088`, installs and starts it from anywhere. This bundles small code changes needed for distribution infrastructure (package name, following the `importlib.metadata` lookup name) along with a GitHub Actions workflow and a `pyproject.toml` sdist allowlist that make releases repeatable. Runtime / API behavior is completely unchanged from v1.6.3.
 
-- Tests: 651 → **651** (±0、コード変更は配布周りのみ)
-- Runtime deps: 5 → 5 (17 sub-release 連続据え置き)
+- Tests: 651 → **651** (±0, code changes are distribution-only)
+- Runtime deps: 5 → 5 (17 consecutive sub-releases unchanged)
 - New PyPI package: [`coderouter-cli`](https://pypi.org/project/coderouter-cli/) (Python ≥ 3.12)
-- Backward compat: 既存の `git clone + uv tool install --from git+...` 経路も引き続き有効。`coderouter` コマンド名 / Python import 名 (`from coderouter import ...`) も完全に変化なし
+- Backward compat: the existing `git clone + uv tool install --from git+...` path remains valid. The `coderouter` command name / Python import name (`from coderouter import ...`) are also completely unchanged
 
 ### Why `coderouter-cli` (and not `coderouter`)
 
-PyPI 上の `coderouter` 名前空間は別作者 (Lawrence Chen) の HTTP routing 系汎用ライブラリ (2025-06 公開、0.1.0 のみ、ドメイン完全別物) によって既に取得済みでした。新規 publish には別名が必要なため、npm / cargo の慣習 (`*-cli` suffix で CLI ツール) に倣って `coderouter-cli` で取得。**Python import 名と console script 名は両方とも `coderouter` のまま**なので、ユーザー視点では `pip install` 時の名前だけが異なります:
+The `coderouter` namespace on PyPI was already taken by a different author's (Lawrence Chen) general-purpose HTTP routing library (published 2025-06, only ever reached 0.1.0, a completely unrelated domain). A new publish needed a different name, so following the npm / cargo convention (`*-cli` suffix for CLI tools), `coderouter-cli` was chosen. **Both the Python import name and the console script name stay `coderouter`,** so from a user's perspective only the name at `pip install` time differs:
 
 ```bash
-pip install coderouter-cli       # ← install (名前変わる)
-import coderouter                # ← import (変わらない)
-coderouter serve --port 8088     # ← run (変わらない)
+pip install coderouter-cli       # ← install (name changes)
+import coderouter                # ← import (unchanged)
+coderouter serve --port 8088     # ← run (unchanged)
 ```
 
-PEP 541 reclamation request で `coderouter` 名を引き取る道は plan.md §11.B に追跡として残します (通っても 1〜数ヶ月かかるので、その間は `coderouter-cli` で運用)。
+The path to reclaiming the `coderouter` name via a PEP 541 reclamation request is tracked in plan.md §11.B (even if approved, it can take one to several months, so `coderouter-cli` is used in the meantime).
 
 ### Changes
 
-- **PyPI publish 化** — `pyproject.toml` の `name` を `coderouter` → `coderouter-cli` に変更、`version` を 1.7.0 に bump、`classifiers` / `project.urls` / `keywords` を publish に必要なメタデータで enrich (`Topic :: Scientific/Engineering :: Artificial Intelligence` / Homepage / Issues / Changelog / Documentation の 4 URL)
-- **`coderouter/__init__.py`** — `importlib.metadata.version("coderouter")` を `version("coderouter-cli")` に追従。Python import 名 (`coderouter`) は変わらないので、`from coderouter import ...` する全ユーザーには影響なし
-- **`LICENSE` 新規** — MIT License を明示的にファイル化、wheel の `dist-info/licenses/LICENSE` に同梱されるようになった (PyPI の license 表示と sdist の完全性向上)
-- **`tool.hatch.build.targets.sdist`** — `only-include` で sdist を厳格 allowlist 化。ローカル virtualenv (`.venv*`) や `__pycache__` / `dist/` / `.pytest_cache` 等を絶対に取り込まない設計に。これで `uv build` がどのマシンでも同じサイズ (sdist 668 KB / wheel 161 KB) を出す
-- **`.github/workflows/release.yml` 新規** — `git tag v*` push 時に Trusted Publishing (OIDC、API トークン不要) で PyPI へ自動 publish + GitHub Release 草稿作成。**初回 publish (v1.7.0) は手動で実施**、Trusted Publisher 登録後の v1.7.x 以降は tag push のみで自動化される
-- **doc reorder for new entry path** — README ja/en、quickstart.md ja/en、free-tier-guide ja/en の install セクションを `uvx coderouter-cli` 中心に書き換え。`uv tool install --from git+...` 経路は中級者向けに残置
+- **PyPI publish setup** — changed `pyproject.toml`'s `name` from `coderouter` to `coderouter-cli`, bumped `version` to 1.7.0, enriched `classifiers` / `project.urls` / `keywords` with the metadata needed for publishing (`Topic :: Scientific/Engineering :: Artificial Intelligence` plus 4 URLs: Homepage / Issues / Changelog / Documentation)
+- **`coderouter/__init__.py`** — updated `importlib.metadata.version("coderouter")` to `version("coderouter-cli")`. Since the Python import name (`coderouter`) is unchanged, this has no impact on any user doing `from coderouter import ...`
+- **New `LICENSE`** — explicitly files the MIT License, now bundled into the wheel's `dist-info/licenses/LICENSE` (improves PyPI's license display and sdist completeness)
+- **`tool.hatch.build.targets.sdist`** — strictly allowlists the sdist via `only-include`, designed to never pull in local virtualenvs (`.venv*`), `__pycache__`, `dist/`, `.pytest_cache`, etc. This makes `uv build` produce the same size (sdist 668 KB / wheel 161 KB) on any machine
+- **New `.github/workflows/release.yml`** — on a `git tag v*` push, auto-publishes to PyPI via Trusted Publishing (OIDC, no API token needed) and drafts a GitHub Release. **The first publish (v1.7.0) was done manually**; from v1.7.x onward, after registering the Trusted Publisher, a tag push alone automates it
+- **Doc reorder for the new entry path** — rewrote the install sections of README ja/en, quickstart.md ja/en, and the free-tier-guide ja/en to center on `uvx coderouter-cli`. The `uv tool install --from git+...` path is kept for intermediate users
 
 ### Real-machine verification
 
 ```
 $ uv build
-Successfully built dist/coderouter_cli-1.7.0.tar.gz   (668 KB, .venv 汚染ゼロ)
+Successfully built dist/coderouter_cli-1.7.0.tar.gz   (668 KB, zero .venv contamination)
 Successfully built dist/coderouter_cli-1.7.0-py3-none-any.whl  (161 KB)
 
-$ coderouter-publish-prod   # = op run + uv publish (1Password から PYPI_TOKEN を inject)
+$ coderouter-publish-prod   # = op run + uv publish (injects PYPI_TOKEN from 1Password)
 Publishing 2 files https://upload.pypi.org/legacy/
 Uploading coderouter_cli-1.7.0-py3-none-any.whl (157.7KiB)
 Uploading coderouter_cli-1.7.0.tar.gz (652.7KiB)
@@ -2913,34 +2916,34 @@ $ curl -sI "https://pypi.org/pypi/coderouter-cli/json" | head -1
 HTTP/2 200
 ```
 
-CDN 伝播後に `uvx --from coderouter-cli coderouter --version` で本物の PyPI 経由インストールも確認済み (uv 0.11+ では package 名 ≠ executable 名のとき `--from` 必須、Issue #10 で報告者から fb)。
+After CDN propagation, also confirmed a real PyPI-based install via `uvx --from coderouter-cli coderouter --version` (on uv 0.11+, `--from` is required when the package name ≠ the executable name, per feedback from the reporter of Issue #10).
 
 ### Migration
 
-不要。**v1.6.x までで `uv tool install --from git+...` していたユーザーは、自然なアップグレード経路として:**
+None needed. **For users who had been running `uv tool install --from git+...` through v1.6.x, the natural upgrade path is:**
 
 ```bash
-# 旧 (引き続き有効)
+# old (still valid)
 uv tool install --from git+https://github.com/zephel01/CodeRouter.git coderouter-cli
 
-# 新 (PyPI から、コマンド 1 行 — uv 0.11+ canonical 形式)
+# new (from PyPI, single command — the canonical uv 0.11+ form)
 uvx --from coderouter-cli coderouter serve --port 8088
-# あるいは恒久的に:
+# or, to install permanently:
 uv tool install coderouter-cli
 ```
 
-`coderouter` 起動コマンド名、`from coderouter import ...` の Python import、`providers.yaml` のフォーマット、env 変数 (`ANTHROPIC_BASE_URL` 等)、ingress の URL 構造、すべて v1.6.3 と完全に同じです。
+The `coderouter` launch command name, the `from coderouter import ...` Python import, the `providers.yaml` format, env vars (`ANTHROPIC_BASE_URL` etc.), and the ingress URL structure are all completely unchanged from v1.6.3.
 
-### Out of scope / 次回送り (v1.7-B 以降)
+### Out of scope / deferred (v1.7-B+)
 
-v1.7.0 (= v1.7-A) は配布パイプラインだけに集中して shipping させました。plan.md §11.B に記載された残りの v1.7 候補機能は v1.7-B 以降で:
+v1.7.0 (= v1.7-A) focused shipping exclusively on the distribution pipeline. The remaining v1.7 candidate features listed in plan.md §11.B are deferred to v1.7-B+:
 
-- `coderouter doctor --check-config` / `--check-adapter` (引数なしで全部回す mode)
-- `coderouter doctor --network` (外向き接続検出、CI で 0 outbound 保証)
-- `setup.sh` (RAM 検出 → モデル提案 → providers.yaml 生成)
-- macOS `.command` / Linux `.sh` / Windows `.bat` launcher
-- 起動時アップデートチェック (opt-in)
-- capability registry の `claude_code_suitability` hint (Llama-3.3-70B 系の startup WARN)
+- `coderouter doctor --check-config` / `--check-adapter` (a no-argument mode that runs everything)
+- `coderouter doctor --network` (outbound-connection detection, guaranteeing zero outbound in CI)
+- `setup.sh` (RAM detection → model suggestion → providers.yaml generation)
+- macOS `.command` / Linux `.sh` / Windows `.bat` launchers
+- Startup update check (opt-in)
+- The capability registry's `claude_code_suitability` hint (startup WARN for the Llama-3.3-70B family)
 
 ---
 
@@ -2970,856 +2973,857 @@ None required. Existing setups (manual `export` in `.zshrc`, `source .env`, dire
 
 ## [v1.6.2] — 2026-04-24 (Troubleshooting split-out + .env / NIM YAML hygiene)
 
-**Theme: v1.6.1 出荷後の実機運用で踏んだ罠を、ドキュメント側に集約する patch-level。** Claude Code から NIM 経由の Llama-3.3-70B を実機で叩いて発見した 3 系統 (`.env` の `export` 漏れによる 401 / Llama-3.3-70B が Claude Code の system prompt に過剰反応して "こんにちは" を `Skill(hello)` に化けさせる挙動 / `claude-mem` 等の第三者プラグインが CodeRouter 経由だと内部呼び出しに失敗する構造) を、独立した `docs/troubleshooting.md` (JA primary) + `.en.md` (EN sub) に切り出して整理。README §トラブルシューティングは 30 秒で読めるサマリ + 症状別索引に短縮。`examples/.env.example` は各キーに `export` 必須の形式に変更し、ロード手順 / 検証手順 / 4 つの API キー (NIM / OpenRouter / Anthropic / CODEROUTER_CONFIG) の説明を冒頭ドキュメンテーションに追加。`examples/providers.nvidia-nim.yaml` の 4 プロファイル (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`) は Llama-3.3-70B を最後尾に下げて Qwen3-Coder-480B を第一選択にする実機検証済みの順序へ並び替え、選択理由を YAML 内コメントで明文化 (Llama 自体の動作は健全、Claude Code 専用 prompt との相性問題)。全て docs / examples のみの変更、Python コード側の public API / ingress 契約は完全に変更なし。
+**Theme: a patch-level release consolidating pitfalls hit during real-world operation after the v1.6.1 release, into the documentation.** Discovered while running Llama-3.3-70B via NIM on real hardware from Claude Code, 3 issue clusters (a 401 caused by a missing `export` in `.env` / Llama-3.3-70B overreacting to Claude Code's system prompt and turning "こんにちは" into a `Skill(hello)` call / a structural mismatch where third-party plugins like `claude-mem` fail their internal calls when routed through CodeRouter) are consolidated into a standalone `docs/troubleshooting.md` (JA primary) + `.en.md` (EN sub). The README's Troubleshooting section is trimmed to a 30-second-readable summary plus a symptom-based index. `examples/.env.example` now requires `export` on every key, with loading steps / verification steps / explanations of the 4 API keys (NIM / OpenRouter / Anthropic / CODEROUTER_CONFIG) added to the top-of-file documentation. The 4 profiles in `examples/providers.nvidia-nim.yaml` (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`) are reordered, per real-hardware verification, to demote Llama-3.3-70B to the tail and promote Qwen3-Coder-480B to first choice, with the rationale documented in YAML comments (Llama itself works fine; the issue is a compatibility mismatch with the Claude-Code-specific prompt). All changes are docs / examples only; the Python code's public API / ingress contract is completely unchanged.
 
-- Tests: 601 → **601** (±0、新規ロジックなし。`tests/test_examples_yaml.py` の NIM YAML invariants が profile 並び替え後も pass することで間接検証)
-- Runtime deps: 5 → 5 (15 sub-release 連続据え置き)
-- Non-breaking: ドキュメント切り出し + サンプル YAML の export 追加 / プロファイル並び替えのみで、Python コード側の挙動は変更なし
+- Tests: 601 → **601** (±0, no new logic. Indirectly verified by the NIM YAML invariants in `tests/test_examples_yaml.py` still passing after the profile reorder)
+- Runtime deps: 5 → 5 (15 consecutive sub-releases unchanged)
+- Non-breaking: only a docs split-out + adding export to the sample YAML / profile reordering — no change to Python code-side behavior
 
 ### Changes
 
-- **`docs/troubleshooting.md` 新規 (JA primary)** — README §トラブルシューティングの全文を切り出した上で、v1.6.2 の実機検証で発覚した 5 トピックを §1 (起動・設定の罠) と §4 (Claude Code 連携の罠) として追加。§1 は CLI 訂正 (`serve --mode`)、`.env` の `export` 必須、`env` での export 検証、`Header of type authorization was missing` 401 の切り分け、`~/.zshrc` 反映漏れの 5 つ。§4 は Llama-3.3-70B 系の過剰ツール呼び出し / `UserPromptSubmit hook error` (claude-mem 等プラグインとの構造的ミスマッチ) / auto-compact 遅延 / ダッシュボード活用の 4 つ
-- **`docs/troubleshooting.en.md` 新規 (EN sub)** — JA 版と章番号 / アンカー 1 対 1 対応
-- **README.md / README.en.md §トラブルシューティング短縮** — 30 秒で読める早見表 + 症状別索引 (4 入口) に置換、Ollama 5 症状は 1 行サマリ + リンクのみ。旧アンカー (`ollama-初心者--サイレント失敗-5-症状-v07-c` / `ollama-beginner--5-silent-fail-symptoms-v07-c`) は両 README に残して後方互換確保
-- **README.md / README.en.md ドキュメント目次** — 「詰まったとき」「When stuck」行を `troubleshooting.md` / `.en.md` 指向で追加、両 README の言語スイッチャに `troubleshooting` / `トラブルシューティング` を併記
-- **`docs/usage-guide.md` / `usage-guide.en.md` §8 quick index** — 既存 README 参照を `docs/troubleshooting.md` 指向に書き換え、`Header of type authorization was missing 401` と「Claude Code 上で挨拶が `Skill(hello)` 等に化ける」の 2 行を追記
-- **`examples/.env.example`** — 全キー (`ALLOW_PAID` / `OPENROUTER_API_KEY` / `NVIDIA_NIM_API_KEY` / `ANTHROPIC_API_KEY` / `CODEROUTER_CONFIG`) を `export KEY=value` 形式に統一。冒頭に「ロード方法 (`source .env` で動く / `set -a && source .env && set +a` でも可) / CodeRouter は自動 source しない / 検証コマンド (`env | grep ...`)」のドキュメンテーションを追加
-- **`examples/providers.nvidia-nim.yaml` 4 プロファイル並び替え** — `claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning` の全てで NIM レーンの順序を Qwen3-Coder-480B → Kimi-K2 → Llama-3.3-70B に変更 (実機検証で Llama-3.3-70B が Claude Code 単独利用時に過剰ツール呼び出しを起こすことが判明、第一選択から退避線へ)。プロファイル直前のコメントブロックに選定理由 (実機検証の症状ログ + `docs/articles/note-nvidia-nim.md` §6-2 への参照) を追加
-- **`examples/providers.nvidia-nim.yaml` セットアップコメント拡張** — 冒頭の "NVIDIA NIM setup" を 5 ステップに拡張、`.env` の `export` 必須 / `coderouter doctor` を起動前に通すこと / `--port 8088` を Claude Code に合わせる必要を明記
-- **`docs/articles/note-nvidia-nim.md` 改訂** — v1.6.2 検証ログを §6 (実機罠 3 種) と §7 (ダッシュボード活用) に追記、§4 / §9 / §11 の手順を実機検証済みコマンドに更新
+- **New `docs/troubleshooting.md` (JA primary)** — splits out the full text of the README's Troubleshooting section, adding 5 topics discovered during v1.6.2 real-hardware verification as §1 (startup/config pitfalls) and §4 (Claude Code integration pitfalls). §1 covers CLI correction (`serve --mode`), the required `export` in `.env`, verifying the export via `env`, isolating the `Header of type authorization was missing` 401, and forgetting to reload `~/.zshrc` — 5 items. §4 covers Llama-3.3-70B-family excessive tool calling / `UserPromptSubmit hook error` (a structural mismatch with plugins like claude-mem) / auto-compact delay / making use of the dashboard — 4 items
+- **New `docs/troubleshooting.en.md` (EN sub)** — 1:1 correspondence of chapter numbers / anchors with the JA version
+- **Shortened README.md / README.en.md Troubleshooting section** — replaced with a 30-second-readable quick reference plus a symptom-based index (4 entry points); the 5 Ollama symptoms are reduced to a 1-line summary plus a link. The old anchors (`ollama-初心者--サイレント失敗-5-症状-v07-c` / `ollama-beginner--5-silent-fail-symptoms-v07-c`) are kept in both READMEs for backward compatibility
+- **README.md / README.en.md documentation table of contents** — added "詰まったとき" / "When stuck" lines pointing to `troubleshooting.md` / `.en.md`, and added `troubleshooting` / `トラブルシューティング` to both READMEs' language switchers
+- **`docs/usage-guide.md` / `usage-guide.en.md` §8 quick index** — rewrote the existing README references to point at `docs/troubleshooting.md`, adding 2 lines for `Header of type authorization was missing 401` and "greetings in Claude Code turning into `Skill(hello)` etc."
+- **`examples/.env.example`** — unified all keys (`ALLOW_PAID` / `OPENROUTER_API_KEY` / `NVIDIA_NIM_API_KEY` / `ANTHROPIC_API_KEY` / `CODEROUTER_CONFIG`) into `export KEY=value` form. Added top-of-file documentation covering "how to load it (`source .env` works / `set -a && source .env && set +a` also works) / CodeRouter doesn't auto-source it / verification command (`env | grep ...`)"
+- **Reordered the 4 profiles in `examples/providers.nvidia-nim.yaml`** — for all of `claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`, changed the NIM lane order to Qwen3-Coder-480B → Kimi-K2 → Llama-3.3-70B (real-hardware verification found Llama-3.3-70B triggers excessive tool calling when used standalone with Claude Code, demoting it from first choice to the fallback tail). Added the selection rationale (real-hardware verification symptom log + a reference to `docs/articles/note-nvidia-nim.md` §6-2) to the comment block right before each profile
+- **Extended the setup comments in `examples/providers.nvidia-nim.yaml`** — expanded the top-of-file "NVIDIA NIM setup" into 5 steps, explicitly noting the required `export` in `.env` / running `coderouter doctor` before startup / matching `--port 8088` to Claude Code
+- **Revised `docs/articles/note-nvidia-nim.md`** — added the v1.6.2 verification log as §6 (3 real-hardware pitfalls) and §7 (making use of the dashboard), updating the §4 / §9 / §11 steps to real-hardware-verified commands
 
 ### Why
 
-v1.6.1 出荷直後にユーザー (=自分) が NIM 構成を実機で立てた際、`source .env` だけでは `coderouter serve` の子プロセスに env 変数が届かず `Header of type authorization was missing` 401 で詰まり、そこを越えても Llama-3.3-70B が "こんにちは" を `Skill(hello)` に化けさせて使い物にならない、という二重トラップを踏んだ。両方とも CodeRouter のコードは健全で、ドキュメント / サンプル設定が「実機で踏むであろう罠」を予防していなかったのが本質的な問題。v1.6.2 はこの「現場で実際に踏んだ」知見を docs / examples に確実に折り込むための小さな patch リリース。コード変更を伴わないため CHANGELOG / plan.md / docs のみで完結。
+Right after the v1.6.1 release, when the user (= myself) stood up a NIM configuration on real hardware, `source .env` alone didn't get the env vars to `coderouter serve`'s child process, causing a `Header of type authorization was missing` 401 — and even past that, Llama-3.3-70B turned "こんにちは" into a `Skill(hello)` call, making it unusable — a double trap. In both cases, CodeRouter's code itself was fine; the real problem was that the documentation / sample configs didn't guard against the pitfalls one would actually hit on real hardware. v1.6.2 is a small patch release to reliably fold this "actually hit it in the field" knowledge into the docs / examples. Since it involves no code changes, it's contained entirely within CHANGELOG / plan.md / docs.
 
 ### Migration
 
-不要。既存 `~/.coderouter/providers.yaml` / 既存 env 変数 / 既存 Python import / 既存 ingress 契約は全て変更なし。`examples/providers.nvidia-nim.yaml` を `~/.coderouter/providers.yaml` にコピーして使っているユーザーは、本リリースの YAML を上書きコピーすると Qwen-first 順序に切り替わる。`.env` を従来形式 (export なし) で運用していて問題なく動いていた人は、実は親シェル経由で別途 export していたケースが大半で、v1.6.2 の `.env.example` をそのまま `cp` しても動作は変わらない (export を二重宣言しても害はない)。
+None needed. The existing `~/.coderouter/providers.yaml` / existing env vars / existing Python imports / existing ingress contract are all unchanged. Users who copy `examples/providers.nvidia-nim.yaml` over `~/.coderouter/providers.yaml` will switch to the Qwen-first order if they overwrite-copy this release's YAML. Users running `.env` in the old form (without export) but without issues were mostly exporting it separately via a parent shell in most cases; simply `cp`-ing v1.6.2's `.env.example` as-is won't change behavior (declaring export twice is harmless).
 
 ---
 
 ## [v1.6.1] — 2026-04-23 (NIM free-tier + doc hygiene)
 
-**Theme: v1.6.0 `auto_router` 出荷直後の patch-level。** NVIDIA NIM 開発者枠 (40 req/min) を 1 級市民として local-first fallback チェーンに組み込み、併せて README / docs の言語優先度を「日本語 main / 英語 sub」にスワップ (ターゲット層の reality に合わせる)、README ヒーローを「Claude Code × ローカル LLM で tool calling が破綻する問題を CodeRouter の修復パスで直す」という最強のピッチに書き換え、`coderouter/__init__.py` の `__version__` hardcode を `importlib.metadata.version("coderouter")` 経由に切替 (`pyproject.toml` の `version` を single source of truth に)。全て non-breaking — 既存 YAML / 既存 API / 既存 ingress 契約は verbatim 維持、新規ファイル追加 + 既存 docs のリネーム + README hero の入替のみ。
+**Theme: a patch-level release right after v1.6.0's `auto_router` shipment.** Incorporates NVIDIA NIM's developer tier (40 req/min) as a first-class citizen into the local-first fallback chain, and simultaneously swaps the README / docs language priority to "Japanese main / English sub" (matching the reality of the target audience), rewrites the README hero into the strongest possible pitch — "the problem where tool calling breaks when using a local LLM with Claude Code, fixed at the router level" — and switches `coderouter/__init__.py`'s hardcoded `__version__` to go through `importlib.metadata.version("coderouter")` (making `pyproject.toml`'s `version` the single source of truth). All non-breaking — existing YAML / existing API / existing ingress contract are preserved verbatim; only new files, renames of existing docs, and a swap of the README hero are involved.
 
-- Tests: 596 → **601** (+5, +0.8%)、`tests/test_examples_yaml.py` 新設 (example YAML 全件ロード + NIM 固有 invariants)
-- Runtime deps: 5 → 5 (14 sub-release 連続据え置き)
-- Non-breaking: 新設 example YAML + 新設 reference doc + ファイルリネーム (`git mv` で blame 保全) + README hero 入替のみで、Python コード側の public API / ingress 契約は完全に変更なし
+- Tests: 596 → **601** (+5, +0.8%), new `tests/test_examples_yaml.py` (loads all example YAMLs + NIM-specific invariants)
+- Runtime deps: 5 → 5 (14 consecutive sub-releases unchanged)
+- Non-breaking: only a new example YAML + a new reference doc + file renames (via `git mv`, preserving blame) + a README hero swap — the Python code's public API / ingress contract is completely unchanged
 
 ### Added
 
-- **`examples/providers.nvidia-nim.yaml`** — NVIDIA NIM 開発者枠 (40 req/min 無料、クレカ不要) 向けの完成形サンプル。4 プロファイル (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`) で `local (Ollama 7B/14B) → NIM 3 段 (Meta/Qwen/Moonshot 異ベンダー) → OpenRouter free 2 段 → paid` の 8 段チェーンを既定。live 検証 (2026-04-23、`integrate.api.nvidia.com/v1`) で採用判定:
-  - `meta/llama-3.3-70b-instruct` — chat 540ms、tool_calls OK、streaming 260ms / 12 SSE chunks / usage 返却 ✓
-  - `qwen/qwen3-coder-480b-a35b-instruct` — chat 634ms、tool_calls OK (480B MoE、agentic coding 特化)
-  - `moonshotai/kimi-k2-instruct` — chat 2.8s、tool_calls OK (NIM レーン内でのベンダー diversity)
-  - `qwen/qwen2.5-coder-32b-instruct` — chat は 160ms で正常、tool-laden リクエストに対しては NIM が HTTP 400 `"Tool use has not been enabled, because it is unsupported by qwen/qwen2.5-coder-32b-instruct"` を返すため、capability gate で tool-laden traffic を回避する `tools: false` stanza として組み込み
-  - `moonshotai/kimi-k2-thinking` — `reasoning_content` に `<think>...</think>` で答えを返す variant、`nim-reasoning` プロファイル専用。`output_filters: [strip_thinking]` を safety net として併記
-  - 不採用例 (`nvidia/llama-3.1-nemotron-70b-instruct` → 404、`deepseek-ai/deepseek-r1` → 410 EOL 2026-01-26、`nvidia/llama-3.3-nemotron-super-49b-v1.5` → 200 OK だが content null、`deepseek-ai/deepseek-v3.2` / `z-ai/glm4.7` → timeout) を YAML コメントに記載して再試行を防ぐ
-- **`tests/test_examples_yaml.py`** — 新設の +5 tests で `examples/providers*.yaml` 全件ロード検証 + NIM 固有 invariants の CI 時強制:
-  - 全 example YAML がロードでき `default_profile` / profile 参照整合性が保たれる (parametrized over 4 ファイル)
-  - NIM 3 tool-capable provider (`nim-llama-3.3-70b` / `nim-qwen3-coder-480b` / `nim-kimi-k2`) が存在する
-  - 全 `nim-*` stanza が `api_key_env=NVIDIA_NIM_API_KEY` / `base_url=https://integrate.api.nvidia.com/v1` / `paid=False` を満たす (prefix-exact で base_url を pin、`/v2` typo 等を reject)
-  - `nim-qwen-coder-32b-chat` が `tools: false` を宣言する (HTTP 400 回避の capability gate 契約)
-  - `nim-kimi-k2-thinking` がプライマリ `claude-code-nim` チェーンに含まれない (高 latency + `reasoning_content` 出力形状が Claude Code に不向きなため、`nim-reasoning` プロファイルでのみ引ける)
-- **`docs/free-tier-guide.md` / `docs/free-tier-guide.en.md`** — 新規 reference doc。NIM + OpenRouter 無料枠の使い分けだけに絞った 250+ 行の運用ガイド:
-  - 3 層比較表 (local / NIM 40 req/min / OpenRouter free 20 req/min + 200 req/day)
-  - `claude-code-nim` プロファイルの 8 段チェーン設計意図
-  - セットアップ手順 (3 コマンド) + `.env` に置く 2 つの API キー取得先
-  - live 検証済みモデル一覧 (採用 / chat-only / 不採用の 3 段)
-  - 5 common footguns (NIM の "無料" はクレジット消費型、一部モデルが非標準 `reasoning` フィールドを吐く、Qwen2.5-Coder-32B の tools 無効、OpenRouter の 200 req/day、NIM model ID の case-sensitive drift)
-  - `coderouter doctor --check-model` の実出力例 + 読み方
-- `README.md` + `README.en.md` の "Usage guide" 案内のすぐ下に free-tier guide への双方向リンクを追加
-- `docs/usage-guide.md` / `docs/usage-guide.en.md` の §6 OpenRouter pairing セクションに NIM レイヤ追加と free-tier guide への参照を追加
+- **`examples/providers.nvidia-nim.yaml`** — a polished sample for the NVIDIA NIM developer tier (40 req/min free, no credit card needed). Defaults to an 8-stage chain across 4 profiles (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`): `local (Ollama 7B/14B) → NIM 3 stages (Meta/Qwen/Moonshot, different vendors) → OpenRouter free 2 stages → paid`. Adoption decisions from live verification (2026-04-23, `integrate.api.nvidia.com/v1`):
+  - `meta/llama-3.3-70b-instruct` — chat 540ms, tool_calls OK, streaming 260ms / 12 SSE chunks / usage returned correctly
+  - `qwen/qwen3-coder-480b-a35b-instruct` — chat 634ms, tool_calls OK (480B MoE, specialized for agentic coding)
+  - `moonshotai/kimi-k2-instruct` — chat 2.8s, tool_calls OK (vendor diversity within the NIM lane)
+  - `qwen/qwen2.5-coder-32b-instruct` — chat works fine at 160ms, but NIM returns an HTTP 400, `"Tool use has not been enabled, because it is unsupported by qwen/qwen2.5-coder-32b-instruct"`, for tool-laden requests, so it's registered with a `tools: false` stanza so the capability gate routes tool-laden traffic elsewhere
+  - `moonshotai/kimi-k2-thinking` — a variant that returns the answer wrapped in `<think>...</think>` inside `reasoning_content`, dedicated to the `nim-reasoning` profile. `output_filters: [strip_thinking]` is noted alongside it as a safety net
+  - Rejected candidates (`nvidia/llama-3.1-nemotron-70b-instruct` → 404, `deepseek-ai/deepseek-r1` → 410 EOL 2026-01-26, `nvidia/llama-3.3-nemotron-super-49b-v1.5` → 200 OK but null content, `deepseek-ai/deepseek-v3.2` / `z-ai/glm4.7` → timeout) are recorded in YAML comments to prevent retrying them
+- **`tests/test_examples_yaml.py`** — new, +5 tests loading all `examples/providers*.yaml` files and enforcing NIM-specific invariants in CI:
+  - All example YAMLs load, with `default_profile` / profile-reference consistency preserved (parametrized across 4 files)
+  - The 3 NIM tool-capable providers (`nim-llama-3.3-70b` / `nim-qwen3-coder-480b` / `nim-kimi-k2`) exist
+  - Every `nim-*` stanza satisfies `api_key_env=NVIDIA_NIM_API_KEY` / `base_url=https://integrate.api.nvidia.com/v1` / `paid=False` (pins base_url by prefix-exact match, rejecting typos like `/v2`)
+  - `nim-qwen-coder-32b-chat` declares `tools: false` (the capability-gate contract avoiding the HTTP 400)
+  - `nim-kimi-k2-thinking` is not included in the primary `claude-code-nim` chain (its high latency and `reasoning_content` output shape don't suit Claude Code, so it's only reachable via the `nim-reasoning` profile)
+- **`docs/free-tier-guide.md` / `docs/free-tier-guide.en.md`** — a new reference doc: a 250+ line operational guide focused solely on making the most of NIM + OpenRouter's free tiers:
+  - A 3-tier comparison table (local / NIM 40 req/min / OpenRouter free 20 req/min + 200 req/day)
+  - The design intent behind the `claude-code-nim` profile's 8-stage chain
+  - Setup steps (3 commands) + where to obtain the 2 API keys that go in `.env`
+  - A list of live-verified models across 3 tiers (adopted / chat-only / rejected)
+  - 5 common footguns (NIM's "free" tier is credit-consuming, some models leak a non-standard `reasoning` field, Qwen2.5-Coder-32B has tools disabled, OpenRouter's 200 req/day cap, case-sensitive drift in NIM model IDs)
+  - A real example of `coderouter doctor --check-model` output, with a reading guide
+- Added bidirectional links to the free-tier guide right below the "Usage guide" pointer in `README.md` + `README.en.md`
+- Added the NIM layer and a reference to the free-tier guide in the §6 OpenRouter pairing section of `docs/usage-guide.md` / `docs/usage-guide.en.md`
 
 ### Changed
 
-- **ドキュメント言語優先度のスワップ** — `git mv` で 5 ペアを日本語 main / 英語 sub に入替:
+- **Swapped the documentation language priority** — via `git mv`, swapped 5 pairs to Japanese main / English sub:
   - `README.ja.md` → `README.md` / `README.md` → `README.en.md`
   - `docs/usage-guide.ja.md` → `docs/usage-guide.md` / `docs/usage-guide.md` → `docs/usage-guide.en.md`
   - `docs/security.ja.md` → `docs/security.md` / `docs/security.md` → `docs/security.en.md`
   - `docs/quickstart.ja.md` → `docs/quickstart.md` / `docs/quickstart.md` → `docs/quickstart.en.md`
   - `docs/when-do-i-need-coderouter.ja.md` → `docs/when-do-i-need-coderouter.md` / `docs/when-do-i-need-coderouter.md` → `docs/when-do-i-need-coderouter.en.md`
-- `pyproject.toml readme = "README.md"` は維持したため PyPI 側の readme 表示も日本語に切替 (ターゲット層と整合)
-- クロスリファレンス 20+ 箇所を同時更新 — 両 README の言語スイッチャー、docs 内部の sibling-language 相互参照、docs 内部の anchor slug 整合 (日本語 README の anchor は日本語スラグ、英語側は英語スラグ)、`docs/articles/note-*.md` / `zenn-*.md` の GitHub blob URL (`blob/main/docs/quickstart.ja.md` → `blob/main/docs/quickstart.md` 等)、`docs/designs/v1.6-auto-router.md` の内部リンク
-- **README ヒーロー書き換え** (両言語):
-  - 旧: "Local-first coding AI with ZERO cost by default" 型の汎用タグライン
-  - 新: "Claude Code でローカル LLM を使うと tool calling が壊れる問題、ルーター側で直します" — `qwen2.5-coder:7B` / `phi-4` / `mistral-nemo` などの量子化モデルが `{"name":..., "arguments":...}` を plain text で吐く症状を CodeRouter の tool-call 修復パスが有効な `tool_use` ブロックへ復元、という最強のピッチを最前面に。"さらに CodeRouter が他にやってくれること" ブロック (doctor / reasoning-leak scrub / local → NIM 40 req/min → OpenRouter free → paid fallback / 5 deps / 601 tests) を言語スイッチャーと既存 "What gets easier" セクションの間に挿入
-  - `docs/assets/before-after-toolcall.gif` の HTML comment placeholder を予約 (撮影できたらコメントアウト外すだけ)
-  - バージョンバッジを 1.5.0 → 1.6.1 に、テスト数 453 → 601 に同期
+- Kept `pyproject.toml readme = "README.md"`, so PyPI's readme display also switches to Japanese (matching the target audience)
+- Simultaneously updated 20+ cross-references — both READMEs' language switchers, sibling-language cross-references within docs, anchor slug consistency within docs (Japanese README anchors use Japanese slugs, English side uses English slugs), GitHub blob URLs in `docs/articles/note-*.md` / `zenn-*.md` (e.g., `blob/main/docs/quickstart.ja.md` → `blob/main/docs/quickstart.md`), and internal links in `docs/designs/v1.6-auto-router.md`
+- **Rewrote the README hero** (both languages):
+  - Old: a generic tagline in the style of "Local-first coding AI with ZERO cost by default"
+  - New: "The problem where tool calling breaks when using a local LLM with Claude Code — fixed at the router" — leading with the strongest pitch, that CodeRouter's tool-call repair path restores the `{"name":..., "arguments":...}`-as-plain-text symptom seen from quantized models like `qwen2.5-coder:7B` / `phi-4` / `mistral-nemo` into a valid `tool_use` block. Inserted an "and here's everything else CodeRouter does for you" block (doctor / reasoning-leak scrub / local → NIM 40 req/min → OpenRouter free → paid fallback / 5 deps / 601 tests) between the language switcher and the existing "What gets easier" section
+  - Reserved an HTML comment placeholder for `docs/assets/before-after-toolcall.gif` (just uncomment once it's captured)
+  - Synced the version badge from 1.5.0 → 1.6.1 and the test count from 453 → 601
 
 ### Fixed
 
-- **`coderouter/__init__.py`** (`009b2b1`) — `__version__` の実装を hardcode (`"1.5.0"`) から `importlib.metadata.version("coderouter")` 経由に切替。以降 `pyproject.toml` の `version` 1 行が single source of truth で、`coderouter --version` と `/healthz` の両方が正しく 1.6.x 系を報告する。v1.6.0 の known quirk として `docs/designs/v1.6-auto-router-verification.md` に記録された issue の修復
+- **`coderouter/__init__.py`** (`009b2b1`) — switched the `__version__` implementation from a hardcoded `"1.5.0"` to going through `importlib.metadata.version("coderouter")`. From now on, `pyproject.toml`'s single `version` line is the single source of truth, and both `coderouter --version` and `/healthz` correctly report the 1.6.x line. Fixes the issue recorded as a v1.6.0 known quirk in `docs/designs/v1.6-auto-router-verification.md`
 - CI fix (`d0de1a9`)
 
 ### Non-breaking compatibility
 
-- YAML schema に変更なし — 既存の `providers.yaml` / `providers.auto.yaml` / `providers.auto-custom.yaml` は verbatim で動作
-- Python public API に変更なし — `coderouter/__init__.py` の `__version__` 取得経路だけが変わった (値は同じフィールドで同じ型)
-- Ingress 契約に変更なし — `/v1/messages` / `/v1/chat/completions` / `/metrics` / `/metrics.json` / `/dashboard` 全て verbatim
-- ファイルリネームは `git mv` で実施したため blame 履歴保全。pyproject は `readme = "README.md"` のまま (PyPI 側は新しい日本語 readme を自動追随)
+- No change to the YAML schema — existing `providers.yaml` / `providers.auto.yaml` / `providers.auto-custom.yaml` work verbatim
+- No change to the Python public API — only `coderouter/__init__.py`'s `__version__` retrieval path changed (the value comes from the same field with the same type)
+- No change to the ingress contract — `/v1/messages` / `/v1/chat/completions` / `/metrics` / `/metrics.json` / `/dashboard` all remain verbatim
+- File renames were done via `git mv`, preserving blame history. pyproject keeps `readme = "README.md"` (PyPI automatically follows the new Japanese readme)
 
 ---
 
 ## [v1.6.0] — 2026-04-22 (Umbrella tag — `auto_router`)
 
-**Theme: plan.md §11「task-aware auto routing」を 1 minor で受ける。** リクエスト本文を宣言的ルールで分類し profile を自動選択する `auto_router` を 3 sub-release で出荷: schema + classifier (v1.6-A) / ingress + metrics 配線 (v1.6-B) / examples + docs (v1.6-C)。初心者は `default_profile: auto` を書くだけで内蔵ルール (画像 → `multi` / コードフェンス比率 ≥ 0.3 → `coding` / それ以外 → `writing`) が効き、中級者は `auto_router:` ブロックで独自ルールに差し替え、上級者は `body.profile` / `X-CodeRouter-Profile` / `X-CodeRouter-Mode` による per-request 上書き (v0.6-D 以来の経路) が引き続き最優先で効く — この 3 tier を 1 ファイルに収める。v0.6-D 互換は完全維持: `default_profile: auto` を書かない限り auto slot は一切発火せず、既存設定は verbatim で動き続ける。
+**Theme: land plan.md §11 "task-aware auto routing" in a single minor release.** Ships `auto_router` — which classifies the request body via declarative rules and auto-selects a profile — across 3 sub-releases: schema + classifier (v1.6-A) / ingress + metrics wiring (v1.6-B) / examples + docs (v1.6-C). Beginners just write `default_profile: auto` and the built-in rules take over (image → `multi` / code-fence ratio ≥ 0.3 → `coding` / otherwise → `writing`); intermediate users replace them with custom rules via the `auto_router:` block; and advanced users retain top priority for per-request overrides via `body.profile` / `X-CodeRouter-Profile` / `X-CodeRouter-Mode` (the path that's existed since v0.6-D) — all 3 tiers fit into one file. v0.6-D compatibility is fully preserved: unless you write `default_profile: "auto"`, the auto slot never fires at all, and existing configs keep working verbatim.
 
-- Tests: 527 → **596** (+69, +13.1%)、v1.6-A 26 new auto_router tests (classifier matchers / regex 事前コンパイル / reserved `auto` 名 / bundled profile 要求 / fall-through / disabled) + v1.6-B ingress+metrics wiring tests + v1.6 validator tests
-- Runtime deps: 5 → 5 (据え置き 13 sub-release 連続、分類は純粋正規表現 + dict 走査、外部分類器を呼ばない)
-- Non-breaking: 新設 config field (`auto_router:`、任意) + 新設 sentinel (`default_profile: auto`、opt-in) + 新設 Prometheus counter (`auto_router_fallthrough_total`) のみで、既存 ingress / precedence chain / metrics schema は verbatim 維持
+- Tests: 527 → **596** (+69, +13.1%): v1.6-A adds 26 new auto_router tests (classifier matchers / eager regex precompilation / the reserved `auto` name / bundled-profile requirements / fall-through / disabled) + v1.6-B ingress+metrics wiring tests + v1.6 validator tests
+- Runtime deps: 5 → 5 (unchanged for 13 consecutive sub-releases; classification is pure regex + dict traversal, calling no external classifier)
+- Non-breaking: only a new config field (`auto_router:`, optional) + a new sentinel (`default_profile: auto`, opt-in) + a new Prometheus counter (`auto_router_fallthrough_total`) — the existing ingress / precedence chain / metrics schema are preserved verbatim
 
 ### Added
 
-- **v1.6-A — schema + classifier** (coderouter/routing/auto_router.py 新設 +245 LOC / coderouter/config/schemas.py +170 LOC)
-  - `RuleMatcher` (Pydantic): `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex` の 4 matcher variant をフィールドで表現、`_exactly_one` validator で「1 ルールに matcher は 1 つだけ」を load 時強制 (複数書くと `pydantic.ValidationError` で fail)。`content_regex` は `_compile_regex_eagerly` で起動時に `re.compile` され、typo は起動を落とす (毎リクエスト silent fail にしない)
-  - `AutoRouteRule` / `AutoRouterConfig`: ルールに `id` (ログの `auto-router-resolved` payload に乗る安定識別子、`builtin:` / `user:` prefix 慣習) / `profile` / `match`、トップに `disabled` (hard off-switch) / `rules` (ordered, first-match-wins) / `default_rule_profile` (fall-through 先) を持たせる
-  - `BUNDLED_RULES` (コード側で宣言、YAML に書かなくて済む): `image-attachment → multi`、`code-fence-dense (ratio ≥ 0.3) → coding`、fall-through = `writing`。`BUNDLED_REQUIRED_PROFILES = ("multi", "coding", "writing")` を `CodeRouterConfig._check_bundled_auto_router_requirements` が起動時検証 — `default_profile: auto` + `auto_router` 未定義で multi/coding/writing のいずれかが欠けると load が落ち、エラーメッセージに「(a) 3 profile 全て定義 / (b) 独自 `auto_router:` で上書き / (c) `default_profile` を別 profile 名に」の 3 択を明記
-  - `classify(body, config)`: 最新の `role: user` メッセージ 1 件だけを走査 (履歴全体は見ない、トークン消費を削る設計)、OpenAI / Anthropic 両形式の content list から `type: image_url` / `type: image` / `type: input_image` いずれも `has_image` 判定、text は string / multimodal list の両方から抽出。matcher ヒット時 `auto-router-resolved` / 空振り時 `auto-router-fallthrough` の 2 event を発火 (後述 metrics counter の source)
-  - `RESERVED_PROFILE_NAME = "auto"`: `CodeRouterConfig._check_auto_is_reserved` が `profiles[].name == "auto"` を起動時 reject。`default_profile: auto` sentinel と衝突するため
-  - +26 tests (tests/test_auto_router.py、各 matcher / reserved name / bundled 要求 / regex 事前コンパイル / disabled / fall-through / 3 matcher を併記した rule の reject)
+- **v1.6-A — schema + classifier** (new coderouter/routing/auto_router.py, +245 LOC / coderouter/config/schemas.py +170 LOC)
+  - `RuleMatcher` (Pydantic): represents the 4 matcher variants — `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex` — as fields, with an `_exactly_one` validator enforcing at load time that "each rule has exactly one matcher" (specifying multiple fails with a `pydantic.ValidationError`). `content_regex` is eagerly `re.compile`d at startup via `_compile_regex_eagerly`, so a typo crashes startup rather than silently failing on every request
+  - `AutoRouteRule` / `AutoRouterConfig`: each rule carries an `id` (a stable identifier that rides along in the `auto-router-resolved` log payload, following a `builtin:` / `user:` prefix convention) / `profile` / `match`; the top level carries `disabled` (a hard off-switch) / `rules` (ordered, first-match-wins) / `default_rule_profile` (the fall-through target)
+  - `BUNDLED_RULES` (declared in code, no YAML needed): `image-attachment → multi`, `code-fence-dense (ratio ≥ 0.3) → coding`, fall-through = `writing`. `BUNDLED_REQUIRED_PROFILES = ("multi", "coding", "writing")` is enforced at startup by `CodeRouterConfig._check_bundled_auto_router_requirements` — when `default_profile: auto` is set and `auto_router` is undefined, load fails if any of multi/coding/writing is missing, with the error message spelling out 3 options: "(a) define all 3 profiles / (b) override with your own `auto_router:` / (c) point `default_profile` at a different profile name"
+  - `classify(body, config)`: walks only the single latest `role: user` message (not the full history, by design, to cut token consumption); recognizes `type: image_url` / `type: image` / `type: input_image` for `has_image` across both OpenAI and Anthropic content-list shapes, extracting text from both string and multimodal-list content. Fires an `auto-router-resolved` event on a matcher hit or an `auto-router-fallthrough` event otherwise (the source for the metrics counter described below)
+  - `RESERVED_PROFILE_NAME = "auto"`: `CodeRouterConfig._check_auto_is_reserved` rejects `profiles[].name == "auto"` at startup, since it would collide with the `default_profile: auto` sentinel
+  - +26 tests (tests/test_auto_router.py: each matcher / reserved name / bundled requirements / eager regex precompilation / disabled / fall-through / rejecting a rule with multiple matchers)
 - **v1.6-B — ingress wiring + metrics** (coderouter/ingress/openai_routes.py + coderouter/ingress/anthropic_routes.py + coderouter/metrics/collector.py + coderouter/metrics/prometheus.py)
-  - OpenAI / Anthropic 両 ingress の precedence chain に auto router slot を 1 箇所ずつ挿入 (v0.6-D の body.profile > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > `default_profile` の間、`default_profile` の直上): `if chat_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME: chat_req.profile = classify(payload, config)`。`default_profile != "auto"` では slot は not-taken、engine に渡る profile は pre-v1.6 と bit-identical (engine 側で default profile 埋め込みが従来どおり走る)
-  - `MetricsCollector._dispatch` に `auto-router-fallthrough` event を新 counter `_auto_router_fallthrough_total` に配線、snapshot の `counters` dict と `reset()` に同 key を追加。fall-through は「ユーザー定義ルールがどれもヒットしない率」のシグナルなので独立 counter として露出
-  - `format_prometheus()` に `coderouter_auto_router_fallthrough_total` を新規 export (HELP テキストに「no user/bundled rule matched, or auto_router.disabled=true」と併記)、`promtool check metrics` は round-trip clean
-  - precedence chain のドキュメント (ingress 両ファイルの module docstring) に「4. auto_router (v1.6-A, fires only when `default_profile == 'auto'`)」を追記、v1.6 で新旧どちらの経路がどこで効くか読者が 1 箇所で辿れるように
-- **v1.6-C — examples + quickstart 追記** (examples/providers.auto.yaml 新設 / examples/providers.auto-custom.yaml 新設 / docs/quickstart.ja.md +1 section)
-  - `examples/providers.auto.yaml`: zero-config 版。`allow_paid: false` / `default_profile: auto` / `display_timezone: Asia/Tokyo` + 3 Ollama provider (qwen2.5-coder:7b / qwen2.5:7b / qwen2.5vl:7b) + 3 profile (coding / writing / multi) のみで内蔵ルールが即発火。冒頭コメントに `ollama pull` 3 コマンドと、画像を送らないなら vl モデルは省略可 (画像リクエストだけ fast-fail) を明記
-  - `examples/providers.auto-custom.yaml`: 中級者向け copy-edit 起点。`auto.yaml` を親に `auto_router:` ブロックを挿入、4 matcher variant を 1 つずつ踏んだ 4 ルール (image → multi / 翻訳意図 regex → writing / "Review this PR" 部分文字列 → coding / fence ratio ≥ 0.15 → coding) + `default_rule_profile: writing` を例示。コメントで「rules は内蔵ルールと merge せず完全置換」「matcher は 1 rule に 1 つだけ」「rule 順序が first-match-wins」の 3 点を明示
-  - `docs/quickstart.ja.md` に「補足: プロファイル選択を CodeRouter に任せる」セクションを Pattern A/B の後に追加。C-1 pull → C-2 `cp auto.yaml` → C-3 カスタマイズの 3 ステップで、既存の Pattern A/B を書き換えずに合流経路を提示
+  - Inserted a single auto-router slot into the precedence chain of both the OpenAI and Anthropic ingresses (between v0.6-D's body.profile > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > `default_profile`, directly above `default_profile`): `if chat_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME: chat_req.profile = classify(payload, config)`. When `default_profile != "auto"`, the slot is not taken, and the profile passed to the engine is bit-identical to pre-v1.6 (the engine's own default-profile fallback still runs as before)
+  - Wired the `auto-router-fallthrough` event into a new counter, `_auto_router_fallthrough_total`, in `MetricsCollector._dispatch`, adding the same key to the snapshot's `counters` dict and to `reset()`. Fall-through is exposed as its own counter since it's a signal for "the rate at which no user-defined rule matches"
+  - Added a new export, `coderouter_auto_router_fallthrough_total`, to `format_prometheus()` (with HELP text noting "no user/bundled rule matched, or auto_router.disabled=true"); `promtool check metrics` round-trips clean
+  - Added "4. auto_router (v1.6-A, fires only when `default_profile == 'auto'`)" to the precedence-chain documentation (the module docstrings of both ingress files), so readers can trace where both the old and new paths take effect from a single place
+- **v1.6-C — examples + quickstart addition** (new examples/providers.auto.yaml / new examples/providers.auto-custom.yaml / docs/quickstart.ja.md +1 section)
+  - `examples/providers.auto.yaml`: a zero-config version. Just `allow_paid: false` / `default_profile: auto` / `display_timezone: Asia/Tokyo` plus 3 Ollama providers (qwen2.5-coder:7b / qwen2.5:7b / qwen2.5vl:7b) and 3 profiles (coding / writing / multi) are enough for the built-in rules to fire immediately. The top-of-file comment spells out the 3 `ollama pull` commands, noting the vl model can be skipped if you never send images (only image requests would fast-fail)
+  - `examples/providers.auto-custom.yaml`: a copy-edit starting point for intermediate users. Builds on `auto.yaml`, inserting an `auto_router:` block demonstrating each of the 4 matcher variants across 4 rules (image → multi / a translation-intent regex → writing / a "Review this PR" substring → coding / fence ratio ≥ 0.15 → coding) plus `default_rule_profile: writing`. Comments spell out 3 points: "rules fully replace the bundled rules rather than merging with them," "each rule has exactly one matcher," and "rule order is first-match-wins"
+  - Added a "Supplement: letting CodeRouter choose the profile for you" section to `docs/quickstart.ja.md` after Patterns A/B. Presents a 3-step merge path (C-1 pull → C-2 `cp auto.yaml` → C-3 customize) without rewriting the existing Patterns A/B
 
 ### Changed
 
-- **precedence chain 公式順序を v1.6 用に更新** — plan.md §11 / ingress docstring / quickstart の 3 箇所で `body.profile > X-CodeRouter-Profile > X-CodeRouter-Mode > auto_router (default_profile == "auto") > default_profile` の 5 段で統一。v0.6-D の 4 段表記から増えたのは 4 番目だけで、既存の 1-3 番と最終 default 解決は verbatim 維持
+- **Updated the official precedence-chain order for v1.6** — unified across plan.md §11 / ingress docstrings / quickstart into 5 stages: `body.profile > X-CodeRouter-Profile > X-CodeRouter-Mode > auto_router (default_profile == "auto") > default_profile`. The only addition versus v0.6-D's 4-stage description is the 4th stage; the existing stages 1-3 and the final default resolution are preserved verbatim
 
 ### Non-breaking compatibility
 
-- `default_profile: "auto"` を書かない限り auto slot は dead code path (ingress で分岐が一切立たない)。v1.5.x までの providers.yaml は v1.6.0 で verbatim 動作
-- 新設の `auto_router:` field は Optional で default None、書かないなら `CodeRouterConfig.model_validate` の view から完全不可視
-- 新設 Prometheus counter `coderouter_auto_router_fallthrough_total` は既存 counter と並列の scalar で、Prometheus scraper の view は 1 行増えるだけ (削除 / rename なし)
+- Unless you write `default_profile: "auto"`, the auto slot is dead code (the branch in ingress is never taken at all). providers.yaml files up through v1.5.x work verbatim under v1.6.0
+- The new `auto_router:` field is Optional with a default of None; if you don't write it, it's completely invisible from `CodeRouterConfig.model_validate`'s point of view
+- The new Prometheus counter `coderouter_auto_router_fallthrough_total` is a scalar sitting alongside existing counters; the Prometheus scraper's view just gains one more line (nothing removed or renamed)
 
 ---
 
 ## [v1.5.0] — 2026-04-22 (Umbrella tag — Observability pillar)
 
-**Theme: plan.md §12「計測ダッシュボード」を丸ごと 1 minor で受ける。** 収集 (v1.5-A `MetricsCollector` + `/metrics.json`) / 配信 (v1.5-B Prometheus `/metrics` + `$CODEROUTER_EVENTS_PATH` JSONL mirror) / 可視化 CLI (v1.5-C `coderouter stats` curses TUI) / 可視化 HTML (v1.5-D `/dashboard` 1 ページ) / timezone 表示 (v1.5-E `display_timezone` config) / demo 同梱 (v1.5-F `scripts/demo_traffic.sh`) の 6 sub-release を横並びで出荷。READMEに live dashboard のスクショ (`docs/assets/dashboard-demo.png`) と「このダッシュボードを見ると何の問いに即答できるか」を明記するセクションを追加 ("モデルが動作してる / 利用されてる / 切り替わった" が読み取れること) — 数字の羅列ではなく運用上の問いを起点にした書き直し。**SemVer 番号について**: `v1.0.1 → v1.5.0` で旧 v1.1 (= 配布 / launcher / doctor、plan.md §11) を飛び越しているため、plan.md §11 ヘッダは **v1.6** にリラベル、`v1.1.0`-`v1.4.x` は欠番扱い。`v1.5.0` umbrella で plan.md §12 を受け、§11 (v1.6) が次の minor。
+**Theme: land plan.md §12 "measurement dashboard" wholesale in a single minor release.** Ships 6 sub-releases side by side: collection (v1.5-A `MetricsCollector` + `/metrics.json`), delivery (v1.5-B Prometheus `/metrics` + `$CODEROUTER_EVENTS_PATH` JSONL mirror), CLI visualization (v1.5-C `coderouter stats` curses TUI), HTML visualization (v1.5-D a single-page `/dashboard`), timezone display (v1.5-E the `display_timezone` config), and a bundled demo (v1.5-F `scripts/demo_traffic.sh`). Added a live-dashboard screenshot (`docs/assets/dashboard-demo.png`) to the README, along with a section spelling out "which questions can you answer at a glance from this dashboard" (that a model is working / being used / has switched over) — a rewrite anchored on operational questions rather than a list of raw numbers. **On the SemVer numbering**: since `v1.0.1 → v1.5.0` skips over the old v1.1 (= distribution / launcher / doctor, plan.md §11), the plan.md §11 header is relabeled to **v1.6**, and `v1.1.0`-`v1.4.x` are treated as skipped. The `v1.5.0` umbrella lands plan.md §12; §11 (v1.6) is the next minor.
 
-- Tests: 457 → **527** (+70, +15.3%)、v1.5-A +41 / v1.5-B +16 / v1.5-C ±0 (data/render layer、D で統合計上) / v1.5-D +12 / v1.5-E +1 / v1.5-F ±0
-- Runtime deps: 5 → 5 — `curses` / `urllib` / `datetime.zoneinfo` は全て stdlib、tailwind は CDN 1 ファイル、Prometheus 形式は自前文字列生成で SDK 依存ゼロ (12+ sub-release 連続で依存数据え置き)
-- Non-breaking: 新設 endpoint (`/metrics.json` / `/metrics` / `/dashboard`) + 新設 CLI (`coderouter stats`) + 新設 config field (`display_timezone`、任意) のみで既存 endpoint / CLI / config は verbatim 維持
+- Tests: 457 → **527** (+70, +15.3%): v1.5-A +41 / v1.5-B +16 / v1.5-C ±0 (data/render layer, counted together with D's integration) / v1.5-D +12 / v1.5-E +1 / v1.5-F ±0
+- Runtime deps: 5 → 5 — `curses` / `urllib` / `datetime.zoneinfo` are all stdlib, tailwind is a single CDN file, and the Prometheus format is generated via plain string building with zero SDK dependency (dependency count unchanged for 12+ consecutive sub-releases)
+- Non-breaking: only new endpoints (`/metrics.json` / `/metrics` / `/dashboard`) + a new CLI (`coderouter stats`) + a new config field (`display_timezone`, optional) — existing endpoints / CLI / config are preserved verbatim
 
 ### Added
 
 - **v1.5-A — `MetricsCollector` + `GET /metrics.json`** (coderouter/metrics/collector.py +463 LOC / coderouter/ingress/metrics_routes.py +92 LOC)
-  - `MetricsCollector` は `logging.Handler` のサブクラス。既存の structured log stream (v0.3 以降不変の JSON line shape) に handler として `addHandler()` するだけで発火、コード側のログ呼び出しは 1 行も書き換えない。in-memory ring (counters / providers / recent 50 events / startup snapshot) を `_process_record()` で毎秒 refresh
-  - `GET /metrics.json` (`FastAPI` JSON response) で snapshot を JSON として返す。`/dashboard` HTML (v1.5-D) と `coderouter stats` CLI (v1.5-C) が同じ endpoint を fetch する single-source-of-truth 設計
-  - app.py の lifespan 内で `MetricsCollector` を root logger にアタッチ、startup で `coderouter-startup` event を fire して `startup` snapshot に version / providers / profiles / allow_paid / mode_source を seed
+  - `MetricsCollector` is a subclass of `logging.Handler`. It attaches to the existing structured log stream (the JSON line shape unchanged since v0.3) simply via `addHandler()`, requiring zero rewrites to code-side log calls. Refreshes an in-memory ring (counters / providers / the most recent 50 events / a startup snapshot) every second in `_process_record()`
+  - `GET /metrics.json` (a FastAPI JSON response) returns the snapshot as JSON. Designed as a single source of truth fetched by both the `/dashboard` HTML (v1.5-D) and the `coderouter stats` CLI (v1.5-C)
+  - Attaches `MetricsCollector` to the root logger inside app.py's lifespan, firing a `coderouter-startup` event at startup to seed the `startup` snapshot with version / providers / profiles / allow_paid / mode_source
 - **v1.5-B — Prometheus text exposition + JSONL mirror** (coderouter/metrics/prometheus.py +211 LOC)
-  - `GET /metrics` が Prometheus `text/plain; version=0.0.4` で exposition を返す。`coderouter_*` prefix (慣習)、全て scalar (ラベルなし)、gauge + counter 混成 (e.g. `coderouter_requests_total`, `coderouter_providers_healthy`)
-  - `$CODEROUTER_EVENTS_PATH` env が設定されているとき、collector が同じ log record を JSONL としてそのパスに append。snapshot とは完全独立な side-effect (snapshot の in-memory ring はそのまま、JSONL だけが長期保存用に伸びる)。`JsonLineFormatter` と同一行シェイプなので既存の log 解析 pipeline にそのまま乗る
-  - +11 tests (test_metrics_prometheus.py)、+5 tests (test_metrics_jsonl.py)
+  - `GET /metrics` returns the exposition as Prometheus `text/plain; version=0.0.4`. Uses the `coderouter_*` prefix convention, all scalar (no labels), a mix of gauges and counters (e.g., `coderouter_requests_total`, `coderouter_providers_healthy`)
+  - When the `$CODEROUTER_EVENTS_PATH` env var is set, the collector appends the same log record as JSONL to that path. This is a fully independent side effect from the snapshot (the snapshot's in-memory ring is untouched; only the JSONL grows for long-term storage). Since it shares the same line shape as `JsonLineFormatter`, it slots directly into existing log-analysis pipelines
+  - +11 tests (test_metrics_prometheus.py), +5 tests (test_metrics_jsonl.py)
 - **v1.5-C — `coderouter stats` CLI TUI** (coderouter/cli_stats.py +752 LOC)
-  - stdlib `curses` + `urllib` のみで動く 5 パネル dashboard: Providers (健康状態 + latency_ms + last_event)、Fallback & Gates (fallback chain 進行 / ALLOW_PAID / capability-degraded カウント)、Requests/min sparkline (60 秒 rolling bucket)、Recent Events (直近 10 件、新しい順、tz 変換済み)、Usage Mix (local / free / paid の比率)
-  - `--once` mode: TTY 不在 (CI / pipe / `demo_traffic.sh` banner) で単発レンダー、stdout に plain text 版を出す。driver (`_Screen` curses wrapper) と pure data+render layer を分離、unit test は render layer だけを叩く
-  - +39 tests (test_cli_stats.py、data layer + render + `--once` snapshot)
-- **v1.5-D — `/dashboard` HTML 1 ページ** (coderouter/ingress/dashboard_routes.py +493 LOC)
-  - tailwind CDN 1 ファイル + vanilla JS (`setInterval` + `fetch("/metrics.json")` 2 秒間隔) の single-page。htmx を避けたのは 5-dep policy と、fetch polling で十分な TTFB を確認できたため (plan.md §12.3.6 参照)
-  - 5 パネルは CLI TUI と同じ意味論 (Providers / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) を HTML で表現。dark theme 既定、`data-bind` attribute で JS 側が部分更新
-  - +12 tests (test_dashboard_endpoint.py、HTML 200 / snapshot 埋込 / polling 引数)
-- **v1.5-E — `display_timezone` config field** (coderouter/config/schemas.py + cli_stats.py + dashboard_routes.py)
-  - `providers.yaml` top-level に `display_timezone: "Asia/Tokyo"` 等を宣言 (任意、IANA zone 名、未設定時 UTC)。集約された UTC 時刻は触らず、**表示層だけ**変換する: CLI TUI は `TzFormatter` (zoneinfo + cache、同じゾーンの繰り返し変換を O(1) に)、HTML は `Intl.DateTimeFormat` (ブラウザ native、zone 引き継ぎ)
-  - `/metrics.json` の `config.display_timezone` で JS 側に伝搬、`examples/providers.yaml` に reference stanza 追加
-  - +1 test (display_timezone 専用 fixture、tz-aware datetime の format 一致)
+  - A 5-panel dashboard running on stdlib `curses` + `urllib` alone: Providers (health state + latency_ms + last_event), Fallback & Gates (fallback chain progression / ALLOW_PAID / capability-degraded count), Requests/min sparkline (a 60-second rolling bucket), Recent Events (the most recent 10, newest first, timezone-converted), Usage Mix (the ratio of local / free / paid)
+  - `--once` mode: when there's no TTY (CI / a pipe / the `demo_traffic.sh` banner), renders once and prints a plain-text version to stdout. Separates the driver (the `_Screen` curses wrapper) from a pure data+render layer, so unit tests exercise only the render layer
+  - +39 tests (test_cli_stats.py: data layer + render + `--once` snapshot)
+- **v1.5-D — a single-page `/dashboard` HTML** (coderouter/ingress/dashboard_routes.py +493 LOC)
+  - A single page built from one tailwind CDN file plus vanilla JS (`setInterval` + `fetch("/metrics.json")` every 2 seconds). htmx was avoided due to the 5-dep policy, and fetch polling was confirmed to provide sufficient TTFB (see plan.md §12.3.6)
+  - The 5 panels express the same semantics as the CLI TUI (Providers / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) in HTML. Dark theme by default, with JS performing partial updates via `data-bind` attributes
+  - +12 tests (test_dashboard_endpoint.py: HTML 200 / snapshot embedding / polling arguments)
+- **v1.5-E — the `display_timezone` config field** (coderouter/config/schemas.py + cli_stats.py + dashboard_routes.py)
+  - Declares `display_timezone: "Asia/Tokyo"` etc. at the top level of `providers.yaml` (optional, an IANA zone name, defaulting to UTC when unset). Aggregated UTC timestamps are untouched; only the **display layer** converts them: the CLI TUI uses `TzFormatter` (zoneinfo + caching, making repeated conversions to the same zone O(1)), while the HTML uses `Intl.DateTimeFormat` (browser-native, carrying the zone through)
+  - Propagated to the JS side via `/metrics.json`'s `config.display_timezone`; a reference stanza was added to `examples/providers.yaml`
+  - +1 test (a dedicated display_timezone fixture confirming tz-aware datetime formatting matches)
 - **v1.5-F — `scripts/demo_traffic.sh`** (+861 LOC)
-  - weighted scenario picker: normal 4/10 / stream 3/10 / burst+idle 2/10 / fallback 1/10、paid-gate every 8th tick。各 scenario は dashboard で panel がどう動くかを意図して設計 (例: burst+idle → sparkline のスパイク + idle で減衰を観察)
-  - flag: `--duration <sec>` (既定 60、`∞` で SIGINT まで連続)、`--serve` (mock HTTP server を `127.0.0.1:4444` で起動、ローカル単体で回せる)、`--dry-run` (scenario picker の確率分布 sampler だけ実行、traffic は送らない)
-  - Banner + expected-count table + elapsed/progress readout (`tick N/M, elapsed=XmYs`)、`scenario_*` 関数群、`log_info/ok/warn/err` 統一ログ
-  - macOS `/bin/bash` 3.2 互換修正: (i) heredoc-inside-`$()` が bash 3.2 parser で稀に hang するため `PLAN_PY_SRC` / `BODY_PY_SRC` を single-quoted 変数に外出し → `python3 -c "$VAR"`、(ii) 並行 bg job の集約で bare `wait` が SIGCHLD 取りこぼしで hang するため `wait_pids()` helper (`$!` で集めた PID を個別 wait) を新設、`scenario_fallback_burst` / `scenario_burst_then_steady` で適用
+  - A weighted scenario picker: normal 4/10 / stream 3/10 / burst+idle 2/10 / fallback 1/10, with a paid-gate every 8th tick. Each scenario is designed with an intent for how it should move the dashboard's panels (e.g., burst+idle → observing a sparkline spike followed by decay during idle)
+  - Flags: `--duration <sec>` (default 60, or `∞` to run continuously until SIGINT), `--serve` (starts a mock HTTP server on `127.0.0.1:4444`, runnable standalone locally), `--dry-run` (runs only the scenario picker's probability-distribution sampler, sending no traffic)
+  - A banner + expected-count table + elapsed/progress readout (`tick N/M, elapsed=XmYs`), a family of `scenario_*` functions, unified `log_info/ok/warn/err` logging
+  - macOS `/bin/bash` 3.2 compatibility fixes: (i) since a heredoc-inside-`$()` can occasionally hang the bash 3.2 parser, `PLAN_PY_SRC` / `BODY_PY_SRC` are hoisted out into single-quoted variables → `python3 -c "$VAR"`; (ii) since a bare `wait` can hang due to missed SIGCHLD when aggregating concurrent background jobs, a new `wait_pids()` helper (individually waits on PIDs collected via `$!`) is applied in `scenario_fallback_burst` / `scenario_burst_then_steady`
 - **README dashboard snapshot** (README.md / README.ja.md + docs/assets/dashboard-demo.png)
-  - "Live dashboard" セクションを architecture 図の直後に挿入。キャプションは数字の羅列ではなく「このダッシュボードを見ると何の問いに即答できるか」という運用問い起点: どの provider が生きて今応答しているか / fallback が直近で発火したか / 有料ゲートは閉じたままか / 直近数分のリクエスト流量 / 直近 N 件のイベント
-  - パネル配置説明 (左上から右下へ: Provider / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) で読者が画像とキャプションを突き合わせられるように
+  - Inserted a "Live dashboard" section right after the architecture diagram. The caption is anchored on operational questions rather than a list of raw numbers — "which questions can you answer at a glance from this dashboard": which provider is alive and currently responding / whether a fallback fired recently / whether the paid gate remains closed / recent request volume / the most recent N events
+  - A panel-layout explanation (top-left to bottom-right: Provider / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) so readers can match the image against the caption
 
 ### Changed
 
-- **plan.md §11 ヘッダを "v1.1" → "v1.6" にリラベル** — `v1.0.1 → v1.5.0` で §11 (配布 / launcher / doctor) を飛ばしたため。TOC / §6.1 マイルストーン表 / §6.2 リリース履歴詳細 / 本文中の v1.1 言及 (5 箇所) を全て v1.6 に置換、`v1.1` 番号は欠番扱いを明文化
-- **README "Coming next" を v1.5 ✅ 出荷済み表示に** — README.md L149 + L324 付近、README.ja.md 対応箇所。旧: "v1.1 — launcher; v1.5 — metrics dashboard"、新: "v1.5 ✅ — metrics (shipped); v1.6 — launcher (旧 v1.1 ラベル、v1.5 先行出荷により繰り下げ)"
-- **docs/usage-guide.{md,ja.md}** — "v1.1" Docker image tracking を "v1.6 (旧 v1.1)" に置換
-- **pyproject.toml / coderouter/__init__.py** — `version = "1.0.0"` / `__version__ = "1.0.0"` → `1.5.0`
+- **Relabeled plan.md §11's header from "v1.1" to "v1.6"** — since `v1.0.1 → v1.5.0` skipped §11 (distribution / launcher / doctor). Replaced all v1.1 mentions with v1.6 across the TOC / §6.1 milestone table / §6.2 release history detail / the body text (5 places), documenting that the `v1.1` number is treated as skipped
+- **Marked README "Coming next" as v1.5 ✅ shipped** — around README.md L149 + L324, and the corresponding spot in README.ja.md. Old: "v1.1 — launcher; v1.5 — metrics dashboard"; new: "v1.5 ✅ — metrics (shipped); v1.6 — launcher (the old v1.1 label, bumped down by v1.5 shipping first)"
+- **docs/usage-guide.{md,ja.md}** — replaced "v1.1" Docker image tracking with "v1.6 (formerly v1.1)"
+- **pyproject.toml / coderouter/__init__.py** — bumped `version = "1.0.0"` / `__version__ = "1.0.0"` → `1.5.0`
 
 ### Non-Added (explicitly out of scope / deferred)
 
-- **Retrospective `docs/retrospectives/v1.5.md`** — umbrella narrative は別途執筆予定。本 release は CHANGELOG + plan.md status line + README snapshot で compaction、retrospective は 6 sub-release をまたいだ設計 through-line (例: pure data+render layer を CLI と HTML で共有する 2-consumer-1-producer 設計、env-gated JSONL side-effect が snapshot に依存しない isolation 原則、`display_timezone` を表示層だけに限る "aggregate in UTC, render in local" 原則) を書く価値があるので deferral
-- **v0.7 / v1.0 follow-ons の着地** — CHANGELOG [v1.0.1] で v1.1+ に push したアイテム (output_filters chain-level override / doctor probe-grouping refactor / num_predict-without-max_tokens / Ollama 0.20.5 silent-override investigation) は v1.5 では未着手。`v1.6` (旧 v1.1) または v1.7 で順次拾う。v1.5 は観測可能性に scope を集中させ "観測 → 矯正" のうち観測側だけを完成させる方針を優先
+- **Retrospective `docs/retrospectives/v1.5.md`** — the umbrella narrative is planned to be written separately. This release is condensed into CHANGELOG + the plan.md status line + the README snapshot; the retrospective is deferred since it's worth writing about the design through-line spanning the 6 sub-releases (e.g., the 2-consumer-1-producer design sharing a pure data+render layer between the CLI and HTML, the isolation principle that the env-gated JSONL side effect doesn't depend on the snapshot, and the "aggregate in UTC, render in local" principle confining `display_timezone` to the display layer alone)
+- **Landing the v0.7 / v1.0 follow-ons** — items pushed to v1.1+ in the CHANGELOG [v1.0.1] entry (output_filters chain-level override / doctor probe-grouping refactor / num_predict-without-max_tokens / the Ollama 0.20.5 silent-override investigation) remain untouched in v1.5. They'll be picked up in `v1.6` (formerly v1.1) or v1.7. v1.5 prioritizes concentrating scope on observability, completing only the "observe" half of "observe → correct"
 
 ### Follow-ons
 
-- **v1.5.0 の live-verify scenario** — v0.5-verify / v1.0-verify の pattern を踏襲して `scripts/verify_v1_5.sh` を書く。bare (collector 無効) と tuned (collector 有効 + `$CODEROUTER_EVENTS_PATH` セット) の delta で "JSONL 行が書き込まれる / `/metrics` が 200 を返す / `/dashboard` が HTML を返す" を assertion
-- **dashboard retrospective narrative** — 前述
-- **`scripts/demo_traffic.sh` の README への runbook セクション** — 現状 `--help` にしか書いていない。scenario 配分 / expected count / `--serve` の意味 / bash 3.2 互換のために仕込んだ `wait_pids` の why が operator doc として欲しい
-- **long-running demo の evidence** — 今回スクショだけ貼ったが、"3 分 × 87 リクエストで dashboard が stable" を別 section で時系列 log として残すと後の regression 判定で便利
+- **A live-verify scenario for v1.5.0** — following the pattern of v0.5-verify / v1.0-verify, write `scripts/verify_v1_5.sh`. Assert, via the delta between bare (collector disabled) and tuned (collector enabled + `$CODEROUTER_EVENTS_PATH` set), that "a JSONL line gets written / `/metrics` returns 200 / `/dashboard` returns HTML"
+- **Dashboard retrospective narrative** — as above
+- **A runbook section for `scripts/demo_traffic.sh` in the README** — currently only documented in `--help`. The scenario distribution / expected count / what `--serve` means / the why behind the `wait_pids` workaround needed for bash 3.2 compatibility would be valuable as operator-facing docs
+- **Long-running demo evidence** — only a screenshot was attached this time; recording "the dashboard stayed stable across 3 minutes x 87 requests" as a time-series log in a separate section would be useful for later regression judgment
 
 ---
 
 ## [v1.0.1] — 2026-04-21 (Hygiene pass — public error hierarchy + docstring + mypy strict)
 
-**Theme: v1.0.0 umbrella のあと、埋まりきっていなかった 3 つの足回りを 1 release で片付ける。** (1) `CodeRouterError` root 例外の新設 — 既存の 3 leaf (`AdapterError` / `NoProvidersAvailableError` / `MidStreamError`) を共通親で束ね、downstream integrator が `except CodeRouterError` 一文で router が raise する全例外を拾えるようにした。`coderouter.errors` モジュールを新設、`coderouter` top-level で re-export、既存 import パスは全て非破壊。(2) docstring 網羅率を **75.6% → 91.2%** へ引き上げ — `interrogate` ベースで measure、public API 系ファイル (adapters / routing / ingress / translation の model / logging) 全て 100%、残りは stream-state 内部 helper / CLI / doctor / translation の private 関数のみ。(3) mypy `--strict` 0 errors を確認 (v0.6 以降累積していた 10 errors を ingress routes の `response_model=None` + `AsyncIterator[str]` + fallback.py の `isinstance(adapter, AnthropicAdapter)` narrowing + `StreamChunk.usage` 型宣言で解消済 — v1.0-verify で未記録だった分を本 release で明文化)。**453 → 457 tests** (+4 は `tests/test_errors.py` 新設、3 leaf 例外の `CodeRouterError` 継承 invariant を lock するガード)。実質 public API の追加は `CodeRouterError` 1 つだけで、既存 CI gate / 実機 verify が全て pass するため semver 上は **patch-level (minor の bump 不要)**。
+**Theme: after the v1.0.0 umbrella, clean up 3 loose ends that hadn't been fully filled in, in a single release.** (1) A new `CodeRouterError` root exception — ties the existing 3 leaves (`AdapterError` / `NoProvidersAvailableError` / `MidStreamError`) together under a common parent, so a downstream integrator can catch every exception the router raises with a single `except CodeRouterError`. Adds a new `coderouter.errors` module, re-exported at the `coderouter` top level; all existing import paths remain non-breaking. (2) Raises docstring coverage from **75.6% to 91.2%** — measured via `interrogate`; every public-API-facing file (the model / logging layers of adapters / routing / ingress / translation) is now at 100%, with the remainder confined to stream-state internal helpers / CLI / doctor / private translation functions. (3) Confirmed mypy `--strict` reports 0 errors (10 errors that had accumulated since v0.6 are resolved via `response_model=None` + `AsyncIterator[str]` in the ingress routes, `isinstance(adapter, AnthropicAdapter)` narrowing in fallback.py, and a `StreamChunk.usage` type declaration — this release documents the portion that wasn't recorded during v1.0-verify). **453 → 457 tests** (+4 comes from the new `tests/test_errors.py`, a guard locking the `CodeRouterError` inheritance invariant for the 3 leaf exceptions). Since the only real public-API addition is `CodeRouterError` itself, and all existing CI gates / real-hardware verification pass, this is **patch-level under semver (no minor bump needed)**.
 
 - Tests: 453 → **457** (+4)
-  - `tests/test_errors.py` 新設 +4 (`AdapterError` / `NoProvidersAvailableError` / `MidStreamError` の 3 clase が `CodeRouterError` を継承すること + `AdapterError("boom", provider="p", status_code=500, retryable=False)` を実際に raise して `except CodeRouterError` で catch できることの instance-level smoke test)
-- Runtime deps: 5 → 5 (docstring coverage の measure に使う `interrogate` は dev-only、runtime には入らない)
-- Non-breaking: 既存 3 例外は基底クラスのみ `Exception` → `CodeRouterError` に変更、`CodeRouterError(Exception)` なので `except Exception` を書いていた caller も従来通り動く。import パスは全て既存位置維持 (`from coderouter.adapters.base import AdapterError` など無変更)。
+  - New `tests/test_errors.py` +4 (an instance-level smoke test confirming that the 3 classes `AdapterError` / `NoProvidersAvailableError` / `MidStreamError` inherit from `CodeRouterError`, plus actually raising `AdapterError("boom", provider="p", status_code=500, retryable=False)` and catching it via `except CodeRouterError`)
+- Runtime deps: 5 → 5 (`interrogate`, used to measure docstring coverage, is dev-only and never enters the runtime)
+- Non-breaking: only the base class of the existing 3 exceptions changes from `Exception` to `CodeRouterError`; since `CodeRouterError(Exception)`, callers that wrote `except Exception` keep working as before. All import paths remain at their existing locations (e.g., `from coderouter.adapters.base import AdapterError` is unchanged).
 
 ### Added
 
-- **`coderouter/errors.py` — root `CodeRouterError(Exception)` class** (~30 LOC)
-  - 既存 3 leaf 例外の共通親。動作は `Exception` と同じ (`pass`-only 定義)、存在理由は downstream integrator が `except CodeRouterError` で router-side failure を wholesale に catch できるよう API surface を固定すること。leaf を個別 import して enumerate する必要がなくなる。docstring で「leaves are free to grow over time」と明記、将来新例外を追加するときの invariant を文書化
-  - 配置理由: `coderouter/adapters/base.py` や `coderouter/routing/fallback.py` に root を置くと import cycle の温床 (`logging.py` 方式と同じ失敗モード)。`errors.py` は dependency-less leaf モジュールとして独立させ、adapters / routing の両方が import する。これで import graph 上は `errors.py` が最深層に落ち着く
-- **`coderouter/__init__.py` から `CodeRouterError` を re-export** — `from coderouter import CodeRouterError` を 1 行で可能に。`__all__ = ["CodeRouterError", "__version__"]` として top-level の public API を明示
-- **`tests/test_errors.py` — 継承 invariant の regression guard** +4 tests
-  - `test_adapter_error_inherits_root` / `test_no_providers_available_inherits_root` / `test_mid_stream_error_inherits_root` — `issubclass(X, CodeRouterError)` で継承関係を静的に assert。将来誰かが leaf の基底を `Exception` に巻き戻したら unit test が FAIL する lockstep
-  - `test_adapter_error_instance_is_caught_as_root` — `raise AdapterError(...)` を実際に raise して `except CodeRouterError` で catch できることを instance レベルで確認。`str(exc) == "[p status=500] boom"` で `__str__` フォーマットまで合わせて lock (将来 `AdapterError.__str__` を変えるときに別 test として気づける)
+- **`coderouter/errors.py` — the root `CodeRouterError(Exception)` class** (~30 LOC)
+  - The common parent of the existing 3 leaf exceptions. Behaves identically to `Exception` (a `pass`-only definition); it exists to fix the API surface so a downstream integrator can catch router-side failures wholesale via `except CodeRouterError`, without needing to individually import and enumerate each leaf. The docstring notes explicitly that "leaves are free to grow over time," documenting the invariant for when new exceptions get added in the future
+  - Placement rationale: putting the root in `coderouter/adapters/base.py` or `coderouter/routing/fallback.py` would be a breeding ground for import cycles (the same failure mode as the `logging.py` approach). `errors.py` is kept independent as a dependency-less leaf module that both adapters and routing import, so `errors.py` settles at the deepest layer of the import graph
+- **Re-exported `CodeRouterError` from `coderouter/__init__.py`** — makes `from coderouter import CodeRouterError` possible in a single line. Declares `__all__ = ["CodeRouterError", "__version__"]`, making the top-level public API explicit
+- **`tests/test_errors.py` — a regression guard for the inheritance invariant** +4 tests
+  - `test_adapter_error_inherits_root` / `test_no_providers_available_inherits_root` / `test_mid_stream_error_inherits_root` — statically assert the inheritance relationship via `issubclass(X, CodeRouterError)`. Lockstep protection: if someone in the future reverts a leaf's base back to `Exception`, the unit test FAILs
+  - `test_adapter_error_instance_is_caught_as_root` — confirms at the instance level that actually raising `AdapterError(...)` can be caught via `except CodeRouterError`. Also locks the `__str__` format via `str(exc) == "[p status=500] boom"` (so a future change to `AdapterError.__str__` would be caught as a separate test failure)
 
 ### Changed
 
-- **`AdapterError` / `NoProvidersAvailableError` / `MidStreamError` の基底を `Exception` → `CodeRouterError` に差し替え** — 3 ファイル × 1-2 行の変更
-  - `coderouter/adapters/base.py`: `from coderouter.errors import CodeRouterError` を追加、`class AdapterError(Exception)` → `class AdapterError(CodeRouterError)`
-  - `coderouter/routing/fallback.py`: 同 import 追加、`class NoProvidersAvailableError(Exception)` → `(CodeRouterError)`、`class MidStreamError(Exception)` → `(CodeRouterError)`
-  - 既存 signature / docstring / behavior は verbatim 維持。MRO 上は `Exception` を継承しているので例外を bare `except:` や `except Exception:` で受けていたコードは影響なし
-- **Docstring 網羅率 75.6% → 91.2%** (`interrogate coderouter` 基準、目標 90%)
-  - 100% 化したファイル: `adapters/base.py` (Message / ChatRequest / AdapterError.__init__+__str__ / BaseAdapter.__init__+name に追加)、`adapters/openai_compat.py` (_headers / _payload / _url / generate / stream)、`adapters/anthropic_native.py` (_url / _headers)、`routing/fallback.py` (NoProvidersAvailableError.__init__ / MidStreamError.__init__ / FallbackEngine class + __init__ + generate)、`ingress/app.py` (create_app / lifespan / healthz / root / __getattr__)、`ingress/openai_routes.py` (chat_completions)、`ingress/anthropic_routes.py` (messages / _format_anthropic_sse)、`output_filters.py` (StripThinkingFilter.__init__+feed / StripStopMarkersFilter.__init__+feed / OutputFilterChain.__init__+is_empty)、`translation/anthropic.py` (AnthropicTextBlock / AnthropicUsage)、`translation/convert.py` (_convert_anthropic_tools)、`logging.py` (JsonLineFormatter.format / get_logger)
-  - 残 gap (21 項目、今回 out of scope): `cli.py` の `_build_parser` / `main` (2)、`doctor.py` 内 private helper (5)、`config/capability_registry.py` の internal reader (3)、`config/loader.py` の `_candidate_paths` (1)、`translation/convert.py` の `_StreamState` stream-state helper (8)、`translation/tool_repair.py` 内 closure (1)、`translation/convert.py` helper 2 つ — いずれも真の internal / closure / stream-state plumbing で、public surface から外れた実装詳細。90% floor は public API で達成済
-- **mypy `--strict` 0 errors を確認** — v1.0 系の compaction で取りこぼしていた 10 errors を以下で解消 (うち一部は既に v1.0-C 時点で修正済、未記録だった分を本 release で明文化)
-  - `coderouter/ingress/openai_routes.py` / `anthropic_routes.py`: `@router.post(..., response_model=None)` + `payload: dict[str, Any]` + `-> StreamingResponse | dict[str, Any]` + `AsyncIterator[str]` を type 注釈に追加 (FastAPI が union return type を Pydantic field として reject する問題 + AsyncIterator の import)
-  - `coderouter/routing/fallback.py`: `generate_anthropic` / `stream_anthropic` の Anthropic-shaped method 呼び出し箇所で `if is_native:` boolean guard を `if isinstance(adapter, AnthropicAdapter):` に書き換え — `is_native` boolean は log 用に保持、method 呼び出し分岐では mypy が narrowing できる形へ (`BaseAdapter` 自体が `generate_anthropic` / `stream_anthropic` を宣言していないため、boolean variable では narrow しない)
-  - `coderouter/adapters/base.py`: `StreamChunk` に `usage: dict[str, Any] | None = None` field を明示宣言 (Pydantic の `extra="allow"` は runtime では許容するが mypy は見ないため、`convert.py` の reverse translation が `usage=...` kwarg を渡す箇所で Unexpected keyword を指摘していた)
+- **Swapped the base class of `AdapterError` / `NoProvidersAvailableError` / `MidStreamError` from `Exception` to `CodeRouterError`** — a 1-2 line change across 3 files
+  - `coderouter/adapters/base.py`: added `from coderouter.errors import CodeRouterError`, changed `class AdapterError(Exception)` to `class AdapterError(CodeRouterError)`
+  - `coderouter/routing/fallback.py`: added the same import, changed `class NoProvidersAvailableError(Exception)` to `(CodeRouterError)` and `class MidStreamError(Exception)` to `(CodeRouterError)`
+  - Existing signatures / docstrings / behavior remain verbatim. Since it still inherits from `Exception` in the MRO, code catching it with a bare `except:` or `except Exception:` is unaffected
+- **Docstring coverage 75.6% → 91.2%** (measured via `interrogate coderouter`, target 90%)
+  - Files brought to 100%: `adapters/base.py` (added to Message / ChatRequest / AdapterError.__init__+__str__ / BaseAdapter.__init__+name), `adapters/openai_compat.py` (_headers / _payload / _url / generate / stream), `adapters/anthropic_native.py` (_url / _headers), `routing/fallback.py` (NoProvidersAvailableError.__init__ / MidStreamError.__init__ / FallbackEngine class + __init__ + generate), `ingress/app.py` (create_app / lifespan / healthz / root / __getattr__), `ingress/openai_routes.py` (chat_completions), `ingress/anthropic_routes.py` (messages / _format_anthropic_sse), `output_filters.py` (StripThinkingFilter.__init__+feed / StripStopMarkersFilter.__init__+feed / OutputFilterChain.__init__+is_empty), `translation/anthropic.py` (AnthropicTextBlock / AnthropicUsage), `translation/convert.py` (_convert_anthropic_tools), `logging.py` (JsonLineFormatter.format / get_logger)
+  - Remaining gap (21 items, out of scope this time): `cli.py`'s `_build_parser` / `main` (2), private helpers inside `doctor.py` (5), internal readers in `config/capability_registry.py` (3), `config/loader.py`'s `_candidate_paths` (1), the `_StreamState` stream-state helpers in `translation/convert.py` (8), a closure inside `translation/tool_repair.py` (1), 2 helpers in `translation/convert.py` — all genuinely internal / closure / stream-state plumbing, implementation details outside the public surface. The 90% floor is already met on the public API
+- **Confirmed mypy `--strict` reports 0 errors** — resolved the 10 errors that had been missed during v1.0-series compaction (some were already fixed as of v1.0-C; this release documents the portion that wasn't recorded)
+  - `coderouter/ingress/openai_routes.py` / `anthropic_routes.py`: added type annotations `@router.post(..., response_model=None)` + `payload: dict[str, Any]` + `-> StreamingResponse | dict[str, Any]` + `AsyncIterator[str]` (addressing FastAPI rejecting a union return type as a Pydantic field, plus importing AsyncIterator)
+  - `coderouter/routing/fallback.py`: at the call sites for Anthropic-shaped methods in `generate_anthropic` / `stream_anthropic`, rewrote the `if is_native:` boolean guard to `if isinstance(adapter, AnthropicAdapter):` — kept the `is_native` boolean for logging, but switched the method-call branch to a form mypy can narrow (since `BaseAdapter` itself doesn't declare `generate_anthropic` / `stream_anthropic`, a boolean variable can't narrow it)
+  - `coderouter/adapters/base.py`: explicitly declared a `usage: dict[str, Any] | None = None` field on `StreamChunk` (Pydantic's `extra="allow"` permits this at runtime but mypy can't see it, so mypy was flagging an unexpected keyword where `convert.py`'s reverse translation passes a `usage=...` kwarg)
 
 ### Non-Added (explicitly out of scope)
 
-- **docstring の CI 強制** (`interrogate` を pre-commit / CI gate に昇格) — 91.2% を floor に設定したい気持ちはあるが、本 release は hygiene pass 1 発で treadmill を避ける、という scope 固定。gate 化は v1.0 系 follow-on が落ち着く v1.1 系で別 ticket に切り出す
-- **pytest 間接的に含まれる他 `Exception` 継承 class** (adapters の upstream 4xx 抽象化候補など) — 今回は既存 3 leaf のみを `CodeRouterError` に帰属させた。新 leaf の追加タイミングで同 root に紐付ける規約を `errors.py` docstring + `tests/test_errors.py` の header で文書化済なので、次に増える時は invariant が壊れた瞬間 (= test FAIL) に気づける
+- **CI enforcement of docstrings** (promoting `interrogate` to a pre-commit / CI gate) — there's a temptation to set 91.2% as a floor, but this release is scoped as a single hygiene pass to avoid turning it into a treadmill. Gating is split out into a separate ticket for the v1.1 line, once the v1.0-series follow-ons settle down
+- **Other `Exception`-inheriting classes pulled in transitively via pytest** (candidates like an upstream 4xx abstraction in adapters) — this pass only attributed the existing 3 leaves to `CodeRouterError`. The convention for attaching new leaves to the same root is already documented in the `errors.py` docstring and the header of `tests/test_errors.py`, so the moment the invariant breaks when a new leaf is added (i.e., a test FAILs), it'll be caught
 
 ### Follow-ons
 
-- **`docs/retrospectives/v1.0.1.md`** — 本 release は hygiene pass なので narrative 書くほど厚みが無い。そのため retrospective skip。ただし v1.1 retrospective の冒頭で "v1.0.1 で足回りを整えてから v1.1 に入った" を 1 行で mention して系譜を保つ
-- **docstring 90% CI gate** — `pyproject.toml` に `[tool.interrogate]` section を足し `fail-under = 90`、`pre-commit` or CI step で `interrogate coderouter` を回す。現状は手動 regression が無ければ coverage が少しずつ下がりうる (新コードに docstring を忘れた場合)
-- **残 21 箇所の private docstring** — stream-state plumbing が中心なので「書いても読まれない」コスパ懸念あり。ただし `_StreamState._start_event` / `_close_current_block` / `_open_text_block` / `_open_tool_use_block` / `_handle_delta` は Anthropic SSE spec を知らないと読めないので、1-line ずつでも付けて state machine の役割を outline するのは独立した価値あり。v1.1 か v1.2 で別途
+- **`docs/retrospectives/v1.0.1.md`** — this release is a hygiene pass, so there isn't enough substance to warrant a narrative. Skipping the retrospective. Instead, the v1.1 retrospective's opening will mention in one line that "the loose ends were tidied up in v1.0.1 before moving into v1.1," preserving the lineage
+- **Docstring 90% CI gate** — add a `[tool.interrogate]` section to `pyproject.toml` with `fail-under = 90`, running `interrogate coderouter` as a `pre-commit` or CI step. Currently, coverage could gradually slip without a manual regression check (if new code forgets a docstring)
+- **The remaining 21 private docstrings** — mostly stream-state plumbing, so there's a "write it but nobody reads it" cost-benefit concern. That said, `_StreamState._start_event` / `_close_current_block` / `_open_text_block` / `_open_tool_use_block` / `_handle_delta` are unreadable without knowledge of the Anthropic SSE spec, so even a 1-line docstring outlining the state machine's role has standalone value. Separately in v1.1 or v1.2
 
 ---
 
 ## [v1.0.0] — 2026-04-20 (Umbrella tag — The observation loop, closed)
 
-**Theme: v1.0-A / v1.0-B / v1.0-C を束ねる umbrella tag。** v0.7 retrospective で "transformation には probe が伴う" 原則を予告した、その具体化を 1 つの minor に束ねた。v1.0-A で宣言的 `output_filters` filter chain (transformation) + doctor reasoning-leak probe 拡張 (probe) を同一 release で同梱、v1.0-B で v0.7-B の symptom #1 (input-side `num_ctx` truncation) を間接検出から直接検出へ置換 — canary `ZEBRA-MOON-847` + ~5K token padding + echo-back → 5-verdict branch + `extra_body.options.num_ctx: 32768` patch、v1.0-C で同じ手法を output-side に鏡像化 — `"Count from 1 to 30"` deterministic prompt を streaming で投げ `finish_reason="length"` + 短 content から output truncation を直接検出 + `options.num_predict: 4096` patch。Ollama の 2 つの truncation knob (入力側 `num_ctx` / 出力側 `num_predict`) 両方が直接観測可能になった。併せて v1.0-verify として 3-scenario 実機 runner (`scripts/verify_v1_0.sh`) + `verify-ollama-bare` / `verify-ollama-tuned` provider pair を整備 — v0.5-verify の bare/tuned delta assertion pattern を 2 度目の instance として再利用、実機 run (Ollama 0.20.5 + qwen2.5-coder:7b、2026-04-20 23:23 JST) で **3/3 PASS**。副次成果として Ollama 0.20.5 が `/v1/chat/completions` の request-time `options.num_ctx` / `options.num_predict` を silent override する build であることが判明 — bare 側で症状を induce できなかったため B+C scenario に **ADVISORY branch** を追加 (bare は advisory、tuned 側の `[OK]` flip と patch-default-value 反映が hard evidence)、`coderouter/doctor.py` の num_ctx probe canary-echoed 分岐を 3-branch に split (`declared is None` と `declared < threshold but still echoed` を診断的に分離)。narrative layer は [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)、per-sub-release の機能詳細は下の `[v1.0-A]` / `[v1.0-B]` / `[v1.0-C]`、live-verify の evidence doc は [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。
+**Theme: the umbrella tag bundling v1.0-A / v1.0-B / v1.0-C.** Concretizes, in a single minor release, the principle previewed in the v0.7 retrospective that "transformation comes paired with a probe." v1.0-A bundles the declarative `output_filters` filter chain (transformation) together with the doctor reasoning-leak probe extension (probe) in the same release; v1.0-B replaces symptom #1 from v0.7-B (input-side `num_ctx` truncation) from indirect to direct detection — a canary `ZEBRA-MOON-847` plus ~5K tokens of padding plus echo-back drives a 5-verdict branch and an `extra_body.options.num_ctx: 32768` patch; v1.0-C mirrors the same technique to the output side — sending a deterministic `"Count from 1 to 30"` prompt via streaming, directly detecting output truncation from `finish_reason="length"` plus short content, and emitting an `options.num_predict: 4096` patch. Both of Ollama's truncation knobs (input-side `num_ctx` / output-side `num_predict`) are now directly observable. Also assembled as v1.0-verify: a 3-scenario real-hardware runner (`scripts/verify_v1_0.sh`) plus the `verify-ollama-bare` / `verify-ollama-tuned` provider pair — reusing the v0.5-verify bare/tuned delta assertion pattern for its 2nd instance, achieving **3/3 PASS** on a real-hardware run (Ollama 0.20.5 + qwen2.5-coder:7b, 2026-04-20 23:23 JST). As a side finding, Ollama 0.20.5 turned out to be a build that silently overrides request-time `options.num_ctx` / `options.num_predict` on `/v1/chat/completions` — since the symptom couldn't be induced on the bare side, an **ADVISORY branch** was added to scenarios B+C (bare is advisory; the tuned side's `[OK]` flip and the reflected patch-default-value are the hard evidence), and the num_ctx probe's canary-echoed branch in `coderouter/doctor.py` was split into 3 branches (separating `declared is None` from `declared < threshold but still echoed` diagnostically). The narrative layer lives at [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md), per-sub-release feature detail is in `[v1.0-A]` / `[v1.0-B]` / `[v1.0-C]` below, and the live-verify evidence doc is at [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md).
 
-- Tests: 382 → **453** (+71, +18.6%)、v1.0-A +49 / v1.0-B +10 / v1.0-C +12 / v1.0-verify ±0
-- Runtime deps: 5 → 5 (output_filters は pure-Python scanner、num_ctx probe は padding + string match、streaming probe は `httpx.AsyncClient().stream()` + 文字列 SSE parse — 10+ sub-release 連続で SDK 依存ゼロを維持)
+- Tests: 382 → **453** (+71, +18.6%): v1.0-A +49 / v1.0-B +10 / v1.0-C +12 / v1.0-verify ±0
+- Runtime deps: 5 → 5 (output_filters is a pure-Python scanner, the num_ctx probe is padding + string matching, and the streaming probe is `httpx.AsyncClient().stream()` + string-based SSE parsing — zero SDK dependency maintained across 10+ consecutive sub-releases)
 - Design through-lines:
-  - **Transformation + probe in same release** (v1.0-A) — v0.7-B retrospective の宣言が v1.0 で習慣化。v1.0-A output filter chain と reasoning-leak probe 拡張が同一 release に同梱された
-  - **Symptom-orthogonality heuristic for probe ordering** (v1.0-B / v1.0-C) — `num_ctx` は先行 probe の判定に干渉するため **chain 先頭寄り** (auth の直後)、`streaming` は直交軸なので **末尾**。"interferes-goes-first, orthogonal-goes-last" を明文化
-  - **Stateful boundary scrubber with partial-suffix hold-back** (v1.0-A) — `_max_suffix_overlap` で chunk 境界の partial tag を保留、streaming / non-streaming で単一 code path を共有。将来の filter 追加時の shape を確立
-  - **Ollama-shape signals as abstraction** (v1.0-B / v1.0-C 共用) — `_is_ollama_like(provider)` の 2-signal 判定 (`:11434` port OR `extra_body.options.num_ctx` declared) を v1.0-B で定義 → v1.0-C が verbatim 再利用、3rd Ollama-specific probe が来ても同じ helper に接続できる
-  - **Bare/tuned delta assertion as live-verify convention** (v1.0-verify) — v0.5-verify の pattern が generalize することを 2nd instance で確認、v1.1-verify 以降の標準形に
+  - **Transformation + probe in the same release** (v1.0-A) — the v0.7-B retrospective's declaration became habit in v1.0. v1.0-A bundles the output filter chain and the reasoning-leak probe extension into the same release
+  - **A symptom-orthogonality heuristic for probe ordering** (v1.0-B / v1.0-C) — since `num_ctx` interferes with the verdict of a subsequent probe, it's placed **near the front of the chain** (right after auth); `streaming` is an orthogonal axis, so it goes **last**. Documented as "interferes-goes-first, orthogonal-goes-last"
+  - **A stateful boundary scrubber with partial-suffix hold-back** (v1.0-A) — `_max_suffix_overlap` holds back a partial tag at a chunk boundary, sharing a single code path across streaming and non-streaming. Establishes the shape for future filter additions
+  - **Ollama-shape signals as an abstraction** (shared by v1.0-B / v1.0-C) — the 2-signal check `_is_ollama_like(provider)` (`:11434` port OR `extra_body.options.num_ctx` declared), defined in v1.0-B, is reused verbatim by v1.0-C; a 3rd Ollama-specific probe could plug into the same helper
+  - **Bare/tuned delta assertion as a live-verify convention** (v1.0-verify) — confirmed via a 2nd instance that the v0.5-verify pattern generalizes, becoming the standard form for v1.1-verify onward
 
 ### v1.0 umbrella-level follow-ons
 
-v1.0 各 sub-release の follow-on は該当 section を参照。umbrella level で横串にかかるものは以下:
+See the relevant section for each v1.0 sub-release's follow-ons. What cuts across at the umbrella level:
 
-- **`num_ctx` + `num_predict` joint probe** — 同一 Ollama upstream の 2 knob を 1 verdict + 1 merged patch (`extra_body.options: {num_ctx: 32768, num_predict: 4096}`) で emit、`format_report()` 側で both-present を検出して patch を融合する post-processing 案。v1.1 scope
-- **`_has_output_length_knob` / `_has_context_length_knob` generalization** — 2nd non-Ollama upstream with tunable context/output cap (vLLM `--max-model-len` / Together streaming quirks) が現れた時、`_is_ollama_like` を rename + multi-signal に拡張。現状 YAGNI
-- **`FallbackChain.output_filters: list[str] | None`** — v0.6-B の shape (`timeout_s` / `append_system_prompt`) に合わせた chain-level override。staging/prod 分岐で filter を切りたい use case。v1.0-D or v1.1-A scope
-- **Doctor probe-grouping refactor** — 6-probe chain (`auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming`) を group 化 (`[auth] → [truncation: num_ctx, streaming] → [toolcall: tool_calls, thinking, reasoning-leak]`) + `--only truncation` / `--only toolcall` flag。v1.1 scope
-- **Anthropic-native variant of v1.0-verify scenario A** — `/v1/messages` → `kind: anthropic` provider with `output_filters` declared。per-text-block chain isolation を live-verify で初証跡。v1.0-verify-B or v1.1-adjacent
-- **Ollama 0.20.5 `options.*` passthrough investigation** — v1.0-verify の実機 run で `/v1/chat/completions` 経由の request-time `options.num_ctx` / `options.num_predict` を silent override する挙動を検出 (bare 側で症状 induce 失敗 → ADVISORY branch で回避)。v1.1 で (a) どの Ollama build から override が入ったか upstream CHANGELOG 確認、(b) `/api/generate` ネイティブエンドポイントでは honor されるか、(c) env var `OLLAMA_CONTEXT_LENGTH` 等の強制経路が使えるか、を調査。結果次第で doctor probe の induce 方式を変更 (request-body → env-var 注入) or probe 先を `/api/generate` に切替の判断。現状 advisory-bare / hard-tuned asymmetry で運用
-- **`recover_garbled_tool_json` / tool-call 変換層 / Code Mode / prompt cache / 14-case 回帰 / チューニング既定値** — §10.1 original scope のうち v1.0.0 で deliver されたのは output-cleaning のみ。残り 5 は v1.1+ に明示 re-scope 推奨 (plan.md §10 の DoD 表更新含む)
-- **`scripts/release-close.py`** — 4 retro 連続で follow-on に入って未実装。~9 doc touchpoint × 3 sub-release = ~27 手動 edit を自動化
-- **Test-count auto-updater** — 3 retro 連続、`pytest --collect-only -q | wc -l` → chart 行自動生成。`release-close.py` と同時実装が最小コスト
+- **A joint `num_ctx` + `num_predict` probe** — a post-processing idea to emit both knobs on the same Ollama upstream as a single verdict + a single merged patch (`extra_body.options: {num_ctx: 32768, num_predict: 4096}`), fusing the patch on the `format_report()` side when both are present. v1.1 scope
+- **Generalizing `_has_output_length_knob` / `_has_context_length_knob`** — when a 2nd non-Ollama upstream with a tunable context/output cap appears (vLLM's `--max-model-len` / Together streaming quirks), rename `_is_ollama_like` and extend it to multi-signal. Currently YAGNI
+- **`FallbackChain.output_filters: list[str] | None`** — a chain-level override matching the v0.6-B shape (`timeout_s` / `append_system_prompt`). A use case for toggling filters differently between staging/prod. v1.0-D or v1.1-A scope
+- **A doctor probe-grouping refactor** — grouping the 6-probe chain (`auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming`) into `[auth] → [truncation: num_ctx, streaming] → [toolcall: tool_calls, thinking, reasoning-leak]` plus `--only truncation` / `--only toolcall` flags. v1.1 scope
+- **An Anthropic-native variant of v1.0-verify scenario A** — an `/v1/messages` → `kind: anthropic` provider with `output_filters` declared. First live-verify evidence of per-text-block chain isolation. v1.0-verify-B or v1.1-adjacent
+- **Investigating Ollama 0.20.5's `options.*` passthrough** — the real-hardware run for v1.0-verify detected behavior silently overriding request-time `options.num_ctx` / `options.num_predict` via `/v1/chat/completions` (worked around via the ADVISORY branch after failing to induce the symptom on the bare side). In v1.1, investigate (a) which Ollama build introduced the override by checking upstream CHANGELOG, (b) whether the native `/api/generate` endpoint honors it, (c) whether a forcing path like the `OLLAMA_CONTEXT_LENGTH` env var can be used. Depending on the outcome, decide whether to change the doctor probe's inducement method (request-body → env-var injection) or switch the probe target to `/api/generate`. Currently operating with an advisory-bare / hard-tuned asymmetry
+- **`recover_garbled_tool_json` / the tool-call translation layer / Code Mode / prompt cache / the 14-case regression / tuning defaults** — of the §10.1 original scope, only output-cleaning was delivered in v1.0.0. Recommend explicitly re-scoping the remaining 5 into v1.1+ (including updating plan.md §10's DoD table)
+- **`scripts/release-close.py`** — has appeared as a follow-on across 4 consecutive retrospectives without being implemented. Would automate ~9 doc touchpoints x 3 sub-releases = ~27 manual edits
+- **A test-count auto-updater** — across 3 consecutive retrospectives, auto-generating the chart line from `pytest --collect-only -q | wc -l`. Cheapest to implement alongside `release-close.py`
 
 ---
 
 ## [v1.0-C] — 2026-04-20 (Doctor streaming-path probe — direct Ollama output-side truncation detection)
 
-**Theme: v1.0-B の鏡像 — input-side truncation を直接観測できるようになった次は、output-side truncation を同じ粒度で観測する。** v1.0-B は prompt が `num_ctx` 不足で頭から切られて空応答になる症状を canary echo-back で直接検出した。ただし操作者が Claude Code で実際に遭遇するもう一つの silent-fail は **output 側** — 応答が途中で `finish_reason: length` で打ち切られる。典型的には Ollama の `options.num_predict` が default 128 (古い build) や 256 (一部 fork) のまま放置されているケース。v0.7-B の 4-probe + v1.0-B の `num_ctx` probe では、`max_tokens` を明示してない request で上流がどこまで出力するかの宣言層知識が無かったため、この症状は "なんか応答が途中で切れる" という操作者体感でしか拾えなかった。v1.0-C の streaming probe は SSE stream を最後まで consume して `finish_reason` + 実測 content 長さ を見て NEEDS_TUNING verdict と `options.num_predict: 4096` patch を emit する。v0.7 retrospective「silent-fail には直接 probe が必要」の symptom-coverage を 5 → 6 に拡張。v1.0-B (input-side) + v1.0-C (output-side) で Ollama 2-knob truncation の両面が直接検出可能になった。
+**Theme: the mirror image of v1.0-B — now that input-side truncation can be directly observed, observe output-side truncation at the same granularity.** v1.0-B directly detected, via canary echo-back, the symptom of a prompt getting truncated from the front due to insufficient `num_ctx`, producing an empty response. But there's another silent failure operators actually run into with Claude Code: **on the output side** — the response gets cut off mid-way with `finish_reason: length`. Typically this happens when Ollama's `options.num_predict` is left at its default of 128 (older builds) or 256 (some forks). With v0.7-B's 4 probes and v1.0-B's `num_ctx` probe, there was no declarative-layer knowledge of how far upstream would generate for a request that doesn't explicitly set `max_tokens`, so this symptom could only be caught as the operator's vague sense that "the response seems to cut off partway." v1.0-C's streaming probe consumes the SSE stream to the end and looks at `finish_reason` plus the measured content length, emitting a NEEDS_TUNING verdict and an `options.num_predict: 4096` patch. This extends the v0.7 retrospective's "silent failures need a direct probe" symptom coverage from 5 to 6. With v1.0-B (input-side) and v1.0-C (output-side), both faces of Ollama's 2-knob truncation are now directly detectable.
 
 - Tests: 441 → **453** (+12)
-  - `tests/test_doctor.py` +12 (2 patch-emitter tests: `_patch_providers_yaml_num_predict` shape + YAML round-trip / 10 probe behavior tests: non-11434 port SKIP / non-Ollama kind SKIP chain / successful stream → OK / `finish_reason=length` + short content → NEEDS_TUNING + num_predict patch / zero-chunk JSON-instead-of-SSE → NEEDS_TUNING advisory no patch / no `[DONE]` terminator → OK with note / `extra_body.options.num_ctx` signal on non-11434 port fires streaming probe / outbound body carries `stream: true` + merged extra_body / HTTP 500 during streaming → SKIP / auth 401 short-circuits streaming probe)
-- Runtime deps: 5 → 5 (`httpx.AsyncClient().stream("POST", ...)` は既に依存、SSE parsing は pure string slicing、依存追加なし)
-- Non-breaking: v1.0-B で fixture `_oa_provider` が `localhost:8080` に寄せてあるので、既存 36 test は non-Ollama-shape 判定で streaming probe も SKIP で通過。Ollama-shape opt-in の既存 5 num_ctx test には新たに 5 つ目の SSE mock (`_add_sse_ok_mock`) を 1 行で追加
+  - `tests/test_doctor.py` +12 (2 patch-emitter tests: `_patch_providers_yaml_num_predict` shape + YAML round-trip / 10 probe behavior tests: non-11434 port SKIP / non-Ollama kind SKIP chain / successful stream → OK / `finish_reason=length` + short content → NEEDS_TUNING + num_predict patch / zero-chunk JSON-instead-of-SSE → NEEDS_TUNING advisory no patch / no `[DONE]` terminator → OK with note / `extra_body.options.num_ctx` signal on non-11434 port fires the streaming probe / outbound body carries `stream: true` + merged extra_body / HTTP 500 during streaming → SKIP / auth 401 short-circuits the streaming probe)
+- Runtime deps: 5 → 5 (`httpx.AsyncClient().stream("POST", ...)` is an existing dependency; SSE parsing is pure string slicing, no dependency added)
+- Non-breaking: since v1.0-B already moved the `_oa_provider` fixture to `localhost:8080`, the existing 36 tests pass with the streaming probe also SKIPped as non-Ollama-shape. Added a 5th SSE mock (`_add_sse_ok_mock`) with a single line to the existing 5 Ollama-shape-opt-in num_ctx tests
 
 ### Added
 
-- **`coderouter/doctor.py` — `_probe_streaming(provider)` async function** (~130 LOC)
-  - Deterministic prompt: `_STREAMING_PROBE_USER_PROMPT = "Count from 1 to 30, one number per line. Output only the numbers, nothing else."` — 正常応答は約 60-90 char (2 digit 数字 + 改行 × 30)、`num_predict=128` 辺りで頭打ちになると content が極端に短くなる observable pattern。canary のような hallucination 耐性は不要 — 出力長さ **そのもの** が被観測量
-  - Threshold constants: `_STREAMING_PROBE_MIN_EXPECTED_CHARS = 40` (30 個の数字を改行区切りで並べるだけで 60+ char、40 を切るのは明確に打ち切られたケース)、`_STREAMING_PROBE_NUM_PREDICT_DEFAULT = 4096` (Claude Code の typical 応答 200-2000 token をカバーしつつ VRAM 圧迫を避ける運用値)
-  - Probe body 構築: `body = dict(provider.extra_body); body.update({model, messages, max_tokens=128, temperature=0, stream=True})` — `num_ctx` probe と同じく operator が宣言した `options.*` を実際に使って送る唯一の 2 probe (他 4 は adapter 層をバイパスして raw 上流を見る)
-  - 5-way verdict branch: (a) non-Ollama-shape (`_is_ollama_like` False) → SKIP; (b) transport error / 4xx / 5xx → SKIP + 診断 note; (c) 2xx + 0 chunks (JSON 応答が来た / 非標準 SSE framing) → NEEDS_TUNING **advisory** (server-side 設定なので patch は emit せず、"upstream silently ignored `stream: true`" を report); (d) 2xx + `finish_reason="length"` + content < 40 char → NEEDS_TUNING + `num_predict: 4096` patch; (e) 2xx + `finish_reason="stop"` + content 十分 → OK (`[DONE]` terminator が無ければ OK + informational note)
-- **`_http_stream_sse(url, *, headers, body, timeout) -> tuple[int|None, list[dict], bool, str]`** helper — `httpx.AsyncClient().stream("POST", ...)` で SSE 消費、`resp.aiter_lines()` で `data: <json>` 行を json parse、`data: [DONE]` sentinel を observe。戻り値: (status, chunks, saw_done, error_text)。transport error は (None, [], False, error_msg) に均す (caller の branch logic を簡潔化)
-- **`_patch_providers_yaml_num_predict(provider_name, desired_predict=4096) -> str`** — `_patch_providers_yaml_num_ctx` の sibling、`extra_body.options.num_predict: 4096` を emit。header comment で "merge into any existing extra_body.options" を明示 (operator が `num_ctx` を既に書いている既定ケースを想定、collision 回避指示付き)。YAML round-trip test で parse-able を保証
-- **`_STREAMING_PROBE_USER_PROMPT` / `_STREAMING_PROBE_MIN_EXPECTED_CHARS` / `_STREAMING_PROBE_NUM_PREDICT_DEFAULT`** constants — `_NUM_CTX_ADEQUATE_THRESHOLD` と同じ section に module-level で宣言、test から直接 import 可能 (behavior invariant を test で lock する v0.5 以降の pattern)
-- **`check_model` orchestration update**: 5 probe chain を 6 probe chain に拡張、`auth → num_ctx → tool_calls → thinking → reasoning-leak → streaming` の順に実行。streaming を **最後** に置くのは意図的 — num_ctx (input-side) / tool_calls / thinking / reasoning-leak はいずれも「宣言された capability vs 実測」の宣言層 probe、streaming は output-side 専用の独立観測軸。先行 probe の verdict に干渉しない位置に置くことで、streaming の NEEDS_TUNING が他 probe の dominant signal を塗りつぶさない (v1.0-B で num_ctx を tool_calls の **前** に置いたのとは逆方向の判断、症状カテゴリが直交しているため)
-- **Auth short-circuit SKIP tuple 拡張**: `("num_ctx", "tool_calls", "thinking", "reasoning-leak")` → `("num_ctx", "tool_calls", "thinking", "reasoning-leak", "streaming")`。auth が通らない時は後続全 probe を SKIP で埋める invariant を 5-probe → 6-probe に broadcast
+- **`coderouter/doctor.py` — the `_probe_streaming(provider)` async function** (~130 LOC)
+  - A deterministic prompt: `_STREAMING_PROBE_USER_PROMPT = "Count from 1 to 30, one number per line. Output only the numbers, nothing else."` — a normal response is roughly 60-90 characters (2-digit numbers + newline x 30); when it caps out around `num_predict=128`, content becomes dramatically shorter, an observable pattern. No hallucination resistance is needed as with a canary — the output length **itself** is the observed quantity
+  - Threshold constants: `_STREAMING_PROBE_MIN_EXPECTED_CHARS = 40` (just listing 30 numbers with newlines yields 60+ chars, so falling below 40 is a clear-cut truncation case), `_STREAMING_PROBE_NUM_PREDICT_DEFAULT = 4096` (an operational value covering Claude Code's typical response of 200-2000 tokens while avoiding VRAM pressure)
+  - Probe body construction: `body = dict(provider.extra_body); body.update({model, messages, max_tokens=128, temperature=0, stream=True})` — like the `num_ctx` probe, this is one of only 2 probes that actually send the operator-declared `options.*` (the other 4 bypass the adapter layer to look at the raw upstream)
+  - A 5-way verdict branch: (a) non-Ollama-shape (`_is_ollama_like` False) → SKIP; (b) transport error / 4xx / 5xx → SKIP + a diagnostic note; (c) 2xx + 0 chunks (a JSON response came back / non-standard SSE framing) → NEEDS_TUNING **advisory** (since it's a server-side setting, no patch is emitted; reports "upstream silently ignored `stream: true`"); (d) 2xx + `finish_reason="length"` + content < 40 chars → NEEDS_TUNING + an `num_predict: 4096` patch; (e) 2xx + `finish_reason="stop"` + sufficient content → OK (OK plus an informational note if the `[DONE]` terminator is missing)
+- **The `_http_stream_sse(url, *, headers, body, timeout) -> tuple[int|None, list[dict], bool, str]`** helper — consumes SSE via `httpx.AsyncClient().stream("POST", ...)`, JSON-parses `data: <json>` lines from `resp.aiter_lines()`, and observes the `data: [DONE]` sentinel. Returns (status, chunks, saw_done, error_text); transport errors are normalized to (None, [], False, error_msg) (simplifying the caller's branch logic)
+- **`_patch_providers_yaml_num_predict(provider_name, desired_predict=4096) -> str`** — a sibling to `_patch_providers_yaml_num_ctx`, emitting `extra_body.options.num_predict: 4096`. The header comment explicitly says "merge into any existing extra_body.options" (anticipating the common case where the operator has already declared `num_ctx`, with instructions to avoid collision). Guaranteed parseable via a YAML round-trip test
+- **`_STREAMING_PROBE_USER_PROMPT` / `_STREAMING_PROBE_MIN_EXPECTED_CHARS` / `_STREAMING_PROBE_NUM_PREDICT_DEFAULT`** constants — declared at the module level in the same section as `_NUM_CTX_ADEQUATE_THRESHOLD`, directly importable from tests (the v0.5-onward pattern of locking behavior invariants via tests)
+- **`check_model` orchestration update**: extends the 5-probe chain to a 6-probe chain, running in the order `auth → num_ctx → tool_calls → thinking → reasoning-leak → streaming`. Placing streaming **last** is deliberate — num_ctx (input-side) / tool_calls / thinking / reasoning-leak are all declarative-layer probes checking "declared capability vs. measured reality," while streaming is an independent observation axis specific to the output side. Placing it where it won't interfere with a preceding probe's verdict means streaming's NEEDS_TUNING won't paper over another probe's dominant signal (the opposite judgment from placing num_ctx **before** tool_calls in v1.0-B, since these symptom categories are orthogonal)
+- **Extended the auth short-circuit SKIP tuple**: `("num_ctx", "tool_calls", "thinking", "reasoning-leak")` → `("num_ctx", "tool_calls", "thinking", "reasoning-leak", "streaming")`. Broadcasts the invariant that all subsequent probes get filled with SKIP when auth fails, from 5-probe to 6-probe
 
 ### Changed
 
-- **`coderouter/doctor.py` モジュール docstring**
-  - Symptom 対応表の symptom #1 行を `"空応答 / 意味不明応答 → num_ctx probe (v1.0-B) + streaming probe (v1.0-C)"` に更新。v1.0-B で input-side を直接拾えるようになり、v1.0-C で output-side も拾えるようになったことを明示 (symptom #1 は実は 2 種類の truncation が合流する beginner-level 症状で、probe side は分離する必要があった旨を section comment で補足)
+- **`coderouter/doctor.py` module docstring**
+  - Updated the symptom #1 row in the symptom-mapping table to `"empty response / nonsensical response → num_ctx probe (v1.0-B) + streaming probe (v1.0-C)"`. Notes that v1.0-B enabled catching the input side directly, and v1.0-C now catches the output side too (a section comment clarifies that symptom #1 is actually a beginner-level symptom where 2 kinds of truncation converge, and the probe side needed to be split accordingly)
 
 - **README.md — v1.0-C status section**
-  - 見出しを `## Status: v1.0-B — Direct num_ctx probe` → `## Status: v1.0-C — Streaming-path probe (2026-04-20)` に pivot
-  - 段落を v1.0-B の output-side sibling として位置づけ直し: `finish_reason=length` + 短い content が典型 fingerprint、Claude Code ユーザから見える症状は "応答が途中で切れる"。`options.num_predict` が 128/256 default のまま放置されている Ollama build が主要な原因。count-1-to-30 の deterministic prompt、`extra_body.options.num_predict: 4096` patch、secondary "2xx with 0 chunks" symptom を advisory で拾う、Ollama-shape gating は v1.0-B 踏襲。test 数を 441 → **453** (+12) に更新、v1.0 系通算 +71 (49 + 10 + 12)
+  - Pivoted the heading from `## Status: v1.0-B — Direct num_ctx probe` to `## Status: v1.0-C — Streaming-path probe (2026-04-20)`
+  - Repositioned the paragraph as the output-side sibling of v1.0-B: `finish_reason=length` plus short content is the typical fingerprint, and the symptom visible to a Claude Code user is "the response cuts off partway." The primary cause is usually an Ollama build left at the `options.num_predict` default of 128/256. Documents the count-1-to-30 deterministic prompt, the `extra_body.options.num_predict: 4096` patch, catching the secondary "2xx with 0 chunks" symptom as advisory, and reusing the Ollama-shape gating from v1.0-B. Updated the test count from 441 → **453** (+12), for a v1.0-series running total of +71 (49 + 10 + 12)
 
-- **`tests/test_doctor.py` — 既存 Ollama-shape test に 5 番目の SSE mock 追加**
-  - 5 つの既存 `extra_body={"options": {"num_ctx": ...}}` 系 test (declared-high canary-echoed OK / declared-low canary-missing bump / declared-adequate canary-missing intrinsic-limit / `extra_body.options.num_ctx` signal on non-11434 / `extra_body` merges into outbound body) に `_add_sse_ok_mock(httpx_mock, url)` を 1 行追加。6-probe chain が end まで走り切れるように
-  - `_sse_stream_count_body(*, numbers=30, finish_reason="stop", include_done=True) -> bytes` / `_add_sse_ok_mock(httpx_mock, url, **kwargs)` test helper 追加 — 10 個の streaming probe test から共通利用、content-type `text/event-stream` + `data: {...}` × N + closing chunk with `finish_reason` + 任意 `data: [DONE]` を組み立て
+- **`tests/test_doctor.py` — added a 5th SSE mock to the existing Ollama-shape tests**
+  - Added a single line, `_add_sse_ok_mock(httpx_mock, url)`, to the 5 existing `extra_body={"options": {"num_ctx": ...}}`-style tests (declared-high canary-echoed OK / declared-low canary-missing bump / declared-adequate canary-missing intrinsic-limit / `extra_body.options.num_ctx` signal on non-11434 / `extra_body` merges into the outbound body), so the 6-probe chain can run all the way to the end
+  - Added the `_sse_stream_count_body(*, numbers=30, finish_reason="stop", include_done=True) -> bytes` / `_add_sse_ok_mock(httpx_mock, url, **kwargs)` test helpers — shared across the 10 streaming probe tests, assembling `text/event-stream` content-type + `data: {...}` x N + a closing chunk with `finish_reason` + an optional `data: [DONE]`
 
 ### Design notes
 
-- **Why streaming probe runs last, not before tool_calls like num_ctx.** v1.0-B の num_ctx probe を tool_calls の **前** に置いたのは、truncation (input-side) が tool_calls 不在を誤検出させる干渉関係があったため。v1.0-C の streaming probe は output-side で、他 probe の判定空間とは独立 — 先行 probe が OK で走った後に "応答が途中で切れる" が起きても、それぞれが異なる症状に対応する。probe chain の **最後** に置くことで、streaming の NEEDS_TUNING が他の dominant signal を塗りつぶすリスクをゼロにする。原則は「症状カテゴリが直交するなら末尾、干渉するなら先頭」
-- **Why gate on `_is_ollama_like`, not all openai_compat.** 非 Ollama の upstream (OpenRouter / Together / Groq / Anthropic) は `options.num_predict` を honor する path が無い — 仮に streaming probe が truncation を検出しても patch の送り先が無い (`extra_body.options.num_predict: 4096` を書いても効かない)。対 Ollama 互換実装のうち、`num_predict` を honor しない fork (まれ) は content が十分長く来るので SKIP せず OK で抜ける、逆に honor する fork には正しい patch が届く。gate は v1.0-B の num_ctx probe と共用 (同じ `_is_ollama_like` helper) — 将来 vLLM の `max_model_len` / `max_tokens` を native に持つ upstream が増えたら、probe 側を `_has_output_length_knob(provider)` に rename + 別 signal 追加で拡張する余地。現状 YAGNI
-- **Why "count from 1 to 30", not "echo this canary".** v1.0-B は prompt が truncate されたか (input-side) が問いなので canary echo-back が直接的。v1.0-C は response 自体が truncate されるか (output-side) が問いで、observable は「応答が短すぎる」こと **そのもの**。canary 方式だと "canary は出たが続きで説明文が切れた" を拾えない (canary は短いので num_predict=128 でも間に合う)。Count 1-to-30 は正常時約 60-90 char / `num_predict=128` で頭打ち時 15-30 char という分離が明瞭で、低い threshold (40 char) で確実に判定できる。数字というのは hallucination free なのも bonus — "0, 1, 2..." 改行 + temperature=0 で deterministic
-- **Why `num_predict: 4096`, not "find the model's max".** `num_ctx` と同じ哲学 — doctor が model-specific limit database を抱え込むと責務超過。4096 は Claude Code の typical 応答 (200-2000 token) を余裕で飲み、かつ consumer GPU (24GB 以下) で 7B-14B モデルの KV cache 上限を使い切らない値。model の真の max (Llama 3.1 32K completion / Qwen2.5 4K default / etc.) を知りたい operator は patch を受けた後 dial up する
-- **Why `num_predict` patch and `num_ctx` patch are separate emitters, not one "num_everything" helper.** `num_ctx` は input-side (prompt 全体を入れる buffer size)、`num_predict` は output-side (response に割り当てる token 数)。OpenAI 互換 API semantics では前者は implicit (prompt を投げた分だけ自動配置)、Ollama では explicit に `options.num_ctx` で宣言しないと 2048 default。`num_predict` は逆に OpenAI `max_tokens` に相当する概念だが、Ollama は request-body `max_tokens` を一部 ignore して `options.num_predict` を優先する build がある (実測)。2 つを別々の emitter に分けるのは、probe の verdict が (a) input 切れ / (b) output 切れ / (c) 両方 を区別して出せるようにするため。operator が両方 NEEDS_TUNING を受けたら 1 回の YAML edit で `extra_body.options: {num_ctx: 32768, num_predict: 4096}` にまとめて merge できる — header comment で merge direction を明示済み
-- **Why advisory (no patch) for "2xx with 0 chunks".** 上流が `stream: true` を silent ignore して非 SSE 応答を返すケース (一部 reverse proxy、一部 LM Studio 旧 build 等) は、クライアント側 providers.yaml には修正点が無い — 上流サーバの設定ミス or fork bug。patch を emit しても "貼る先が無い" 状態になり、operator を混乱させる。代わりに "server returned 2xx with 0 streaming chunks — upstream may have ignored `stream: true`" の advisory を吐き、remediation は (a) 上流の streaming 設定確認 / (b) CodeRouter 側 `providers.yaml` で `stream: false` を強制する flag (現状無い、将来検討) を示唆する方向に留める。「patch が emit できないなら verdict は出しても patch 欄は空」という v0.7-B から続く contract を保つ
+- **Why the streaming probe runs last, not before tool_calls like num_ctx.** v1.0-B's num_ctx probe was placed **before** tool_calls because truncation (input-side) has an interference relationship that could cause tool_calls absence to be misdetected. v1.0-C's streaming probe is output-side, independent of other probes' decision space — even if "the response cuts off partway" happens after a preceding probe already ran OK, each addresses a different symptom. Placing it at the **very end** of the probe chain reduces to zero the risk of streaming's NEEDS_TUNING papering over another probe's dominant signal. The principle: "if symptom categories are orthogonal, go last; if they interfere, go first"
+- **Why gate on `_is_ollama_like`, not all openai_compat.** Non-Ollama upstreams (OpenRouter / Together / Groq / Anthropic) have no path that honors `options.num_predict` — even if the streaming probe detected truncation, there'd be nowhere to send the patch (writing `extra_body.options.num_predict: 4096` would have no effect). Among Ollama-compatible implementations, rare forks that don't honor `num_predict` would still return sufficiently long content, exiting with OK rather than SKIP; forks that do honor it get the correct patch delivered. The gate is shared with v1.0-B's num_ctx probe (the same `_is_ollama_like` helper) — room to extend the probe to `_has_output_length_knob(provider)` with an additional signal, as more upstreams natively expose something like vLLM's `max_model_len` / `max_tokens`. Currently YAGNI
+- **Why "count from 1 to 30," not "echo this canary."** v1.0-B's question is whether the prompt got truncated (input-side), for which canary echo-back is direct. v1.0-C's question is whether the response itself gets truncated (output-side), where the observable is the fact that "the response is too short" **itself**. A canary approach wouldn't catch "the canary came through but the explanation afterward got cut off" (the canary is short enough to fit even at num_predict=128). Counting 1-to-30 gives a clear separation — roughly 60-90 chars normally vs. 15-30 chars when capped at num_predict=128 — allowing a reliable decision at a low threshold (40 chars). A bonus is that numbers are hallucination-free — "0, 1, 2..." plus newlines plus temperature=0 makes it deterministic
+- **Why `num_predict: 4096`, not "find the model's max."** The same philosophy as `num_ctx` — if doctor had to carry a model-specific limit database, that would exceed its responsibility. 4096 comfortably covers Claude Code's typical response (200-2000 tokens) while not exhausting the KV cache headroom of 7B-14B models on consumer GPUs (24GB or less). An operator who wants to know a model's true max (Llama 3.1's 32K completion, Qwen2.5's 4K default, etc.) can dial it up after receiving the patch
+- **Why the `num_predict` patch and the `num_ctx` patch are separate emitters, rather than one "num_everything" helper.** `num_ctx` is input-side (the buffer size for holding the entire prompt), while `num_predict` is output-side (the token budget allocated to the response). Under OpenAI-compatible API semantics, the former is implicit (allocated automatically based on however much prompt was sent), whereas Ollama defaults to 2048 unless explicitly declared via `options.num_ctx`. `num_predict` is conceptually the counterpart to OpenAI's `max_tokens`, but some Ollama builds ignore the request-body `max_tokens` in favor of `options.num_predict` (observed empirically). Keeping the two as separate emitters lets the probe's verdict distinguish between (a) input truncation / (b) output truncation / (c) both. If an operator receives both as NEEDS_TUNING, they can merge them into a single YAML edit as `extra_body.options: {num_ctx: 32768, num_predict: 4096}` — the header comment already documents the merge direction
+- **Why advisory (no patch) for "2xx with 0 chunks."** Cases where upstream silently ignores `stream: true` and returns a non-SSE response (some reverse proxies, some older LM Studio builds, etc.) have no fix on the client-side providers.yaml — it's an upstream server misconfiguration or fork bug. Emitting a patch would leave the operator with "nowhere to paste it," causing confusion. Instead, it surfaces the advisory "server returned 2xx with 0 streaming chunks — upstream may have ignored `stream: true`," pointing toward remediation options like (a) checking the upstream's streaming configuration or (b) a future flag to force `stream: false` on the CodeRouter `providers.yaml` side (not currently available, a future consideration). This preserves the contract, carried forward from v0.7-B, that "if a patch can't be emitted, the verdict is still given but the patch field stays empty"
 
 ### Follow-ons
 
-- **Anthropic native streaming variant for v1.0-D** — 現状 probe は `openai_compat` + Ollama-shape のみ発火。Anthropic native (`kind: "anthropic"`) の streaming probe を分離した `_probe_streaming_anthropic` として追加する案。ただし `api.anthropic.com` の `max_tokens` は request 側で明示必須 (server-side default 無し) なので symptom 発生経路が異なる — Claude Code が `max_tokens` をすでに request に含める場合はほぼ symptom が起きない。優先度は低、必要性は v1.0-C の real-machine verify で measure してから判断
+- **An Anthropic-native streaming variant for v1.0-D** — currently the probe only fires for `openai_compat` + Ollama-shape. An idea to add a separate `_probe_streaming_anthropic` for Anthropic native (`kind: "anthropic"`). However, `api.anthropic.com`'s `max_tokens` must be explicitly set on the request side (there's no server-side default), so the symptom's path differs — if Claude Code already includes `max_tokens` in the request, the symptom mostly won't occur. Low priority; decide after measuring the need via v1.0-C's real-hardware verify
 - ~~**Real-machine verify for v1.0-C**~~ — **Landed 2026-04-20** via `scripts/verify_v1_0.sh` scenario C (streaming probe). The combined v1.0 verify (A + B + C in one runner) subsumes the originally-scoped per-release verify script. Bare `verify-ollama-bare` triggers the `streaming …… [NEEDS TUNING]` verdict with `num_predict: 4096` patch; tuned `verify-ollama-tuned` flips to `streaming …… [OK]`. Evidence inline in [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md) (v0.5-verify pattern — evidence embedded, not a separate file). Nginx reverse-proxy 0-chunk reproducer was deferred — the unit tests already lock that branch via pytest-httpx, and the symptom is environmentally specific (fork-dependent, not Ollama-default) so live verify would be flakier than it's worth
-- **vLLM `max_model_len` detection (output-side)** — vLLM は `--max-model-len` で output-side cap を設定、`extra_body.max_tokens` で request 毎に絞る。Ollama の `num_predict` に意味論的対応。`_is_ollama_like` → `_has_output_length_knob` に rename して vLLM signal を追加する余地、v1.2+
-- **Streaming probe timeout tuning** — 現状 `timeout=provider.doctor_probe_timeout_s` (default 5.0s) を使う。count-1-to-30 は CPU inference で 2-4 秒かかることがある (14B モデル + CPU-only CI)、将来 streaming probe 専用の timeout knob (`CodeRouterConfig.doctor.streaming_probe_timeout_s`) を提供する案。現状 default で CI green、defer
-- **Canary collision for streaming probe** — v1.0-B と違い streaming probe は canary を使わないので collision リスクは無い。ただし count 1-to-30 を model が "要約して 5 個だけ出力" することは可能 (稀)。その場合 content length ≈ 10 char で誤 NEEDS_TUNING を出し得る。現状実測で issue なし、defer
+- **vLLM `max_model_len` detection (output-side)** — vLLM sets an output-side cap via `--max-model-len`, restricted per-request via `extra_body.max_tokens`. Semantically corresponds to Ollama's `num_predict`. Room to rename `_is_ollama_like` to `_has_output_length_knob` and add the vLLM signal, v1.2+
+- **Streaming probe timeout tuning** — currently uses `timeout=provider.doctor_probe_timeout_s` (default 5.0s). Count-1-to-30 can take 2-4 seconds under CPU inference (a 14B model + CPU-only CI); an idea to offer a dedicated timeout knob for the streaming probe in the future (`CodeRouterConfig.doctor.streaming_probe_timeout_s`). Currently green with the default in CI, deferred
+- **Canary collision for the streaming probe** — unlike v1.0-B, the streaming probe uses no canary, so there's no collision risk. However, a model could theoretically "summarize and output only 5 numbers" for the count 1-to-30 task (rare). That could produce a false NEEDS_TUNING with content length ≈ 10 chars. No issue observed in practice so far; deferred
 
 ---
 
 ## [v1.0-B] — 2026-04-20 (Doctor `num_ctx` probe — direct Ollama truncation detection)
 
-**Theme: v0.7 retrospective「transformation には probe が伴う」の裏面 — probe そのものが症状の間接検出に頼っていた箇所を直接検出に置換する。** v0.7-B で `coderouter doctor --check-model` を出荷した時、plan.md §9.4 の 5 症状のうち 4 つ (symptom 2-5) は直接 probe を持っていた。残る symptom #1 — Ollama の `num_ctx` default 2048 による silent prompt truncation — だけが "tool_calls probe が `no tool_use emitted` を報告する" という **間接経路** にぶら下がっていた。これは操作者に誤った remediation (`capabilities.tools: false`) を提案するリスクがある。v1.0-B の `num_ctx` probe は canary echo-back スキームで truncation を直接観測し、`extra_body.options.num_ctx: 32768` という **正しい** patch を emit する。v0.7-B の 4-probe suite → v1.0-B の 5-probe suite で、5 症状すべてに固有の probe が対応するようになった。
+**Theme: the flip side of the v0.7 retrospective's "transformation comes paired with a probe" — replacing a spot where the probe itself relied on indirect symptom detection with direct detection.** When `coderouter doctor --check-model` shipped in v0.7-B, 4 of the 5 symptoms in plan.md §9.4 (symptoms 2-5) already had a direct probe. Only symptom #1 remained — silent prompt truncation caused by Ollama's `num_ctx` default of 2048 — hanging off the **indirect path** of "the tool_calls probe reports `no tool_use emitted`." This risks suggesting the wrong remediation to the operator (`capabilities.tools: false`). v1.0-B's `num_ctx` probe directly observes truncation via a canary echo-back scheme, emitting the **correct** patch, `extra_body.options.num_ctx: 32768`. Going from v0.7-B's 4-probe suite to v1.0-B's 5-probe suite means all 5 symptoms now have a dedicated probe.
 
 - Tests: 431 → **441** (+10)
-  - `tests/test_doctor.py` +10 (2 patch-emitter tests: `_patch_providers_yaml_num_ctx` shape + YAML round-trip / 8 probe behavior tests: port-heuristic SKIP / 11434 canary-missing NEEDS_TUNING / declared-high canary-echoed OK / declared-low canary-missing bump / declared-adequate canary-missing intrinsic-limit note / `extra_body.options.num_ctx` signal on non-11434 port / `extra_body` merges into outbound body / auth short-circuit includes num_ctx SKIP)
-- Runtime deps: 5 → 5 (canary + padding は pure string、依存追加なし)
-- Non-breaking: 既存 36 test は fixture `_oa_provider` の default base_url を `localhost:11434` → `localhost:8080` に寄せることで influence なし (port-heuristic によって non-Ollama-shape と判定 → probe SKIP)、test URL の replace-all (31 箇所) を先行して終わらせた
+  - `tests/test_doctor.py` +10 (2 patch-emitter tests: `_patch_providers_yaml_num_ctx` shape + YAML round-trip / 8 probe behavior tests: port-heuristic SKIP / 11434 canary-missing NEEDS_TUNING / declared-high canary-echoed OK / declared-low canary-missing bump / declared-adequate canary-missing intrinsic-limit note / `extra_body.options.num_ctx` signal on a non-11434 port / `extra_body` merges into the outbound body / auth short-circuit includes num_ctx SKIP)
+- Runtime deps: 5 → 5 (the canary + padding are pure strings, no dependency added)
+- Non-breaking: the existing 36 tests are unaffected, since the fixture `_oa_provider`'s default base_url was moved from `localhost:11434` to `localhost:8080` (the port heuristic classifies it as non-Ollama-shape → probe SKIP); a replace-all of test URLs (31 locations) was done ahead of time
 
 ### Added
 
-- **`coderouter/doctor.py` — `_probe_num_ctx(provider)` async function** (~85 LOC)
-  - Canary constants: `_NUM_CTX_PROBE_CANARY = "ZEBRA-MOON-847"` (all-caps hyphenated token、自然言語に絶対現れない shape)、`_NUM_CTX_PROBE_PADDING_SENTENCE = "The quick brown fox jumps over the lazy dog near the river bank today. "` (~16 tokens)、`_NUM_CTX_PROBE_PADDING_REPEATS = 300` (~4800 tokens — Ollama default 2048 を確実に突破)、`_NUM_CTX_ADEQUATE_THRESHOLD = 8192` (Claude Code system + tool prompt 15-20k を受けるのに最低必要な headroom 考慮)
-  - Prompt 構築: `"CANARY: ZEBRA-MOON-847\n\n" + padding*300 + "\n\nQuestion: What exact canary token appeared at the very beginning of this message?"`。canary を **先頭** に置くのがキモ — Ollama は overflow 時 beginning を truncate する
-  - `provider.extra_body` を outbound body に shallow merge する唯一の probe (他の 4 probe は extra_body を無視する)。これによって operator が宣言した `options.num_ctx` を **実際に使って** truncation が起きるかを観測できる。merge order は `body = dict(provider.extra_body); body.update({model, messages, max_tokens, temperature})` — top-level probe fields が extra_body collision で勝つ (adapter の merge order と同じ semantics)
-  - 5-way verdict branch: (a) canary echoed & declared ≥ 8192 → OK (operator tuned); (b) canary echoed & nothing declared → OK with informational note (upstream が non-default default を使っている、unusual but benign); (c) canary missing & nothing declared → `NEEDS_TUNING` + patch add 32768; (d) canary missing & declared < 8192 → `NEEDS_TUNING` + patch bump to 32768; (e) canary missing & declared ≥ 8192 → `NEEDS_TUNING` + "model intrinsic limit may be lower than declared" note (まれ、Llama 3 8B の 8192 cap 等で起きる)
-- **`_is_ollama_like(provider) -> bool`** — 2 signal detection: (a) base_url が `:11434` を含む (Ollama canonical port); (b) `provider.extra_body.options.num_ctx` が宣言されている (only Ollama honors この path、operator が書いたなら by construction Ollama-shape)。`kind != "openai_compat"` は短絡で False。llama.cpp (:8080) / OpenRouter / Together / Groq / Anthropic native では fire しない — false positive 防止
-- **`_declared_num_ctx(provider) -> int | None`** — `extra_body.options.num_ctx` を安全に int として取り出す helper。`options` が dict でないケースや value が int でないケースでは None
-- **`_patch_providers_yaml_num_ctx(provider_name, desired_ctx=32768) -> str`** — nested YAML patch emitter: `extra_body: \n  options:\n    num_ctx: <n>`。v0.7-B の `_patch_providers_yaml_capability` / v1.0-A の `_patch_providers_yaml_output_filters` と対称形、comment header が "merge into any existing extra_body" を明示 (operator が他の options を持っている場合を考慮)
-- **`check_model` orchestration update**: probe 実行順序を `auth → num_ctx → tool_calls → thinking → reasoning-leak` に変更。**num_ctx を tool_calls の前に置く** のは意図的 — 昔の挙動では truncation が `no tool_use emitted` と誤検出されて `tools: false` patch が提案されていた。num_ctx を先に走らせることで truncation verdict が報告で支配的になり、operator が正しい remediation を適用できる
-- **Auth short-circuit SKIP tuple 拡張**: `("tool_calls", "thinking", "reasoning-leak")` → `("num_ctx", "tool_calls", "thinking", "reasoning-leak")`。auth が通らない時は後続全 probe を SKIP で埋める既存 invariant を 4-probe → 5-probe に broadcast
+- **`coderouter/doctor.py` — the `_probe_num_ctx(provider)` async function** (~85 LOC)
+  - Canary constants: `_NUM_CTX_PROBE_CANARY = "ZEBRA-MOON-847"` (an all-caps hyphenated token, a shape that never occurs in natural language), `_NUM_CTX_PROBE_PADDING_SENTENCE = "The quick brown fox jumps over the lazy dog near the river bank today. "` (~16 tokens), `_NUM_CTX_PROBE_PADDING_REPEATS = 300` (~4800 tokens — reliably exceeding Ollama's default of 2048), `_NUM_CTX_ADEQUATE_THRESHOLD = 8192` (accounting for the minimum headroom needed to receive Claude Code's 15-20k system + tool prompt)
+  - Prompt construction: `"CANARY: ZEBRA-MOON-847\n\n" + padding*300 + "\n\nQuestion: What exact canary token appeared at the very beginning of this message?"`. Placing the canary **at the front** is the key trick — Ollama truncates the beginning on overflow
+  - The only probe that shallow-merges `provider.extra_body` into the outbound body (the other 4 probes ignore extra_body). This lets it observe whether truncation occurs while **actually using** the `options.num_ctx` the operator declared. Merge order: `body = dict(provider.extra_body); body.update({model, messages, max_tokens, temperature})` — top-level probe fields win on collision with extra_body (the same semantics as the adapter's merge order)
+  - A 5-way verdict branch: (a) canary echoed & declared ≥ 8192 → OK (operator tuned); (b) canary echoed & nothing declared → OK with an informational note (upstream is using a non-default default, unusual but benign); (c) canary missing & nothing declared → `NEEDS_TUNING` + a patch adding 32768; (d) canary missing & declared < 8192 → `NEEDS_TUNING` + a patch bumping to 32768; (e) canary missing & declared ≥ 8192 → `NEEDS_TUNING` + a note that "the model's intrinsic limit may be lower than declared" (rare, occurs with e.g. Llama 3 8B's 8192 cap)
+- **`_is_ollama_like(provider) -> bool`** — a 2-signal detector: (a) the base_url contains `:11434` (Ollama's canonical port); (b) `provider.extra_body.options.num_ctx` is declared (only Ollama honors this path, so if the operator wrote it, it's Ollama-shape by construction). `kind != "openai_compat"` short-circuits to False. Doesn't fire for llama.cpp (:8080) / OpenRouter / Together / Groq / Anthropic native — preventing false positives
+- **`_declared_num_ctx(provider) -> int | None`** — a helper that safely extracts `extra_body.options.num_ctx` as an int. Returns None if `options` isn't a dict or the value isn't an int
+- **`_patch_providers_yaml_num_ctx(provider_name, desired_ctx=32768) -> str`** — a nested YAML patch emitter: `extra_body: \n  options:\n    num_ctx: <n>`. Symmetric with v0.7-B's `_patch_providers_yaml_capability` / v1.0-A's `_patch_providers_yaml_output_filters`, with a comment header explicitly noting "merge into any existing extra_body" (accounting for operators who already have other options set)
+- **`check_model` orchestration update**: changed the probe execution order to `auth → num_ctx → tool_calls → thinking → reasoning-leak`. **Placing num_ctx before tool_calls** is deliberate — under the old behavior, truncation was misdetected as `no tool_use emitted`, suggesting a `tools: false` patch. Running num_ctx first makes the truncation verdict dominant in the report, letting the operator apply the correct remediation
+- **Extended the auth short-circuit SKIP tuple**: `("tool_calls", "thinking", "reasoning-leak")` → `("num_ctx", "tool_calls", "thinking", "reasoning-leak")`. Broadcasts the existing invariant that all subsequent probes get filled with SKIP when auth fails, from 4-probe to 5-probe
 
 ### Changed
 
-- **`coderouter/doctor.py` モジュール docstring**
-  - Symptom 対応表の symptom #1 行を `"空応答 / 意味不明応答 → num_ctx probe + basic-chat probe"` に更新 (v0.7-B 時代は `num_ctx probe` と書いてあったが、実在しなかった — v1.0-B で文字通り実在するようになった)。symptom #3 行も `thinking probe + reasoning-leak content-marker detection (v1.0-A)` に更新 (v1.0-A の副作用を反映)
+- **`coderouter/doctor.py` module docstring**
+  - Updated the symptom #1 row in the symptom-mapping table to `"empty response / nonsensical response → num_ctx probe + basic-chat probe"` (in the v0.7-B era it said `num_ctx probe` even though it didn't actually exist yet — v1.0-B makes it literally exist). Also updated the symptom #3 row to `thinking probe + reasoning-leak content-marker detection (v1.0-A)` (reflecting v1.0-A's side effect)
 
 - **`README.md` — Ollama beginner symptom #1**
-  - "currently does not probe num_ctx (planned follow-on); symptom shows up indirectly as tool_calls probe..." の notice を削除
-  - `coderouter doctor --check-model` 出力例の expected diagnostic を `num_ctx: NEEDS_TUNING — canary missing from reply; upstream truncated (no ``extra_body.options.num_ctx`` declared)` に書き換え、doctor が直接 emit する patch を pre-print
-  - "As of v1.0-B the doctor probe detects this directly" 説明を追加、canary + 5K padding スキームと Ollama-shape gating (:11434 / declared options) を 1 段落で明示
+  - Removed the notice "currently does not probe num_ctx (planned follow-on); symptom shows up indirectly as tool_calls probe..."
+  - Rewrote the expected diagnostic in the `coderouter doctor --check-model` output example to `num_ctx: NEEDS_TUNING — canary missing from reply; upstream truncated (no ``extra_body.options.num_ctx`` declared)`, pre-printing the patch doctor now emits directly
+  - Added an explanation, "As of v1.0-B the doctor probe detects this directly," spelling out the canary + 5K padding scheme and the Ollama-shape gating (:11434 / declared options) in one paragraph
 
-- **`tests/test_doctor.py` — fixture migration** (`_oa_provider` default base_url)
-  - `localhost:11434/v1` → `localhost:8080/v1` (llama.cpp port) に pivot。全 36 既存 test で fixture を使っていた URL 参照 (31 箇所) を `replace_all` で一括更新。これによって `_is_ollama_like` が False を返し、既存 test は mock 配列を 1 個も増やさずに済む (num_ctx probe が SKIP で通過)
-  - fixture signature を `extra_body: dict[str, Any] | None = None` 受け取り形に拡張、Ollama opt-in test が `extra_body={"options": {"num_ctx": 32768}}` を宣言できるように
+- **`tests/test_doctor.py` — fixture migration** (`_oa_provider`'s default base_url)
+  - Pivoted from `localhost:11434/v1` to `localhost:8080/v1` (the llama.cpp port). Bulk-updated all URL references (31 locations) using the fixture across the existing 36 tests via `replace_all`. This makes `_is_ollama_like` return False, so existing tests pass without adding a single mock (the num_ctx probe SKIPs)
+  - Extended the fixture signature to accept `extra_body: dict[str, Any] | None = None`, so the Ollama-opt-in tests can declare `extra_body={"options": {"num_ctx": 32768}}`
 
 ### Design notes
 
-- **Why the `:11434` + `options.num_ctx` disjunction, not a boolean config flag.** v0.6-A / v0.6-D 以降の pattern で operator 明示指定を要求する手もあったが、(a) Ollama の fresh install は 100% `:11434` を使うので port から推論できる、(b) operator が `options.num_ctx` を書いている時点で Ollama 以外あり得ない (他のどの openai_compat upstream もこの path を honor しない) — なので "implicit signal of intent" で十分、新しい flag を増やすべきではない。false positive は `:11434` を使う自作サーバに限定されるが、その場合も `num_ctx` を honor する Ollama-互換実装なら probe は正しく動く、honor しない実装は canary が echoed されて OK で抜ける (最悪 informational OK になるだけで damage なし)
-- **Why 300 repeats, not 500 or 150.** Ollama default `num_ctx = 2048` tokens を超えて truncation を **確実に** 誘発させるのに最小の padding は 2048 tokens 強 = 130 repeats 程度だが、chunking overhead や BPE tokenization のばらつきを考慮して 300 repeats (~4800 tokens) でマージンを取る。500 repeats だと timeout_s=5.0 の default fixture で risky (特に CPU-only CI)、150 repeats だと 2048 boundary に近すぎて一部 tokenizer で通ってしまう。300 は実測で safe margin
-- **Why the canary is "ZEBRA-MOON-847", not a hash or UUID.** UUID だと prompt の先頭にあっても LLM が "hallucinate another UUID" と出力する可能性がある (自然言語の prior に近い形)。hash (e.g. `a7f9e2`) は逆に model が "reasonable answer shape" と認識してしまう。全大文字 + 2 ハイフン + アルファベット+数字の mix は natural text に絶対現れない shape — model は prompt で実見しない限り produce できない。長さ 14 char なので tokenizer が BPE で何トークンに分解しようが `in` match で拾える
-- **Why emit `32768` as the default patch, not "find the max the model supports".** 32768 は Claude Code prompt (system + tool + user history) を余裕で受ける実用値、かつ consumer hardware (M-series 16-64GB / 24GB VRAM GPU) で大半のモデル (7B-14B) が走る閾値。model の真の max (Llama 3.1 128K / Qwen2.5 32K / etc.) を調査して optimal 値を出そうとすると doctor が model-name-to-context の別 registry を維持することになり責務超過。32768 を一律提案して operator が memory 制約で dial down する余地を残す方が運用コスト低
-- **Why num_ctx probe runs before tool_calls, not last.** v0.7-B 時代の報告形では tool_calls probe が truncation 症状を最初に observable として拾って `NEEDS_TUNING: capabilities.tools` を出していた。num_ctx probe を後ろに置くと "tools=false + num_ctx=32768" という冗長な 2-patch 提案になる。前に置くことで num_ctx verdict が自然に支配的になり、次回 run では num_ctx が OK になって tool_calls 本来の verdict が観察できる。"一番 dominant な症状を先に出す" は v0.7 retrospective 「silent-fail には optimal な診断順序がある」の具体化
-- **Why `extra_body` shallow-merge in the probe.** 他の 4 probe (auth / tool_calls / thinking / reasoning-leak) は `extra_body` を無視する — probe の目的が "adapter 層を迂回して raw upstream 応答を見る" ことで、`extra_body` をまじなに merge すると "adapter が add する field (`think: false` etc.)" との相互作用まで test してしまう。num_ctx probe は唯一例外 — probe の存在意義自体が "宣言された `options.num_ctx` が実際に効いているか" の観測なので、`extra_body.options` を送らない probe は意味を成さない。merge は top-level shallow (option fields は nested dict のまま保持)、probe 固有の top-level (`model` / `messages` / `max_tokens` / `temperature`) は extra_body を上書きする順序で確定性を保つ
+- **Why the `:11434` + `options.num_ctx` disjunction, rather than a boolean config flag.** Requiring explicit operator declaration, in the pattern of v0.6-A / v0.6-D onward, was an option, but (a) a fresh Ollama install uses `:11434` 100% of the time, so it can be inferred from the port; (b) the moment an operator writes `options.num_ctx`, it can't be anything but Ollama (no other openai_compat upstream honors this path) — so "implicit signal of intent" is enough, and a new flag shouldn't be added. False positives are limited to self-built servers using `:11434`, but even then, if that server is an Ollama-compatible implementation honoring `num_ctx`, the probe works correctly; if it doesn't honor it, the canary gets echoed and it exits with OK (worst case, just an informational OK, no damage)
+- **Why 300 repeats, not 500 or 150.** The minimum padding to **reliably** induce truncation past Ollama's default `num_ctx = 2048` tokens is around 130 repeats (just over 2048 tokens), but accounting for chunking overhead and BPE tokenization variance, 300 repeats (~4800 tokens) gives margin. 500 repeats risks the default `timeout_s=5.0` fixture (especially on CPU-only CI); 150 repeats is too close to the 2048 boundary and would pass for some tokenizers. 300 gives a safe margin empirically
+- **Why the canary is "ZEBRA-MOON-847," not a hash or UUID.** A UUID risks the LLM "hallucinating another UUID" even at the start of the prompt (too close to a natural-language prior shape). A hash (e.g., `a7f9e2`) risks the model recognizing it as a "reasonable answer shape" instead. All-caps plus 2 hyphens plus a letter/digit mix is a shape that never occurs in natural text — the model can't produce it unless it actually saw it in the prompt. At 14 characters, it's short enough that regardless of how the tokenizer's BPE splits it, an `in` match will still catch it
+- **Why the default patch emits `32768`, not "find the max the model supports."** 32768 is a practical value that comfortably receives Claude Code's prompt (system + tool + user history), while also being a threshold at which most models (7B-14B) run on consumer hardware (M-series 16-64GB / a 24GB VRAM GPU). Trying to research each model's true max (Llama 3.1's 128K, Qwen2.5's 32K, etc.) to compute an optimal value would mean doctor maintaining a separate model-name-to-context registry, exceeding its responsibility. Proposing 32768 uniformly, leaving room for the operator to dial it down under memory constraints, is operationally cheaper
+- **Why the num_ctx probe runs before tool_calls, not last.** Under the v0.7-B-era reporting shape, the tool_calls probe was the first to observe the truncation symptom, reporting `NEEDS_TUNING: capabilities.tools`. Placing the num_ctx probe after it would produce a redundant 2-patch suggestion ("tools=false + num_ctx=32768"). Placing it before makes the num_ctx verdict naturally dominant, and once num_ctx becomes OK on a subsequent run, tool_calls' genuine verdict becomes observable. "Surface the most dominant symptom first" is the concrete realization of the v0.7 retrospective's "there's an optimal diagnostic ordering for silent failures"
+- **Why the probe shallow-merges `extra_body`.** The other 4 probes (auth / tool_calls / thinking / reasoning-leak) ignore `extra_body` — their purpose is "bypass the adapter layer to see the raw upstream response," and mindlessly merging `extra_body` would end up testing interactions with fields the adapter adds (`think: false` etc.) as well. The num_ctx probe is the sole exception — its very reason for existing is to observe "whether the declared `options.num_ctx` actually takes effect," so a probe that doesn't send `extra_body.options` would be meaningless. The merge is top-level shallow (option fields stay as a nested dict as-is); probe-specific top-level fields (`model` / `messages` / `max_tokens` / `temperature`) overwrite extra_body in a fixed order to preserve determinism
 
 ### Follow-ons
 
 - ~~**Real-machine verify for v1.0-B**~~ — **Landed 2026-04-20** via `scripts/verify_v1_0.sh` scenario B (num_ctx probe). Bare `verify-ollama-bare` triggers `num_ctx …… [NEEDS TUNING]` + `num_ctx: 32768` patch; tuned `verify-ollama-tuned` flips to `num_ctx …… [OK]`. Paired with scenario C (streaming) they share a single doctor CLI invocation per side (the 6-probe chain runs all at once). Evidence inline in [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)
-- **Probe model detection accuracy** — 将来的に Ollama 以外で `num_ctx`-ish knob を持つ upstream (例: vLLM の `max_model_len`) が openai_compat を名乗って出てきた時、`_is_ollama_like` を `_has_context_length_knob` に rename + multi-signal (vLLM なら `extra_body.max_model_len`) に拡張する余地。現状 YAGNI
-- **Dynamic threshold** — `_NUM_CTX_ADEQUATE_THRESHOLD = 8192` を hard-coded している。Claude Code 側の system prompt が将来 30k まで膨らむと 8192 では足りなくなる (現状でも tool 全開宣言で 18-20k)。`CodeRouterConfig.doctor.min_context: int` を provide して operator が上書きできるようにする案、v1.2 scope (doctor の configuration hierarchy を整えるタイミングで)
-- **Canary collision risk** — 極めて低確率だが、training corpus に "ZEBRA-MOON-847" が入っている model は "canary" が truncate されていないのに model が hallucinate できてしまう。probe の反証: canary を毎回 random 生成 (process-local seed、同じ session 内の再現性は保つ) に変える。現状実測で issue なし、defer
+- **Probe model detection accuracy** — room to rename `_is_ollama_like` to `_has_context_length_knob` plus add multi-signal support (e.g., vLLM's `extra_body.max_model_len`), for when a future non-Ollama upstream with a `num_ctx`-like knob shows up claiming openai_compat. Currently YAGNI
+- **Dynamic threshold** — `_NUM_CTX_ADEQUATE_THRESHOLD = 8192` is currently hard-coded. If Claude Code's system prompt grows to 30k in the future, 8192 won't be enough (even today, declaring all tools reaches 18-20k). An idea to provide `CodeRouterConfig.doctor.min_context: int` so operators can override it, v1.2 scope (at the point when doctor's configuration hierarchy gets organized)
+- **Canary collision risk** — extremely low probability, but a model whose training corpus happens to include "ZEBRA-MOON-847" could hallucinate the canary even when it wasn't actually truncated. Counter-measure: switch to generating the canary randomly each time (process-local seed, preserving reproducibility within the same session). No issue observed in practice; deferred
 
 ---
 
 ## [v1.0-A] — 2026-04-20 (Declarative output cleaning chain)
 
-**Theme: v0.7 retrospective で予告した「transformation には probe が伴う」原則の first application。** v0.5-C の reasoning-field passive strip は "model が reasoning field を吐いてくれれば" のみに効く受動層だった。しかし現場の Ollama / HF 蒸留モデルは `<think>...</think>` や `<|turn|>` / `<|channel>thought` 等を **content チャネルに inline で** 流し込んでくる (v0.7-C README symptom #3)。これらを adapter 境界で **宣言的** に剥がす filter chain を追加した。`providers.yaml` に `output_filters: [strip_thinking, strip_stop_markers]` を書くだけで、streaming / non-streaming 両方、OpenAI-compat / Anthropic native 両 adapter で一貫して動く。併せて v0.7-B の reasoning-leak probe を拡張 — content-embedded `<think>` / stop markers を検出し、必要な filter を列挙した `providers.yaml` patch を emit する。**宣言 (v0.7-A YAML) → probe (v0.7-B doctor) → transformation (v1.0-A filter chain)** の triad でやっと "beginner が踏む症状 3 (think-leak)" の観測ループが閉じた。
+**Theme: the first application of the principle previewed in the v0.7 retrospective, "transformation comes paired with a probe."** v0.5-C's passive reasoning-field stripping was a passive layer that only worked "if the model happened to emit a reasoning field." But real-world Ollama / HF-distilled models push `<think>...</think>` or `<|turn|>` / `<|channel>thought` etc. **inline into the content channel** (v0.7-C README symptom #3). This adds a filter chain that **declaratively** strips these at the adapter boundary. Just writing `output_filters: [strip_thinking, strip_stop_markers]` in `providers.yaml` makes it work consistently across streaming / non-streaming and both the OpenAI-compat / Anthropic native adapters. Also extends v0.7-B's reasoning-leak probe — detecting content-embedded `<think>` / stop markers and emitting a `providers.yaml` patch enumerating the needed filters. With this triad — **declaration (v0.7-A YAML) → probe (v0.7-B doctor) → transformation (v1.0-A filter chain)** — the observation loop for "beginner symptom 3 (think-leak)" finally closes.
 
 - Tests: 382 → **431** (+49)
-  - `tests/test_output_filters.py` +31 (pure unit: chunk-boundary correctness / chain composition / validate registry)
+  - `tests/test_output_filters.py` +31 (pure unit tests: chunk-boundary correctness / chain composition / validating the registry)
   - `tests/test_output_filters_adapters.py` +12 (adapter integration: generate / stream / tail flush / per-block chain isolation)
   - `tests/test_config.py` +3 (`output_filters: [...]` schema validation at load time)
-  - `tests/test_doctor.py` +3 (reasoning-leak probe: content `<think>` / stop markers detection + patch shape + silence when already configured)
-- Runtime deps: 5 → 5 (pure stateful scanner、依存追加なし)
-- `examples/providers.yaml`: `ollama-qwen-coder-7b` / `-14b` / `ollama-hf-example` stanza に `output_filters: [strip_thinking]` を enable
+  - `tests/test_doctor.py` +3 (reasoning-leak probe: content `<think>` / stop marker detection + patch shape + staying silent when already configured)
+- Runtime deps: 5 → 5 (a pure stateful scanner, no dependency added)
+- `examples/providers.yaml`: enabled `output_filters: [strip_thinking]` on the `ollama-qwen-coder-7b` / `-14b` / `ollama-hf-example` stanzas
 
 ### Added
 
-- **`coderouter/output_filters.py`** (新規モジュール、public API ~280 LOC)
-  - `DEFAULT_STOP_MARKERS: tuple[str, ...]` — Claude Code で実測された 6 markers: `<|turn|>` / `<|end|>` / `<|python_tag|>` / `<|im_end|>` / `<|eot_id|>` / `<|channel>thought`。閉じカギカッコ省略形 (`<|channel>thought`) を含むのは実機観測ベース。変更には CHANGELOG note を義務付け (regression test `test_default_stop_markers_contents` で lock)
-  - `KNOWN_FILTERS: tuple[str, ...] = ("strip_thinking", "strip_stop_markers")` — registry、v1.0-A 時点で 2 filter
-  - `validate_output_filters(names: list[str]) -> None` — unknown name は `ValueError` で known names を列挙。typo `strp_thinking` → コピペで直せるエラーメッセージに
-  - `OutputFilter` (Protocol) — `feed(text: str, eof: bool = False) -> str` / `modified: bool`。stateful、per-stream 1 instance 原則
-  - `StripThinkingFilter` — `<think>...</think>` を inclusive で除去。partial tag (`<thi` / `</thi`) は chunk 境界で hold-back、EOF で unmatched open があれば tail drop (未完了 thinking block の流出を防ぐ)
-  - `StripStopMarkersFilter` — `_earliest_match(buffer)` で最初にヒットした marker を iterative に strip、partial marker (`<|pyth`) は hold-back。marker で無い `<|` は EOF で flush
-  - `_max_suffix_overlap(buffer, needle)` — longest N where `buffer[-N:] == needle[:N]`、chunk-boundary hold-back の核心ルーチン (両 filter で共通)
-  - `OutputFilterChain(filter_names)` — declaration 順で適用。`any_applied` / `applied_filters()` / `names` / `is_empty` / `feed`。unknown name は construction 時に `ValueError` (fast-fail)
-  - `apply_output_filters(names, text) -> (scrubbed, applied)` — non-streaming convenience。空 chain は identity、適用された filter 名のみ返す
-- **`coderouter/config/schemas.py` — `ProviderConfig.output_filters`** (新 field)
-  - `output_filters: list[str] = Field(default_factory=list, ...)` を `append_system_prompt` の直後に配置 (v0.6-B の sibling position)
-  - `@model_validator(mode="after") _check_output_filters_known` で `validate_output_filters` を呼ぶ。import は local (config → output_filters の one-way dependency を維持、cycle 回避)
-- **`coderouter/adapters/openai_compat.py` — filter hook** (`generate` + `stream`)
-  - `generate()`: v0.5-C reasoning strip の直後に `data["choices"]` iteration を挿入、各 `message.content` に `OutputFilterChain.feed(text, eof=True)` を適用、`any_applied` なら `log_output_filter_applied` で 1 message 1 log
-  - `stream()`: 入口で `filter_chain: OutputFilterChain | None` を provider 宣言から lazy 構築、`output_filter_logged: bool` と `last_chunk_template: dict | None` を track。per-chunk で `delta["content"]` に `chain.feed(text)` を適用 (eof=False)。`[DONE]` 受信時は従来の `return` を `break` に変更 → loop 後の flush code path に処理を集約。`chain.feed("", eof=True)` で hold-back された tail を flush、非空なら `last_chunk_template` から `id` / `model` / `created` / `system_fingerprint` を借りた synthetic SSE chunk を 1 発 yield (OpenAI SDK 互換性を壊さない)、最後に `[DONE]` を再送して実ストリーム終端
-- **`coderouter/adapters/anthropic_native.py` — filter hook** (`generate_anthropic` + `stream_anthropic`)
-  - `generate_anthropic()`: response parse 後、`data["content"]` の各 block について `block["type"] == "text"` なら fresh `OutputFilterChain` を作って `block["text"]` に適用。applied filter の union を log (per-response 1 log)
-  - `_process_stream_event_for_filters(event, *, chains, logged_flag) -> list[event]` 新 helper
-    - `content_block_start` (type=text) → `chains[index]` に fresh chain を格納
-    - `content_block_delta` (type=text_delta) → `chains[index].feed(delta["text"])` で in-place mutation
-    - `content_block_stop` → `chains[index].feed("", eof=True)` で tail を取得、非空なら同 index 向けの synthetic `content_block_delta` event を `content_block_stop` の **前に** prepend (event 順を自然に保つ)。`logged_flag: list[bool] = [False]` mutable cell で 1 stream 1 log を保証
-  - `stream_anthropic()`: 2 か所の `yield AnthropicStreamEvent(...)` 呼び出しを `for out_event in self._process_stream_event_for_filters(...): yield out_event` に置換、入口で `filter_chains: dict[int, OutputFilterChain] = {}` + `logged_flag = [False]` を初期化。**per-text-block chain** なので block 0 の未完了 `<think>` が block 1 に漏れない
-- **`coderouter/logging.py` — `log_output_filter_applied` chokepoint helper**
+- **`coderouter/output_filters.py`** (a new module, public API ~280 LOC)
+  - `DEFAULT_STOP_MARKERS: tuple[str, ...]` — 6 markers observed in practice with Claude Code: `<|turn|>` / `<|end|>` / `<|python_tag|>` / `<|im_end|>` / `<|eot_id|>` / `<|channel>thought`. Includes the unclosed-bracket-abbreviated form (`<|channel>thought`) based on real-hardware observation. Changes are required to include a CHANGELOG note (locked via the `test_default_stop_markers_contents` regression test)
+  - `KNOWN_FILTERS: tuple[str, ...] = ("strip_thinking", "strip_stop_markers")` — the registry, 2 filters as of v1.0-A
+  - `validate_output_filters(names: list[str]) -> None` — raises `ValueError` enumerating known names for an unknown name. A typo like `strp_thinking` gets an error message fixable by copy-paste
+  - `OutputFilter` (Protocol) — `feed(text: str, eof: bool = False) -> str` / `modified: bool`. Stateful, one instance per stream as a principle
+  - `StripThinkingFilter` — inclusively removes `<think>...</think>`. Partial tags (`<thi` / `</thi`) are held back at chunk boundaries; on EOF with an unmatched open tag, the tail is dropped (preventing leakage of an unterminated thinking block)
+  - `StripStopMarkersFilter` — via `_earliest_match(buffer)`, iteratively strips whichever marker hits first; partial markers (`<|pyth`) are held back. A `<|` that isn't a marker gets flushed at EOF
+  - `_max_suffix_overlap(buffer, needle)` — the longest N where `buffer[-N:] == needle[:N]`, the core routine behind chunk-boundary hold-back (shared by both filters)
+  - `OutputFilterChain(filter_names)` — applies filters in declaration order. `any_applied` / `applied_filters()` / `names` / `is_empty` / `feed`. An unknown name raises `ValueError` at construction (fast-fail)
+  - `apply_output_filters(names, text) -> (scrubbed, applied)` — a non-streaming convenience function. An empty chain is identity, returning only the names of filters that were applied
+- **`coderouter/config/schemas.py` — `ProviderConfig.output_filters`** (a new field)
+  - Places `output_filters: list[str] = Field(default_factory=list, ...)` right after `append_system_prompt` (a sibling position to v0.6-B)
+  - Calls `validate_output_filters` via `@model_validator(mode="after") _check_output_filters_known`. The import is local (preserving the one-way dependency from config → output_filters, avoiding a cycle)
+- **`coderouter/adapters/openai_compat.py` — the filter hook** (`generate` + `stream`)
+  - `generate()`: inserts iteration over `data["choices"]` right after the existing v0.5-C reasoning strip, applying `OutputFilterChain.feed(text, eof=True)` to each `message.content`, logging once per message via `log_output_filter_applied` if `any_applied`
+  - `stream()`: lazily constructs a `filter_chain: OutputFilterChain | None` from the provider's declaration at the entry point, tracking `output_filter_logged: bool` and `last_chunk_template: dict | None`. Applies `chain.feed(text)` to `delta["content"]` per-chunk (eof=False). Changes the previous `return` on receiving `[DONE]` to a `break`, consolidating processing into the post-loop flush code path. Flushes the held-back tail via `chain.feed("", eof=True)`, and if non-empty, yields a single synthetic SSE chunk borrowing `id` / `model` / `created` / `system_fingerprint` from `last_chunk_template` (not breaking OpenAI SDK compatibility), finally resending `[DONE]` to terminate the actual stream
+- **`coderouter/adapters/anthropic_native.py` — the filter hook** (`generate_anthropic` + `stream_anthropic`)
+  - `generate_anthropic()`: after parsing the response, for each block in `data["content"]` where `block["type"] == "text"`, builds a fresh `OutputFilterChain` and applies it to `block["text"]`. Logs the union of applied filters (one log per response)
+  - New helper `_process_stream_event_for_filters(event, *, chains, logged_flag) -> list[event]`
+    - `content_block_start` (type=text) → stores a fresh chain in `chains[index]`
+    - `content_block_delta` (type=text_delta) → mutates in-place via `chains[index].feed(delta["text"])`
+    - `content_block_stop` → obtains the tail via `chains[index].feed("", eof=True)`, and if non-empty, prepends a synthetic `content_block_delta` event for the same index **before** the `content_block_stop` (naturally preserving event order). A mutable cell, `logged_flag: list[bool] = [False]`, guarantees one log per stream
+  - `stream_anthropic()`: replaces the 2 `yield AnthropicStreamEvent(...)` call sites with `for out_event in self._process_stream_event_for_filters(...): yield out_event`, initializing `filter_chains: dict[int, OutputFilterChain] = {}` and `logged_flag = [False]` at the entry point. Since it's a **per-text-block chain**, an unfinished `<think>` in block 0 doesn't leak into block 1
+- **`coderouter/logging.py` — the `log_output_filter_applied` chokepoint helper**
   - `OutputFilterAppliedPayload` TypedDict: `provider: str` / `filters: list[str]` / `streaming: bool`
-  - `log_output_filter_applied(logger, *, provider, filters, streaming)` — info level、`log_capability_degraded` と同じ pattern (single chokepoint、payload typed、provider 横断の集計が容易)
-- **`coderouter/doctor.py` — reasoning-leak probe extension**
-  - prompt を `"In one word: capital of France?"` → `"Think step by step about the capital of France, then answer in one word."` + `max_tokens=128` に変更 (thinking block を誘発して leak 経路を確実に叩く)
-  - parse 後: `has_think = "<think>" in content_text` / `leaked_markers = [m for m in DEFAULT_STOP_MARKERS if m in content_text]` を計算、`provider.output_filters` の現状と照合
-  - `needs_strip_thinking or needs_strip_markers` → verdict `NEEDS_TUNING`、`_patch_providers_yaml_output_filters(provider_name, filters)` が `providers:\n  - name: <p>\n    output_filters: [<missing>]` 形の copy-paste 可能 patch を emit
-  - 未検出時の OK detail を `"no `reasoning` field observed and no content-embedded markers — nothing to strip."` に更新 (既存 test `test_reasoning_leak_not_present_reports_clean` が "nothing to strip" を assert しているので保持)
-  - `format_report` の declarations section に `output_filters` 行を追加
+  - `log_output_filter_applied(logger, *, provider, filters, streaming)` — info level, the same pattern as `log_capability_degraded` (a single chokepoint, a typed payload, easy cross-provider aggregation)
+- **`coderouter/doctor.py` — the reasoning-leak probe extension**
+  - Changed the prompt from `"In one word: capital of France?"` to `"Think step by step about the capital of France, then answer in one word."` plus `max_tokens=128` (inducing a thinking block to reliably exercise the leak path)
+  - After parsing: computes `has_think = "<think>" in content_text` / `leaked_markers = [m for m in DEFAULT_STOP_MARKERS if m in content_text]`, cross-checking against the current state of `provider.output_filters`
+  - `needs_strip_thinking or needs_strip_markers` → verdict `NEEDS_TUNING`, with `_patch_providers_yaml_output_filters(provider_name, filters)` emitting a copy-paste-ready patch of the form `providers:\n  - name: <p>\n    output_filters: [<missing>]`
+  - Updated the OK detail for the not-detected case to `"no `reasoning` field observed and no content-embedded markers — nothing to strip."` (kept as-is since the existing `test_reasoning_leak_not_present_reports_clean` test asserts on "nothing to strip")
+  - Added an `output_filters` row to `format_report`'s declarations section
 
 ### Changed
 
 - **`examples/providers.yaml`**
-  - `ollama-qwen-coder-7b`: `output_filters: [strip_thinking]` + 解説コメント (Qwen2.5-Coder は Claude Code の tool-heavy prompting で `<think>` を間欠的に流す / `strip_stop_markers` は Ollama chat template が `<|im_end|>` で clean に終端するので不要)
-  - `ollama-qwen-coder-14b`: 同じく `output_filters: [strip_thinking]` + 14b は scrub cost が cheap なので unconditional enable
-  - `ollama-hf-example` (commented stanza): 症状 3 (v0.7-C README) の remediation が 2 経路 (source-side `/no_think` / output-side `output_filters`) に整理されていることを stanza 内 comment で明示、`output_filters: [strip_thinking]` を commented-in form で提示 (uncomment → 即 active)。古い `reasoning_passthrough` hint 行は削除 (v1.0-A 経路の方が general のため)
+  - `ollama-qwen-coder-7b`: added `output_filters: [strip_thinking]` plus an explanatory comment (Qwen2.5-Coder intermittently leaks `<think>` under Claude Code's tool-heavy prompting; `strip_stop_markers` isn't needed since Ollama's chat template terminates cleanly with `<|im_end|>`)
+  - `ollama-qwen-coder-14b`: likewise `output_filters: [strip_thinking]`; unconditionally enabled since scrub cost is cheap at 14b
+  - `ollama-hf-example` (a commented stanza): clarifies in the stanza's comment that remediation for symptom 3 (v0.7-C README) now has 2 paths (source-side `/no_think` / output-side `output_filters`), presenting `output_filters: [strip_thinking]` in commented-in form (uncomment → immediately active). Removed the old `reasoning_passthrough` hint line (the v1.0-A path is more general)
 
 ### Design notes
 
-- **Why `output_filters` lives on `ProviderConfig`, not `FallbackChain`.** filter の必要性は model 族依存 (Qwen2.5-Coder は `<think>` を流す / Claude は流さない) で、chain 依存ではない。v0.6-B で `FallbackChain.timeout_s` / `append_system_prompt` を provider 上書き形で入れたのと同じ philosophy: 「default は provider 宣言」「chain は部分 override 可能 (必要になれば v1.0-B で追加)」
-- **Why stateful filter, not regex `re.sub`.** streaming で chunk が `<thi` / `nk>` に割れた時、regex は match しない (chunk 1 回目が "hello <thi" のまま leak する)。`_max_suffix_overlap` で partial suffix を hold-back する scanner を書く方が regex 合成より短く、かつ streaming と non-streaming で同じ code path を共有できる。`re.sub` route は non-streaming 専用の二重実装を招くので却下
-- **Why per-text-block chain on Anthropic.** Anthropic native は 1 response に複数 `content_block` (text / tool_use / thinking) を直列で吐く。`<think>` が block 0 の末尾で未完了のまま block 1 (text) が始まる場合、per-stream 1 chain だと block 1 が全部 hidden 扱いになって可視部分が消失する。`dict[int, OutputFilterChain]` で block index ごとに isolated な chain を持つことで、block 境界が state も reset する。block 0 で未完了なら block 0 の text が EOF で drop されるだけ (block 1 は正常に流れる)
-- **Why `_process_stream_event_for_filters` returns a list of events.** synthetic flush event (hold-back された tail の吐き出し) は `content_block_stop` の **直前** に挿入される必要がある。呼び出し側が単純に `yield event` していた元 code を壊さずに "1 入力 event → 0 ~ 2 出力 events" の可能性を表現するため、list 返却 + `for ... yield` の展開に統一。Python の generator delegation (`yield from`) でも書けるが、list の方が test しやすい
-- **Why fast-fail at config load, not at first request.** unknown filter name を request 到達時まで遅延させると、config deploy から symptom 観測までが長くなる。`validate_output_filters` を `ProviderConfig` validator + `OutputFilterChain` constructor の 2 箇所で呼ぶことで、(a) YAML load 時に全 provider 分を一括検証、(b) test 等で chain を直接組む path でも同じエラーが出る、を両立
-- **Why `log_output_filter_applied` fires at most once per stream.** filter 適用は SSE の delta ごとに起きうるが、observability の観点で欲しい粒度は "この request で strip_thinking が発動したか" であって "何回 chunk が scrub されたか" ではない。`output_filter_logged: bool` / `logged_flag: list[bool] = [False]` の mutable flag pattern で 1-stream 1-log を保証。非 streaming も同様 (per-message 1 log)
-- **Why the doctor probe prompt became "Think step by step about...".** 従来の "capital of France?" だと tuned model は thinking block を吐かずに一発で答え、leak の検出機会を逸する。prompt を "step by step" にし max_tokens を 128 に bump することで、thinking を誘発しつつ検出されるべき `<think>` / stop markers が確実に現れる。v0.7-B retrospective の "probe は観測すべき経路を能動的に活性化すべき" の follow-on
-- **Why the probe emits filter patches, not just diagnostics.** v0.7-B の tool_calls probe が `capabilities.tools: false` を copy-paste 形で emit したのと同じ philosophy: 検出した症状に対して **operator が即適用できる remediation** を併走させる。patch の列挙順は検出順 (`strip_thinking` first if `<think>` found / `strip_stop_markers` second if markers found)、chain declaration 順と一致するので YAML に貼り付けるだけで期待通りに動く
+- **Why `output_filters` lives on `ProviderConfig`, not `FallbackChain`.** Whether a filter is needed depends on the model family (Qwen2.5-Coder leaks `<think>`; Claude doesn't), not on the chain. The same philosophy as v0.6-B adding `FallbackChain.timeout_s` / `append_system_prompt` as provider overrides: "the default is a provider declaration," "the chain can partially override if needed (add in v1.0-B if it becomes necessary)"
+- **Why a stateful filter, not regex `re.sub`.** When a chunk gets split mid-tag during streaming (`<thi` / `nk>`), regex won't match (the first chunk, "hello <thi", leaks as-is). Writing a scanner that holds back a partial suffix via `_max_suffix_overlap` is shorter than composing regexes, and shares the same code path across streaming and non-streaming. The `re.sub` route was rejected since it would require a separate non-streaming-only implementation
+- **Why a per-text-block chain on Anthropic.** Anthropic native emits multiple `content_block`s (text / tool_use / thinking) in series within one response. If `<think>` is left unfinished at the end of block 0 while block 1 (text) begins, a single per-stream chain would end up treating all of block 1 as hidden, losing visible content. Keeping an isolated chain per block index via `dict[int, OutputFilterChain]` means state resets at block boundaries too. If block 0 is left unfinished, only block 0's text gets dropped at EOF (block 1 flows through normally)
+- **Why `_process_stream_event_for_filters` returns a list of events.** The synthetic flush event (emitting the held-back tail) needs to be inserted **immediately before** `content_block_stop`. Rather than breaking the original code where the caller simply did `yield event`, the return value is unified as a list plus a `for ... yield` expansion to express the possibility of "1 input event → 0 to 2 output events." This could also be written using Python generator delegation (`yield from`), but a list is easier to test
+- **Why fast-fail at config load, not at first request.** Deferring detection of an unknown filter name until request time lengthens the time from config deploy to symptom observation. Calling `validate_output_filters` from both the `ProviderConfig` validator and the `OutputFilterChain` constructor achieves (a) bulk-validating all providers at YAML load time and (b) the same error surfacing on paths that construct a chain directly (e.g., in tests)
+- **Why `log_output_filter_applied` fires at most once per stream.** Filter application can happen on every SSE delta, but the granularity useful for observability is "did strip_thinking fire for this request," not "how many chunks got scrubbed." The mutable flag pattern (`output_filter_logged: bool` / `logged_flag: list[bool] = [False]`) guarantees one log per stream. Non-streaming is the same (one log per message)
+- **Why the doctor probe prompt became "Think step by step about...".** With the old "capital of France?" prompt, a tuned model would answer in one shot without emitting a thinking block, missing the chance to detect the leak. Changing the prompt to "step by step" and bumping max_tokens to 128 induces thinking while reliably surfacing the `<think>` / stop markers that should be detected. A follow-on from the v0.7-B retrospective's "a probe should actively activate the path it needs to observe"
+- **Why the probe emits filter patches, not just diagnostics.** The same philosophy as v0.7-B's tool_calls probe emitting `capabilities.tools: false` in copy-paste form: pair the detected symptom with **remediation the operator can apply immediately**. The patches are listed in detection order (`strip_thinking` first if `<think>` is found, `strip_stop_markers` second if markers are found), matching chain declaration order, so pasting it into YAML works exactly as expected
 
 ### Follow-ons
 
 - ~~**Real-machine verify for v1.0-A**~~ — **Landed 2026-04-20** via `scripts/verify_v1_0.sh` scenario A (filter chain). Routes a `/v1/chat/completions` request through CodeRouter against `verify-v1-bare` then `verify-v1-tuned`, asserts the tuned response's `message.content` is `<think>`-free AND the server stderr log contains an `output-filter-applied` record for `filters=["strip_thinking"]`. Bare side is advisory (qwen is stochastic; if it doesn't emit `<think>` on the sample the script reports "symptom could not be induced" rather than failing). Evidence inline in [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md). v0.7 retrospective follow-on #5 (real-machine verify for v0.7) remains scheduled for v0.8 scope — that pass will also sanity-check model-capabilities.yaml matcher against live provider metadata
-- **Additional filters** — `strip_tool_call_text_wrapper` (v0.3-A の text→tool_calls lifting と対になる "万一流出した場合の scrubber")、`collapse_whitespace` (model によっては `<think>` strip 後に `"hello  world"` の 2 連 space が残る) を `KNOWN_FILTERS` に追加する候補。現状は YAGNI
-- **Filter performance under chunk storms** — 1 SSE chunk が 1-2 文字しか含まない model (一部 Ollama 設定) で `_max_suffix_overlap` が `len(buffer) * len(markers)` で O(N*M) になる。現状 DEFAULT_STOP_MARKERS 6 本 × 平均 marker len 10 なので worst 60 ops/chunk で無視できるが、将来 marker 数が増えたら trie ベースに置換 (v1.5+ scope)
-- **Chain-level `output_filters` override** — v0.6-B の `FallbackChain.timeout_s` / `append_system_prompt` と同じく chain-level 上書きが欲しいケース (stage-env ではフィルタ無効、prod では有効) が想定される。現状は provider を分割すれば済むが、v1.0-B or v1.1 で `FallbackChain.output_filters: list[str] | None` として追加検討
-- **Doctor probe: streaming path** — 現在の `_probe_reasoning_leak` は non-streaming endpoint を叩く。streaming で `<think>` が chunk 境界に割れた時のみ leak する稀な failure mode は拾えていない。`_probe_reasoning_leak_streaming` を v1.0-C 以降で足す (v0.5.1 A-2 の streaming verify pattern を再利用。v1.0-B は先に num_ctx direct probe を解消した)
+- **Additional filters** — candidates to add to `KNOWN_FILTERS`: `strip_tool_call_text_wrapper` (a scrubber pairing with v0.3-A's text→tool_calls lifting, "in case it leaks anyway"), `collapse_whitespace` (some models leave a double space like `"hello  world"` behind after `<think>` stripping). Currently YAGNI
+- **Filter performance under chunk storms** — for models where 1 SSE chunk contains only 1-2 characters (some Ollama configurations), `_max_suffix_overlap` becomes O(N*M) as `len(buffer) * len(markers)`. Currently negligible at DEFAULT_STOP_MARKERS' 6 markers x an average marker length of 10 (worst case 60 ops/chunk), but if the marker count grows in the future, switch to a trie-based approach (v1.5+ scope)
+- **Chain-level `output_filters` override** — anticipates cases wanting a chain-level override like v0.6-B's `FallbackChain.timeout_s` / `append_system_prompt` (e.g., filters disabled in a staging environment, enabled in prod). Currently addressable by splitting providers, but under consideration as `FallbackChain.output_filters: list[str] | None` for v1.0-B or v1.1
+- **Doctor probe: streaming path** — the current `_probe_reasoning_leak` hits the non-streaming endpoint. It doesn't catch the rare failure mode where `<think>` only leaks when split across a chunk boundary during streaming. Plan to add `_probe_reasoning_leak_streaming` in v1.0-C or later (reusing the streaming verify pattern from v0.5.1 A-2; v1.0-B resolved the direct num_ctx probe first)
 
 ---
 
 ## [v0.7.0] — 2026-04-20 (Umbrella tag — Beginner UX, made legible)
 
-**Theme: v0.7-A / v0.7-B / v0.7-C を束ねる umbrella tag。** 「Ollama 立てたけど動かない」を 1 コマンドで切り分け可能にする minor。plan.md §9.4 の silent-fail 5 症状 (num_ctx truncation / tools incompetence / `<think>` leak / model-tag 404 / missing API key) を contract として、(A) 宣言を Python literal から YAML に外出し、(B) 宣言と実機を突合する live-probe (`coderouter doctor --check-model <provider>`) を実装、(C) 症状 × probe コマンド × YAML patch × fix command の 3–4 点セットを README Troubleshooting に章立て — の 3 段階で beginner UX の観測ループを閉じた。narrative layer は [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md)、per-sub-release の機能詳細は下の `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`。
+**Theme: the umbrella tag bundling v0.7-A / v0.7-B / v0.7-C.** A minor release making "I set up Ollama but it doesn't work" diagnosable in a single command. Taking the 5 silent-fail symptoms from plan.md §9.4 (num_ctx truncation / tools incompetence / `<think>` leak / model-tag 404 / missing API key) as a contract, this closes the beginner-UX observation loop in 3 stages: (A) moving declarations out of Python literals into YAML, (B) implementing a live probe (`coderouter doctor --check-model <provider>`) that cross-checks declarations against real hardware, and (C) chaptering, in the README Troubleshooting section, a 3-4-point set of symptom x probe command x YAML patch x fix command for each. The narrative layer lives at [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md), with per-sub-release feature detail in `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]` below.
 
-- Tests: 306 → **382** (+76, +25%)、v0.7-A +39 / v0.7-B +37 / v0.7-C ±0
-- Runtime deps: 5 → 5 (SDK 依存ゼロ維持、probe は pure httpx + pyyaml + pydantic)
+- Tests: 306 → **382** (+76, +25%): v0.7-A +39 / v0.7-B +37 / v0.7-C ±0
+- Runtime deps: 5 → 5 (zero SDK dependency maintained; the probe is pure httpx + pyyaml + pydantic)
 - Design through-lines:
-  - **Data-as-configuration** (v0.7-A) — bundled + user 2 層の YAML registry が Python 内 regex literal を置換
-  - **Diagnostic surface that bypasses runtime transformations** (v0.7-B) — probe は adapter を介さず直接 httpx、transformation の観測穴を塞ぐ
-  - **Dominant-signal short-circuit with SKIP preserved** (v0.7-B) — auth 失敗で残り probe を SKIP、透明性は維持 / token は消費しない
-  - **Non-code release as a sub-release boundary** (v0.7-C) — docs + examples を独立 sub-release として versioning
+  - **Data-as-configuration** (v0.7-A) — a 2-layer (bundled + user) YAML registry replaces an in-Python regex literal
+  - **A diagnostic surface that bypasses runtime transformations** (v0.7-B) — the probe goes directly through httpx without the adapter, closing the observation gap left by transformations
+  - **Dominant-signal short-circuit with SKIP preserved** (v0.7-B) — remaining probes get SKIPped on auth failure, but transparency is kept / no tokens consumed
+  - **A non-code release as a sub-release boundary** (v0.7-C) — docs + examples versioned as an independent sub-release
 
 ### v0.7 umbrella-level follow-ons
 
-v0.7 各 sub-release の follow-on は該当 section を参照。umbrella level で横串にかかるものは以下:
+See the relevant section for each v0.7 sub-release's follow-ons. What cuts across at the umbrella level:
 
-- **`coderouter doctor` `num_ctx` probe** (symptom #1 direct detection、v0.8 scope)
-- **`coderouter doctor --json` output** (CI auto-PR bot 向け、v0.7-D or v0.8)
-- **CI smoke workflow**: 週次 `doctor --check-model <each-free-provider>`、v0.5-D cron の対称
-- **v1.0 output-cleaning 時の probe 追加** — 「transformation には probe が伴う」原則の適用
-- **Real-machine re-verify for v0.7** (`scripts/verify_v0_7.sh` 相当)
-- **Test-count auto-updater** (3 retro 連続で名指し、未実装)
-- **Doc-edit touchpoint automation** (`scripts/release-close.py` 案、~9 手動編集の自動化)
+- **A `coderouter doctor` `num_ctx` probe** (direct detection of symptom #1, v0.8 scope)
+- **`coderouter doctor --json` output** (for a CI auto-PR bot, v0.7-D or v0.8)
+- **A CI smoke workflow**: weekly `doctor --check-model <each-free-provider>`, symmetric with the v0.5-D cron
+- **Adding a probe alongside v1.0's output-cleaning** — applying the "transformation comes paired with a probe" principle
+- **A real-machine re-verify for v0.7** (something like `scripts/verify_v0_7.sh`)
+- **A test-count auto-updater** (named across 3 consecutive retrospectives, still unimplemented)
+- **Automating doc-edit touchpoints** (the `scripts/release-close.py` idea, automating ~9 manual edits)
 
 ---
 
 ## [v0.7-C] — 2026-04-20 (Ollama beginner Troubleshooting + HF-on-Ollama reference profile)
 
-**Theme: v0.7-A / v0.7-B で構築した宣言レイヤ + probe を「運用者の目線」に落とし込む。** v0.7-A で registry を YAML 化し、v0.7-B で live-probe を導入したが、**どの症状に対してどのコマンド / どの YAML patch を出せばよいか** の導線が README に無ければ beginner は依然として trial-and-error に戻る。v0.7-C は non-code deliverable のみ: plan.md §9.4 の 5 症状を README Troubleshooting に章立てし、各症状に `coderouter doctor --check-model` 実行例 + 具体的な YAML patch + fix の 3 点セットを添付する。併せて `examples/providers.yaml` に HF 蒸留 Ollama provider の reference stanza を追加 (commented-out template、5 knob 全て 1 block で demonstrate)。lunacode [`MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) とのクロスリンクで editor-harness layer との対応も明示。これで v0.7 umbrella は deliverable level 完了、`v0.7.0` tag + retrospective 執筆へ。
+**Theme: bring the declarative layer + probe built in v0.7-A / v0.7-B down to "the operator's point of view."** v0.7-A moved the registry to YAML, and v0.7-B introduced the live probe, but without a path in the README for **which command / which YAML patch to reach for, for a given symptom**, a beginner still falls back into trial-and-error. v0.7-C is a non-code deliverable only: it chapters the 5 symptoms from plan.md §9.4 in the README Troubleshooting section, attaching a 3-point set to each — an example `coderouter doctor --check-model` run, a concrete YAML patch, and the fix. It also adds a reference stanza for an HF-distilled Ollama provider to `examples/providers.yaml` (a commented-out template demonstrating all 5 knobs in a single block). Cross-links to lunacode's [`MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) make the correspondence with the editor-harness layer explicit. This completes the v0.7 umbrella at the deliverable level, moving on to the `v0.7.0` tag + writing the retrospective.
 
-- Tests: 382 → **382** (コード変更ゼロ、docs + example config のみ)
-- plan.md §9.4 DoD: 残り 2 項目中「README Troubleshooting に 5 症状全て記述」を消化。`v0.7.0` umbrella tag + retrospective 執筆の 1 項目が最後
+- Tests: 382 → **382** (zero code changes, docs + example config only)
+- plan.md §9.4 DoD: of the remaining 2 items, "document all 5 symptoms in README Troubleshooting" is now done. The last item is the `v0.7.0` umbrella tag + writing the retrospective
 
 ### Added
 
-- **README — `### Ollama beginner — 5 silent-fail symptoms (v0.7-C)`** (Troubleshooting セクション末尾に新規 subsection)
-  - 症状 1: num_ctx truncation (`extra_body.options.num_ctx: 32768`) — doctor で **indirect** 検出 (tool_calls probe が "no tool_call emitted" を返す症状として観測)。num_ctx probe 自体は follow-on で v0.7-B の CHANGELOG に明記済み
-  - 症状 2: tools=false 未宣言 (`capabilities.tools: false`) — doctor `tool_calls: NEEDS_TUNING` で検出、patch は doctor output 末尾の copy-paste YAML そのまま
-  - 症状 3: `<think>` tag leak (`append_system_prompt: "/no_think"` + 将来的に v1.0 output-cleaning) — doctor `reasoning-leak: informational` で検出
-  - 症状 4: model tag typo / `ollama pull` 忘れ (404) — doctor `auth+basic-chat: UNSUPPORTED` で検出、`ollama pull <tag>` hint 付き。HF-on-Ollama の `:Q4_K_M` suffix 忘れも同じ分類
-  - 症状 5: API key 未設定 (401) — doctor `auth+basic-chat: AUTH_FAIL` で検出、env var 名付きで diagnose。残り 3 probe を SKIP にする auth short-circuit の UX 上の価値をここで回収
-  - 末尾に `for p in <providers>; do coderouter doctor --check-model "$p"; done` の loop 例と、exit code 表 (Doctor subsection) への anchor link
-  - lunacode [`MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) への cross-link — CodeRouter provider-granularity vs lunacode per-model-granularity の棲み分けを一言で説明
-- **README — `#### HF-on-Ollama reference profile`** (subsection、上の 5 症状 section 直下)
-  - `examples/providers.yaml` の `ollama-hf-example` stanza への導線
-  - HF GGUF が 5 症状全てを増幅する理由 (chat template 欠落 / distillation 由来の `<think>` 漏れ / quant suffix 必須) を 1 段落で説明
-- **`examples/providers.yaml` — `ollama-hf-example` stanza** (commented-out reference、Ollama Tier 1 の直後に配置)
-  - `base_url: http://localhost:11434/v1` + `model: hf.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M` を default example に
-  - コメントで候補 3 種類 (Qwen2.5-Coder / Qwen3-8B / DeepSeek-R1-Distill-Qwen) を列挙
-  - `extra_body.options.num_ctx: 32768` — 症状 1 対応、コメントで Claude Code system prompt の token 規模を明記
-  - `append_system_prompt: "/no_think"` (commented sub-line) — 症状 3 対応、Qwen3 / R1-distill だけ有効と明記
-  - `capabilities.tools: false` default — 症状 2 対応、`coderouter doctor` で OK が出たら flip する運用を記述
-  - `reasoning_passthrough: false` (commented) — 症状 3 の流出対応、v1.0 output-cleaning との関係を明記
-  - `:<quant>` suffix 必須の warning (症状 4 の HF 特化版) を stanza header comment に
-- **README — `#### Doctor` subsection の Troubleshooting からの anchor**
-  - 5 症状 section 末尾から Doctor subsection の exit code 表に戻る cross-link
+- **README — `### Ollama beginner — 5 silent-fail symptoms (v0.7-C)`** (a new subsection at the end of the Troubleshooting section)
+  - Symptom 1: num_ctx truncation (`extra_body.options.num_ctx: 32768`) — detected **indirectly** by doctor (observed as the tool_calls probe reporting "no tool_call emitted"). The num_ctx probe itself is already noted as a follow-on in v0.7-B's CHANGELOG entry
+  - Symptom 2: `tools=false` left undeclared (`capabilities.tools: false`) — detected via doctor's `tool_calls: NEEDS_TUNING`, with the patch being the exact copy-paste YAML at the end of the doctor output
+  - Symptom 3: `<think>` tag leak (`append_system_prompt: "/no_think"` + future v1.0 output-cleaning) — detected via doctor's `reasoning-leak: informational`
+  - Symptom 4: model tag typo / forgetting `ollama pull` (404) — detected via doctor's `auth+basic-chat: UNSUPPORTED`, with an `ollama pull <tag>` hint. Forgetting the `:Q4_K_M` suffix on HF-on-Ollama falls into the same category
+  - Symptom 5: API key not set (401) — detected via doctor's `auth+basic-chat: AUTH_FAIL`, diagnosed with the env var name. This recovers the UX value of the auth short-circuit that SKIPs the remaining 3 probes
+  - Ends with a loop example, `for p in <providers>; do coderouter doctor --check-model "$p"; done`, plus an anchor link back to the exit code table (the Doctor subsection)
+  - A cross-link to lunacode's [`MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) — a one-line explanation of how CodeRouter's provider-granularity and lunacode's per-model-granularity divide responsibilities
+- **README — `#### HF-on-Ollama reference profile`** (a subsection right below the 5-symptoms section above)
+  - A pointer to the `ollama-hf-example` stanza in `examples/providers.yaml`
+  - A one-paragraph explanation of why HF GGUF amplifies all 5 symptoms (missing chat template / `<think>` leakage from distillation / a mandatory quant suffix)
+- **`examples/providers.yaml` — the `ollama-hf-example` stanza** (a commented-out reference, placed right after Ollama Tier 1)
+  - Uses `base_url: http://localhost:11434/v1` + `model: hf.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M` as the default example
+  - Lists 3 candidate models in a comment (Qwen2.5-Coder / Qwen3-8B / DeepSeek-R1-Distill-Qwen)
+  - `extra_body.options.num_ctx: 32768` — addressing symptom 1, with a comment noting the token scale of Claude Code's system prompt
+  - `append_system_prompt: "/no_think"` (a commented sub-line) — addressing symptom 3, noting it's only effective for Qwen3 / R1-distill
+  - `capabilities.tools: false` by default — addressing symptom 2, documenting the practice of flipping it once `coderouter doctor` reports OK
+  - `reasoning_passthrough: false` (commented) — addressing symptom 3's leakage, noting the relationship with v1.0's output-cleaning
+  - A warning about the required `:<quant>` suffix (the HF-specific version of symptom 4) in the stanza's header comment
+- **README — a cross-link from the Troubleshooting section's `#### Doctor` subsection**
+  - A cross-link from the end of the 5-symptoms section back to the Doctor subsection's exit code table
 
 ### Changed
 
-- **README の "Coming next" リスト** — v0.7-C 項目を削除、v1.0 を先頭に (次のマイルストーンは 14-case regression suite + Code Mode)
-- **README の Troubleshooting 導入行** — 既存「まず `coderouter doctor --check-model <provider>` を走らせろ」の案内はそのまま、5 症状 subsection が新設されたことで「先に読むべき項目」が整理された
+- **README's "Coming next" list** — removed the v0.7-C item, moving v1.0 to the front (the next milestone is the 14-case regression suite + Code Mode)
+- **README's Troubleshooting intro line** — kept the existing guidance to "first run `coderouter doctor --check-model <provider>`" as-is; the new 5-symptoms subsection organizes "what to read first"
 
 ### Design notes
 
-- **non-code-only release としての v0.7-C.** v0.7-A が YAML 外出し、v0.7-B が probe という「実装寄り 2 release」に対して v0.7-C は意図的に docs + example config のみ。probe が存在しても operator がそれを「症状 → コマンド → patch」の 3 点セットとして認識できなければ価値が出ないため、non-code だが独立 release として切り出した。plan.md §9.4 の scope 表で最初からこの切り方を宣言していた意図の回収
-- **5 症状の配列順は「検出しやすさ」ではなく「初心者が踏みやすい順」に.** 症状 1 (num_ctx) は CodeRouter の doctor では **indirect** にしか検出できないが、Ollama を初めて Claude Code と繋げた時に最初に踏む地雷なので筆頭に配置。症状 5 (API key 未設定) は最も確定的に検出できるが、ある程度セットアップが進んだ段階で踏む症状なので末尾
-- **各症状に「検出コマンド出力」の 1 行モック例を添える.** 実際の `coderouter doctor` 出力を 1 行だけ貼る (`# → tool_calls: NEEDS_TUNING — ...` 形式) ことで、operator が実行前に何が見えるかを想像できるようにした。full 出力は Doctor subsection に既に載せてあるため、ここでは該当 probe の verdict line だけ
-- **HF-on-Ollama stanza を commented-out で置く理由.** uncomment して初めて active になる設計は、(a) fresh install の default chain を HF provider に汚染させない、(b) operator に「自分で pull して uncomment」の 2 step を踏ませることで `:<quant>` suffix の記入ミスを事前に意識させる、という 2 つの効果を持つ。active な HF provider を example に含めると `coderouter serve` が fresh install 時点で `ollama pull` されていない model 名に対して 404 を吐き続ける failure-by-example になる
-- **lunacode MODEL_SETTINGS.md との関係の明示.** 同一作者の兄弟プロジェクトという関係性から、両プロジェクトの知見が重複する部分は多い。ただし CodeRouter は **provider-granularity** (「このプロバイダ経由で使う model の capability」) で宣言し、lunacode は **per-model-granularity** (「この model そのものの設定」) で宣言するため、同じ症状でも declaration の位置が違う。README cross-link は 2 つのプロジェクトを並行運用する場合の "どっちの設定ファイルを触るか" の判断材料として機能する
+- **v0.7-C as a non-code-only release.** Against v0.7-A (moving to YAML) and v0.7-B (the probe), which were "2 implementation-leaning releases," v0.7-C is deliberately docs + example config only. Since a probe has no value unless the operator can recognize it as a 3-point set of "symptom → command → patch," it's split out as an independent release despite being non-code. This recovers the intent already declared in plan.md §9.4's scope table for this split
+- **The 5 symptoms are ordered not by "ease of detection" but by "how easily a beginner hits them."** Symptom 1 (num_ctx) can only be detected **indirectly** by CodeRouter's doctor, but it's placed first since it's the first landmine hit when connecting Ollama with Claude Code for the first time. Symptom 5 (API key not set) is the most deterministically detectable, but it's placed last since it's a symptom hit once setup has progressed somewhat
+- **Each symptom is paired with a 1-line mock example of "detection command output."** Pasting just 1 line of an actual `coderouter doctor` output (in the form `# → tool_calls: NEEDS_TUNING — ...`) lets the operator picture what they'll see before running it. Since the full output is already shown in the Doctor subsection, only the relevant probe's verdict line is shown here
+- **Why the HF-on-Ollama stanza is placed commented-out.** A design where it only becomes active once uncommented has 2 effects: (a) it doesn't contaminate a fresh install's default chain with the HF provider, and (b) making the operator take the 2 steps of "pull it yourself and uncomment" makes them consciously aware of the `:<quant>` suffix ahead of time, guarding against a typo. Including an active HF provider in the example would make `coderouter serve` keep returning 404s against a model name that hasn't been `ollama pull`ed yet at fresh-install time — a failure-by-example
+- **Making the relationship with lunacode's MODEL_SETTINGS.md explicit.** As sibling projects from the same author, there's substantial overlap in the knowledge behind both projects. However, CodeRouter declares at **provider-granularity** ("the capability of the model used via this provider"), while lunacode declares at **per-model-granularity** ("the settings of this model itself"), so the same symptom lands in a different declaration location. The README cross-link serves as a decision aid for "which config file to touch" when running both projects side by side
 
 ### Follow-ons
 
-- **`coderouter doctor` num_ctx probe の追加** — 症状 1 を direct 検出するために 5th probe を導入。8K / 16K / 32K の境界で silent truncation するかを確率的にサンプリング (長 prompt + 末尾に marker phrase → response に marker が含まれるか)。v0.8 scope
-- **`coderouter doctor --json` output** — CI 向け machine-readable 出力。exit code + 症状の JSON array で auto-patch bot が parse できる shape。v0.7-B CHANGELOG でも言及済み、v0.8 で回収
-- **v0.7.0 umbrella tag + `docs/retrospectives/v0.7.md`** — 本 release の直後に commit で消化。plan.md §9.4 DoD 残り 1 項目
-- **HF-on-Ollama reference stanza の bundled `model-capabilities.yaml` 対応物** — 現状は per-provider `capabilities.tools: false` で opt-out する設計だが、HF GGUF 特有の glob (`hf.co/unsloth/*` 等) を bundled YAML に足すかは要判断。provider-granularity 原則と矛盾するため v0.7 では見送り
+- **Adding a `coderouter doctor` num_ctx probe** — introducing a 5th probe to directly detect symptom 1. Probabilistically sampling whether silent truncation occurs at the 8K / 16K / 32K boundary (a long prompt with a marker phrase at the tail → checking whether the marker appears in the response). v0.8 scope
+- **`coderouter doctor --json` output** — machine-readable output for CI. A shape parseable by an auto-patch bot as exit code + a JSON array of symptoms. Already mentioned in the v0.7-B CHANGELOG entry, to be picked up in v0.8
+- **The `v0.7.0` umbrella tag + `docs/retrospectives/v0.7.md`** — to be handled in a commit right after this release. The last remaining item in plan.md §9.4's DoD
+- **A bundled `model-capabilities.yaml` counterpart for the HF-on-Ollama reference stanza** — currently designed as a per-provider `capabilities.tools: false` opt-out, but whether to add an HF-GGUF-specific glob (e.g., `hf.co/unsloth/*`) to the bundled YAML needs deciding. Since it would conflict with the provider-granularity principle, deferred past v0.7
 
 ---
 
 ## [v0.7-B] — 2026-04-20 (`coderouter doctor --check-model` — per-provider live probe)
 
-**Theme: 「Ollama 立てたけど動かない」を 1 コマンドで切り分け可能にする。** v0.7-A で宣言を YAML に外出しした registry と、providers.yaml の `capabilities.*` explicit opt-in が揃った今、次に足りないのは「宣言と実機挙動の差分を **事前に** 検出する仕組み」だった。v0.7-B では `coderouter doctor --check-model <provider>` を実装し、1 provider に対して 4 probe (auth / tool_calls / thinking / reasoning-leak) を順に走らせ、registry + providers.yaml の宣言と実測を照合して、乖離時には copy-paste 可能な YAML patch を emit する。plan.md §9.4 の 5 症状 (特に #2 tools / #3 thinking / #4 auth / #5 model-not-found) に対する**事前診断**の第一歩。
+**Theme: make "I set up Ollama but it doesn't work" diagnosable in a single command.** Now that v0.7-A has moved the registry's declarations out to YAML, and providers.yaml's `capabilities.*` explicit opt-in is in place, what's still missing is **a mechanism to detect, ahead of time, the gap between declaration and real-hardware behavior.** v0.7-B implements `coderouter doctor --check-model <provider>`, running 4 probes in sequence against a single provider (auth / tool_calls / thinking / reasoning-leak), cross-checking the registry + providers.yaml declarations against measured reality, and emitting a copy-paste-ready YAML patch whenever there's a mismatch. This is the first step of **pre-emptive diagnosis** for the 5 symptoms in plan.md §9.4 (especially #2 tools / #3 thinking / #4 auth / #5 model-not-found).
 
-- Tests: 345 → **382** (+37、`tests/test_doctor.py` +31、`tests/test_cli.py` +6)
-- Exit-code contract: `0` = match / `2` = needs_tuning / `1` = auth_fail | model-not-found | transport-error (CI smoke で grep 可能な "Exit: N" 終端行付き)
-- 非破壊: probe は read-only、tool-spec は fake `echo` で side-effect なし、auth 失敗時は remaining probe を SKIP にして token 消費を止める
+- Tests: 345 → **382** (+37: `tests/test_doctor.py` +31, `tests/test_cli.py` +6)
+- Exit-code contract: `0` = match / `2` = needs_tuning / `1` = auth_fail | model-not-found | transport-error (with a grep-friendly "Exit: N" terminal line for CI smoke)
+- Non-destructive: the probe is read-only, the tool-spec uses a fake `echo` with no side effect, and on auth failure the remaining probes are SKIPped to stop consuming tokens
 
 ### Added
 
-- **`coderouter/doctor.py`** (新モジュール、~600 行、probe 本体 + reporting)
-  - `ProbeVerdict` enum: `OK / SKIP / NEEDS_TUNING / UNSUPPORTED / AUTH_FAIL / TRANSPORT_ERROR`
-  - `ProbeResult` / `DoctorReport` dataclass — per-probe verdict + `suggested_patch` + `target_file` (`providers.yaml` / `model-capabilities.yaml`)
-  - `exit_code_for(report)` — blocker (auth/unsupported/transport) > needs_tuning > ok の precedence で 0/1/2 を返す
-  - **Probe 1 `auth+basic-chat`** — `POST /chat/completions` (openai_compat) or `POST /v1/messages` (anthropic) で minimal prompt を送る。401/403 → AUTH_FAIL、404 → UNSUPPORTED (Ollama `ollama pull` hint 含む)、timeout/5xx → TRANSPORT_ERROR、2xx + parseable → OK。**auth 失敗時は残り 3 probe を SKIP**
-  - **Probe 2 `tool_calls`** — fake `echo` tool spec を添えて "Call echo with message=probe" を送る。native `tool_calls` / text-JSON (v0.3-A repair で拾える) / 何も無し の 3 分岐 × 宣言 (providers explicit / registry tools / 両方なし) の組み合わせで OK / NEEDS_TUNING を判定。patch は `providers.yaml capabilities.tools` を `true` / `false` どちらにも flip 可能
-  - **Probe 3 `thinking`** — `kind: anthropic` のみ。`thinking: {type: enabled, budget_tokens: 1024}` を送り、response content に `{type: thinking}` block があるかを観測。400 rejection (upstream が field を知らない) も成功シグナルとして検出。openai_compat は SKIP (openai-shape translation で block が失われるため)、ただし `capabilities.thinking=True` の誤設定には SKIP + 警告文で note
-  - **Probe 4 `reasoning-leak`** — `kind: openai_compat` のみ。response の `message.reasoning` 非標準 field の有無を観測。存在 + `reasoning_passthrough=false` (default) → 情報提供 OK (v0.5-C strip が働く前提で `capability-degraded` log が出る理由を operator に伝える)。anthropic は SKIP
-  - `check_model(config, provider_name, *, registry=None)` async entry / `run_check_model_sync` sync wrapper (CLI から呼ぶ)
-  - `format_report(report)` — `[OK]` / `[NEEDS TUNING]` バッジ付き line-oriented 出力、末尾に `Exit: N` 行 (CI grep 用)
-  - `_patch_providers_yaml_capability()` / `_patch_model_capabilities_yaml()` — copy-paste YAML 生成ヘルパ。header comment で貼り先ファイル名を明示
-- **`coderouter/cli.py`** — `doctor` subcommand 追加 (argparse)
-  - `--check-model <provider>` (required) / `--config <path>` (共通)
-  - `_run_doctor(args)` — config load + probe 実行 + exit code return。FileNotFoundError / YAML parse error / 不明 provider 名は exit 1 + stderr
-- **`tests/test_doctor.py`** (新規 +31)
-  - Patch emitters: 3 test (providers.yaml / model-capabilities.yaml それぞれ格納、emitted YAML が valid-yaml で parse 可能)
-  - Auth probe: 5 test (401 → AUTH_FAIL + 残り SKIP / 403 同様 / 404 → UNSUPPORTED + model 名 hint / 実 transport error / 2xx+garbage body)
-  - Tool-calls probe: 7 test (native + declared / native + silent → patch true / text-JSON + declared false → OK / text-JSON + declared true → NEEDS_TUNING / 何もなし + declared → NEEDS_TUNING false / 何もなし + undeclared / providers.yaml explicit opt-in 優先)
-  - Thinking probe: 5 test (openai_compat skip / openai_compat opt-in misconfig warn / anthropic match / anthropic no block but declared / anthropic 400 rejection + declared)
-  - Reasoning-leak probe: 3 test (detected → informational OK / absent → OK / anthropic skip)
-  - Exit-code: 3 test (all OK = 0 / NEEDS_TUNING alone = 2 / AUTH_FAIL dominates NEEDS_TUNING = 1)
-  - Orchestration: 5 test (unknown provider → KeyError with known names / registry kwarg default 経由 / openai Bearer auth / anthropic x-api-key auth / format_report 末尾 "Exit: N")
+- **`coderouter/doctor.py`** (a new module, ~600 lines: the probe body + reporting)
+  - The `ProbeVerdict` enum: `OK / SKIP / NEEDS_TUNING / UNSUPPORTED / AUTH_FAIL / TRANSPORT_ERROR`
+  - The `ProbeResult` / `DoctorReport` dataclasses — per-probe verdict + `suggested_patch` + `target_file` (`providers.yaml` / `model-capabilities.yaml`)
+  - `exit_code_for(report)` — returns 0/1/2 by the precedence blocker (auth/unsupported/transport) > needs_tuning > ok
+  - **Probe 1 `auth+basic-chat`** — sends a minimal prompt via `POST /chat/completions` (openai_compat) or `POST /v1/messages` (anthropic). 401/403 → AUTH_FAIL, 404 → UNSUPPORTED (including an `ollama pull` hint), timeout/5xx → TRANSPORT_ERROR, 2xx + parseable → OK. **Remaining 3 probes SKIP on auth failure**
+  - **Probe 2 `tool_calls`** — sends "Call echo with message=probe" along with a fake `echo` tool spec. Determines OK / NEEDS_TUNING from the combination of 3 branches (native `tool_calls` / text-JSON that v0.3-A repair can rescue / nothing at all) crossed with the declaration state (providers explicit / registry tools / neither declared). The patch can flip `providers.yaml capabilities.tools` to either `true` or `false`
+  - **Probe 3 `thinking`** — `kind: anthropic` only. Sends `thinking: {type: enabled, budget_tokens: 1024}`, observing whether a `{type: thinking}` block appears in the response content. Also treats a 400 rejection (upstream doesn't know the field) as a success signal. SKIPs for openai_compat (since block information is lost in the openai-shape translation), though a misconfigured `capabilities.thinking=True` gets a SKIP plus a warning note
+  - **Probe 4 `reasoning-leak`** — `kind: openai_compat` only. Observes whether the response's non-standard `message.reasoning` field is present. If present with `reasoning_passthrough=false` (default) → an informational OK (communicating to the operator why a `capability-degraded` log appears, on the assumption v0.5-C's strip is doing its job). SKIPs for anthropic
+  - `check_model(config, provider_name, *, registry=None)` async entry / `run_check_model_sync` sync wrapper (called from the CLI)
+  - `format_report(report)` — line-oriented output with `[OK]` / `[NEEDS TUNING]` badges, ending with an `Exit: N` line (for CI grep)
+  - `_patch_providers_yaml_capability()` / `_patch_model_capabilities_yaml()` — copy-paste YAML generation helpers, with a header comment specifying which file to paste into
+- **`coderouter/cli.py`** — added the `doctor` subcommand (argparse)
+  - `--check-model <provider>` (required) / `--config <path>` (shared)
+  - `_run_doctor(args)` — loads config, runs the probe, returns the exit code. FileNotFoundError / YAML parse error / an unknown provider name all exit 1 with stderr
+- **`tests/test_doctor.py`** (new, +31)
+  - Patch emitters: 3 tests (providers.yaml / model-capabilities.yaml each stored, the emitted YAML parses as valid YAML)
+  - Auth probe: 5 tests (401 → AUTH_FAIL + remainder SKIPped / 403 likewise / 404 → UNSUPPORTED + a model-name hint / an actual transport error / 2xx + garbage body)
+  - Tool-calls probe: 7 tests (native + declared / native + silent → patch true / text-JSON + declared false → OK / text-JSON + declared true → NEEDS_TUNING / nothing + declared → NEEDS_TUNING false / nothing + undeclared / providers.yaml explicit opt-in takes priority)
+  - Thinking probe: 5 tests (openai_compat skip / openai_compat opt-in misconfig warn / anthropic match / anthropic no block but declared / anthropic 400 rejection + declared)
+  - Reasoning-leak probe: 3 tests (detected → informational OK / absent → OK / anthropic skip)
+  - Exit-code: 3 tests (all OK = 0 / NEEDS_TUNING alone = 2 / AUTH_FAIL dominates NEEDS_TUNING = 1)
+  - Orchestration: 5 tests (unknown provider → KeyError listing known names / via the registry kwarg default / OpenAI Bearer auth / Anthropic x-api-key auth / format_report ends with "Exit: N")
 - **`tests/test_cli.py`** (+6)
-  - `doctor` required-arg / load_config への `--check-model` 伝播 / NEEDS_TUNING が exit 2 に伝播 / 不明 provider → exit 1 + stderr に known names / FileNotFoundError → exit 1 / `--config` が load_config に届く
+  - `doctor` required-arg / `--check-model` propagates to load_config / NEEDS_TUNING propagates to exit 2 / unknown provider → exit 1 + known names in stderr / FileNotFoundError → exit 1 / `--config` reaches load_config
 
 ### Design notes
 
-- **なぜ adapter 層を bypass する直接 httpx か.** Reasoning-leak probe は v0.5-C の passive strip が走る前の raw body を見たいし、thinking probe は `kind: anthropic` に Anthropic wire shape を直接送りたい。tool_calls probe も repair pass の前に raw `tool_calls` vs raw text を区別したい。adapter を経由すると観測点が adapter 内部に移動し、test mock が adapter 依存 = brittleになる。probe は「raw POST + raw body 解釈」に閉じた
-- **auth short-circuit の理由.** auth 失敗時に残り 3 probe を走らせると、token は消費されないものの操作者にノイズが増える。401 を見た瞬間に「まず env 変数を直せ」と断言でき、tool_calls / thinking の判定は無意味 (そもそも request が通らない)。SKIP 行は残して「何がチェックされてないか」の透明性は保つ
-- **exit code の precedence.** blocker (1) > tuning (2) > ok (0)。これは CI 文脈で「1 は人間介入 blocker、2 は自動 PR 可能な mechanical fix、0 は green」という分け。2 を 1 より大きい番号にしたのは従来 Unix 慣例 (lint tools で `--fix` 可能なものが 2、unrecoverable が 1) に合わせたもの
-- **probe の読みやすさ vs mock の複雑度.** 各 probe が独立した `POST` を 1 回ずつするシンプル構造にしたため、`httpx_mock.add_response` を probe 順に並べるだけでテストが書ける。alternative としては 1 call で多 probe (batch endpoint) を検討したが、openai_compat と anthropic で endpoint 形状が違う以上 batch 化のメリットが薄く、今の構造が最も直感的
-- **patch の target_file 選択.** 単一 provider の問題なら `providers.yaml` を変えるのが最小変更 (glob rule を動かすと同 family の他の provider に波及する)。逆に「model 全 family が registry と異なる」ケースは operator 判断で `model-capabilities.yaml` に patch を書く。doctor は 1 provider しか見ない原則から、suggested_patch は常に `providers.yaml` target にフォールバック。thinking probe の「block emitted but declaration silent」のみ例外 (registry declare が自然な表現なので `model-capabilities.yaml` を suggest)
-- **fake `echo` tool の safety.** 名前が `echo` で description に "diagnostic-only" と明記、parameters は `message: string` のみ、副作用性の言及ゼロ。万が一 repair 経由で caller 側に tool_call が届いても、`echo` はホワイトリストされた実ツールには普通マッチしないので silent drop される。probe の非破壊性担保
-- **`--network` flag の保留.** plan.md §9.4 でメンション された `--network` flag は static lint mode との分離を想定したものだったが、v0.7-B は `--check-model` 専用で live-probe 前提、`--network` は意味的に自明 (probe = network call)。v0.7-C or v0.8 で static-only lint mode を導入する際に再検討
+- **Why bypass the adapter layer with direct httpx.** The reasoning-leak probe wants to see the raw body before v0.5-C's passive strip runs, and the thinking probe wants to send the Anthropic wire shape directly for `kind: anthropic`. The tool_calls probe also wants to distinguish raw `tool_calls` from raw text before the repair pass. Going through the adapter would move the observation point inside the adapter, making test mocks adapter-dependent (= brittle). The probe stays confined to "raw POST + raw body interpretation"
+- **The rationale for the auth short-circuit.** Running the remaining 3 probes on auth failure doesn't consume tokens, but it adds noise for the operator. The moment a 401 is seen, "fix the env var first" can be stated definitively — the tool_calls / thinking verdicts would be meaningless anyway (the request never gets through in the first place). SKIP lines are kept to preserve transparency about "what wasn't checked"
+- **Exit code precedence.** blocker (1) > tuning (2) > ok (0). In a CI context, this splits into "1 needs human intervention (a blocker), 2 is a mechanical fix an automated PR could apply, 0 is green." 2 being a larger number than 1 follows the conventional Unix idiom (in lint tools, `--fix`-able issues get 2, unrecoverable ones get 1)
+- **Probe readability vs. mock complexity.** Structuring each probe as a simple single `POST` call means tests can be written by lining up `httpx_mock.add_response` calls in probe order. A batch-endpoint alternative (1 call covering many probes) was considered, but since openai_compat and anthropic have different endpoint shapes, batching offers little benefit — the current structure is the most intuitive
+- **Choosing the patch's target_file.** For a single-provider issue, changing `providers.yaml` is the minimal change (touching a glob rule would ripple to other providers in the same family). Conversely, for the case where "an entire model family diverges from the registry," it's up to the operator to write the patch into `model-capabilities.yaml`. Since doctor only looks at 1 provider as a principle, `suggested_patch` always falls back to a `providers.yaml` target. The one exception is the thinking probe's "block emitted but declaration silent" case (since declaring in the registry is the natural expression, it suggests `model-capabilities.yaml`)
+- **The safety of the fake `echo` tool.** Named `echo`, with its description explicitly stating "diagnostic-only," parameters limited to `message: string` only, with zero mention of any side effect. Even if a tool_call somehow reaches the caller via repair, `echo` normally won't match any real whitelisted tool, so it gets silently dropped. This secures the probe's non-destructiveness
+- **Deferring the `--network` flag.** The `--network` flag mentioned in plan.md §9.4 assumed separation from a static lint mode, but v0.7-B is dedicated to `--check-model`, premised on a live probe; `--network` is semantically self-evident (probe = network call). To be reconsidered when a static-only lint mode is introduced in v0.7-C or v0.8
 
 ### Follow-ons
 
-- **v0.7-C で 5 症状を README Troubleshooting に整理** — 各症状に `coderouter doctor --check-model <provider>` 導線を貼る。HF-on-Ollama reference profile の `providers.yaml` stanza + bundled `model-capabilities.yaml` entry も追加
-- **num_ctx 境界 probe**: 大 system prompt で silent truncation するかを検出する 5th probe として検討。現状 `max_context_tokens` は registry に declare できるが probe 側では未活用
-- **CI smoke script**: GitHub Actions に週次で `coderouter doctor --check-model <each-free-provider>` を回す workflow。exit 2 → auto-PR で providers.yaml patch 適用、exit 1 → issue。v0.5-D OpenRouter roster cron と対称
-- **`reasoning` field strip の細粒度化**: 現在 v0.5-C strip は all-or-nothing (`capabilities.reasoning_passthrough` flag)。model ごとに "reasoning tag だけ strip、他の field はそのまま" のような細粒度設計は v1.0+ の reasoning_control 抽象と合流して再検討
-- **doctor --json 出力モード**: CI / script 向けに machine-readable 出力。現状は人間向け text のみ。v0.7-C or v0.8 で追加検討
+- **Organizing the 5 symptoms into README Troubleshooting in v0.7-C** — attaching a `coderouter doctor --check-model <provider>` pointer to each symptom. Also adding a `providers.yaml` stanza + a bundled `model-capabilities.yaml` entry for the HF-on-Ollama reference profile
+- **A num_ctx boundary probe**: under consideration as a 5th probe detecting whether silent truncation occurs with a large system prompt. Currently `max_context_tokens` can be declared in the registry but isn't yet leveraged by a probe
+- **A CI smoke script**: a GitHub Actions workflow running `coderouter doctor --check-model <each-free-provider>` weekly. Exit 2 → auto-apply the providers.yaml patch via an auto-PR, exit 1 → an issue. Symmetric with the v0.5-D OpenRouter roster cron
+- **Finer-grained `reasoning` field strip**: currently v0.5-C's strip is all-or-nothing (the `capabilities.reasoning_passthrough` flag). A finer-grained design per model — like "strip only the reasoning tag, leave other fields as-is" — to be reconsidered once it converges with the v1.0+ `reasoning_control` abstraction
+- **A doctor --json output mode**: machine-readable output for CI / scripts. Currently human-facing text only. To be considered for addition in v0.7-C or v0.8
 
 ---
 
-## [v0.7-A] — 2026-04-20 (宣言的 `model-capabilities.yaml` registry)
+## [v0.7-A] — 2026-04-20 (Declarative `model-capabilities.yaml` registry)
 
-**Theme: 「どの family が thinking を受けるか」を YAML に外出し。** v0.5-A で導入した capability gate の heuristic は Python literal regex (`^claude-sonnet-4-6` など) が `coderouter/routing/capability.py` に焼き込まれていた。Anthropic が新 family を shipping するたびに code change + release cycle が必要で、初心者・中級者にはそもそも存在が見えない隠しレイヤだった。v0.7-A で `model-capabilities.yaml` (bundled default + user override) に宣言を外出しし、新 family 追加 = 1 行 YAML edit にしつつ、将来の `tools` / `reasoning_passthrough` / `max_context_tokens` 宣言のハブに設計。plan.md §9.4 v0.7 scope に対する最初のサブリリース。
+**Theme: move "which family accepts thinking" out to YAML.** The capability-gate heuristic introduced in v0.5-A had a Python literal regex (`^claude-sonnet-4-6` etc.) baked into `coderouter/routing/capability.py`. Every time Anthropic shipped a new family, this required a code change plus a release cycle, and it was a hidden layer invisible to beginners and intermediate users alike. v0.7-A moves the declaration out to `model-capabilities.yaml` (a bundled default plus a user override), so adding a new family becomes a 1-line YAML edit, while also designing it as a hub for future declarations of `tools` / `reasoning_passthrough` / `max_context_tokens`. This is the first sub-release toward the v0.7 scope in plan.md §9.4.
 
-- Tests: 306 → **345** (+39、`tests/test_capability_registry.py` 新規、schema validation / glob matching / first-match-per-flag / user override layering / bundled YAML 整合性 / gate function integration)
-- 振る舞い変更ゼロ: `provider_supports_thinking` の公開 API・判定結果は v0.5-A と同一 (bundled YAML が旧 regex を 1:1 で encode)
-- providers.yaml `capabilities.*` explicit opt-in は最優先のまま (`provider.capabilities.thinking=True` は registry lookup をスキップ)
+- Tests: 306 → **345** (+39, a new `tests/test_capability_registry.py`: schema validation / glob matching / first-match-per-flag / user override layering / bundled YAML consistency / gate function integration)
+- Zero behavior change: `provider_supports_thinking`'s public API and decision results are identical to v0.5-A (the bundled YAML encodes the old regex 1:1)
+- The `providers.yaml` `capabilities.*` explicit opt-in remains top priority (`provider.capabilities.thinking=True` skips the registry lookup)
 
 ### Added
 
-- **`coderouter/data/model-capabilities.yaml`** (bundled default、パッケージ同梱)
+- **`coderouter/data/model-capabilities.yaml`** (the bundled default, shipped with the package)
   - Schema v1: `rules: [{match: glob, kind: "anthropic"|"openai_compat"|"any", capabilities: {thinking, reasoning_passthrough, tools, max_context_tokens}}]`
-  - 現行エントリ: `claude-opus-4-*` / `claude-sonnet-4-6*` / `claude-sonnet-4-7*` (forward-compat) / `claude-haiku-4-*` の 4 glob、全て `kind: anthropic` + `thinking: true`
-  - comment で「新 family 追加はこの 1 ファイル編集のみ」「user override は `~/.coderouter/model-capabilities.yaml`」と明記
-- **`coderouter/data/__init__.py`** — package data を安定に `importlib.resources.files()` 可能にする real-package 化
-- **`coderouter/config/capability_registry.py`** (新モジュール)
-  - `RegistryCapabilities` / `CapabilityRule` / `CapabilityRegistryFile` Pydantic models (全て `extra="forbid"`、typo で即 ValidationError)
-  - `ResolvedCapabilities` frozen dataclass — 4 flag + `None` (= 宣言無し)
-  - `CapabilityRegistry.lookup(*, kind, model)` — **first-match-per-flag** semantics: rule を top-down に歩き、flag ごとに「declared 済みの最初の rule」が勝つ (未 declared flag はさらに下の rule にパスする)
-  - `CapabilityRegistry.load_default()` / `load_from_paths()` / `from_rule_lists()` loader 3 種 (production / test-isolated / fully-in-memory)
-  - user file 不在は `[]` を返して bundled-only で動作 (正常系)、schema error は fail fast
+  - Current entries: 4 globs — `claude-opus-4-*` / `claude-sonnet-4-6*` / `claude-sonnet-4-7*` (forward-compat) / `claude-haiku-4-*` — all `kind: anthropic` + `thinking: true`
+  - Comments state that "adding a new family only requires editing this one file" and that "the user override lives at `~/.coderouter/model-capabilities.yaml`"
+- **`coderouter/data/__init__.py`** — turns this into a real package so package data can be reliably accessed via `importlib.resources.files()`
+- **`coderouter/config/capability_registry.py`** (a new module)
+  - The `RegistryCapabilities` / `CapabilityRule` / `CapabilityRegistryFile` Pydantic models (all `extra="forbid"`, so a typo immediately raises ValidationError)
+  - The `ResolvedCapabilities` frozen dataclass — 4 flags plus `None` (= not declared)
+  - `CapabilityRegistry.lookup(*, kind, model)` — **first-match-per-flag** semantics: walks rules top-down, and for each flag, "the first rule that declared it" wins (a flag left undeclared passes through to a later rule)
+  - 3 loaders on `CapabilityRegistry`: `load_default()` / `load_from_paths()` / `from_rule_lists()` (production / test-isolated / fully-in-memory)
+  - A missing user file returns `[]`, operating bundled-only (the normal case); a schema error fails fast
 - **`coderouter/routing/capability.py`**
-  - `_THINKING_CAPABLE_PATTERNS` / `_THINKING_CAPABLE_RE` / `re` import を削除 (regex 焼き込みの撤去)
-  - `get_default_registry()` lazy module-level singleton — 1 process で 1 回だけ disk load
-  - `reset_default_registry()` test hook — user YAML を stage したテストが cache を無効化できる
-  - `provider_supports_thinking(provider, *, registry=None)` に `registry` kwarg 追加 — DI point。production は default 経由、test はカスタム registry 注入可
-  - `__all__` に `CapabilityRegistry` / `ResolvedCapabilities` / `get_default_registry` / `reset_default_registry` を追加 (adapter/engine 層が routing からインポート可能に)
-- **`tests/test_capability_registry.py`** (新規 +39)
-  - Schema: 7 test (empty YAML OK / top-level typo rejected / rule typo rejected / flag typo rejected / version mismatch rejected / empty match rejected / kind default = "any")
-  - Glob matching: 10 param test (`claude-opus-4-*` / `claude-sonnet-4-6*` 境界 / `qwen3-coder:*` / case sensitivity)
-  - Lookup semantics: 8 test (no rules → all None / kind filter / first-match-per-flag / flag independence / user > bundled 順序 / unmatched flag = None / `kind: "any"` universal match)
-  - Bundled YAML 整合性: 3 test (v0.5-A regex で capable だった model 7 種 × thinking=True / pre-4-6 sonnet → None / openai_compat → None)
-  - User override integration: 3 test (load_from_paths 両方読む / missing user OK / malformed user → ValidationError)
-  - Gate integration: 8 test (`registry=` kwarg 注入 / providers.yaml explicit > registry / registry 未宣言 → False / `reset_default_registry` で reload / default == fresh load / re-export 確認)
+  - Removed `_THINKING_CAPABLE_PATTERNS` / `_THINKING_CAPABLE_RE` / the `re` import (retiring the baked-in regex)
+  - `get_default_registry()` — a lazy module-level singleton, loaded from disk only once per process
+  - `reset_default_registry()` — a test hook, letting tests that stage a user YAML invalidate the cache
+  - Added a `registry` kwarg to `provider_supports_thinking(provider, *, registry=None)` — a DI point. Production goes through the default; tests can inject a custom registry
+  - Added `CapabilityRegistry` / `ResolvedCapabilities` / `get_default_registry` / `reset_default_registry` to `__all__` (so the adapter/engine layers can import them from routing)
+- **`tests/test_capability_registry.py`** (new, +39)
+  - Schema: 7 tests (empty YAML OK / top-level typo rejected / rule typo rejected / flag typo rejected / version mismatch rejected / empty match rejected / kind defaults to "any")
+  - Glob matching: 10 parameterized tests (`claude-opus-4-*` / `claude-sonnet-4-6*` boundaries / `qwen3-coder:*` / case sensitivity)
+  - Lookup semantics: 8 tests (no rules → all None / kind filter / first-match-per-flag / flag independence / user overrides bundled ordering / an unmatched flag = None / `kind: "any"` universal match)
+  - Bundled YAML consistency: 3 tests (the 7 models that were thinking-capable under v0.5-A's regex all return thinking=True / a pre-4-6 sonnet → None / openai_compat → None)
+  - User override integration: 3 tests (load_from_paths reads both / missing user file is OK / a malformed user file → ValidationError)
+  - Gate integration: 8 tests (injecting via the `registry=` kwarg / providers.yaml explicit takes priority over the registry / undeclared in the registry → False / reload via `reset_default_registry` / default == a fresh load / confirming the re-export)
 
 ### Design notes
 
-- **なぜ YAML 外出しか.** v0.5-A は「Anthropic release cadence に対する passive drift」を retro で follow-on として挙げていた (docs/retrospectives/v0.5.md §What was sharp)。code change が必要だと release cycle の遅延 = drift が不可視に。YAML ならユーザが bundled を待たず自分で更新可 (`~/.coderouter/model-capabilities.yaml`)、bundled 更新も 1-line PR で済む
-- **first-match-per-flag の理由.** 単純な first-match だと「A rule が thinking だけ declare、B rule が同じ glob で tools だけ declare」のケースで B が A を上書きするか無視するかが曖昧になる。per-flag なら「A が thinking=true、B が tools=true、両方適用」が自然に表現できる。YAML 作者は flag ごとに独立した上書き順序を設計できる
-- **layered lookup を採らない (plan.md §9.4 policy).** lunacode は `<cwd>/.kairos → <repo>/.kairos → ~/.kairos → bundled` の 4 層だが、CodeRouter の providers.yaml は deployment 時 static config なので per-cwd layer の意味が薄い。bundled + user の 2 層に絞った。将来 `providers.d/*.yaml` merge が要望されたら v0.7-D or v0.8 に分離検討 (現状 YAGNI)
-- **per-provider 粒度を維持 (per-model にしない).** 同じ `qwen3-coder:7b` でも Ollama と LMStudio で tool calling の安定度が違うケースがあり、registry lookup の粒度は `(kind, model)` のまま。lunacode は editor harness なので per-model で OK だったが CodeRouter は provider 抽象が前提
-- **`kind: "any"` vs `"anthropic"` の使い分け.** 旧 heuristic は `if provider.kind != "anthropic": return False` という hard-check を持っていた。v0.7-A ではこれを「bundled YAML の rule が全部 `kind: anthropic` なので openai_compat query は一致しない」というデータで表現し直した。将来 openai_compat family 向け default (例: `qwen3-coder:*` tools=true) を追加するときは `kind: openai_compat` rule を置けば共存可能
-- **`provider.capabilities.thinking=True` の precedence は変わらず最優先.** registry はあくまで「explicit 未宣言時の default」であって、**ユーザが明示的に上書きしたものは上書きしたまま**が unchanged contract。providers.yaml escape hatch は v0.5-A 時点の約束と同じ
-- **test-only `reset_default_registry`.** module-level singleton にした代わりに、tests が stage した user YAML を pick up するための hook を置いた。production code は呼ぶ必要なし
+- **Why move it out to YAML.** v0.5-A's retro had already flagged "passive drift against Anthropic's release cadence" as a follow-on (docs/retrospectives/v0.5.md §What was sharp). If a code change is required, a delayed release cycle means drift becomes invisible. With YAML, a user can update it themselves without waiting for the bundled default (`~/.coderouter/model-capabilities.yaml`), and updating the bundled default is just a 1-line PR
+- **The rationale for first-match-per-flag.** A simple first-match approach leaves it ambiguous whether rule B overwrites or is ignored by rule A, in a case like "rule A declares only thinking, rule B declares only tools for the same glob." Per-flag lets "A sets thinking=true, B sets tools=true, both apply" be expressed naturally. A YAML author can design an independent override order per flag
+- **Not adopting layered lookup (per plan.md §9.4 policy).** lunacode has 4 layers (`<cwd>/.kairos → <repo>/.kairos → ~/.kairos → bundled`), but since CodeRouter's providers.yaml is static deployment-time config, a per-cwd layer carries little meaning. Narrowed to 2 layers: bundled + user. If `providers.d/*.yaml` merging is requested in the future, split it out for consideration in v0.7-D or v0.8 (currently YAGNI)
+- **Keeping per-provider granularity (not per-model).** The same `qwen3-coder:7b` can have different tool-calling stability between Ollama and LMStudio, so the registry lookup's granularity stays at `(kind, model)`. lunacode is an editor harness so per-model was fine there, but CodeRouter assumes the provider abstraction
+- **Distinguishing `kind: "any"` from `"anthropic"`.** The old heuristic had a hard check, `if provider.kind != "anthropic": return False`. v0.7-A re-expresses this as data — "all rules in the bundled YAML are `kind: anthropic`, so an openai_compat query never matches." When a default is added for the openai_compat family in the future (e.g., `qwen3-coder:*` tools=true), a `kind: openai_compat` rule can coexist
+- **`provider.capabilities.thinking=True`'s precedence remains unchanged as top priority.** The registry is merely "the default when nothing is explicitly declared" — the unchanged contract is that **whatever the user explicitly overrides stays overridden.** This is the same providers.yaml escape hatch promised as of v0.5-A
+- **The test-only `reset_default_registry`.** Since it's a module-level singleton, a hook was added so tests can pick up a staged user YAML. Production code never needs to call it
 
 ### Follow-ons
 
-- **v0.7-B で registry ↔ live probe の diff 機構**: `coderouter doctor --check-model <provider>` が registry 宣言 vs 実機挙動を比較し、乖離を `⚠️ NEEDS TUNING` として emit する。copy-paste YAML patch (`providers.yaml` / `model-capabilities.yaml` どちらにも貼れる形) を出力
-- **Registry snapshot の CI**: 週次 `coderouter doctor --check-model` を providers.yaml 全 entry に対して回し、乖離を PR-ready artifact として落とす (v0.5-D の OpenRouter roster cron と対称)
-- **v0.7-C で HF-on-Ollama reference profile**: HF distilled model (qwen3.5 / qwen3.6 等) を Ollama 経由で使う用の `model-capabilities.yaml` entry + `providers.yaml` stanza の reference を examples に追加
-- **tools / max_context_tokens / reasoning_passthrough の bundled default 追加**: 現在 bundled は thinking のみ。v0.7-B doctor の probe 結果を accumulate して順次 bundled に昇格させる運用を想定 (policy: 「実機検証済の事実のみ bundled に書く」)
-- **Capabilities class との合流** (v1.0+): `ProviderConfig.capabilities` は v0.5 retro で「kitchen sink 化」と警告された (10 flag 目前)。v1.0 の `reasoning_control` / `mcp` Literal 抽象と合流する際に registry 側の schema も再整理
+- **A registry ↔ live-probe diff mechanism in v0.7-B**: `coderouter doctor --check-model <provider>` compares registry declarations against real-hardware behavior, emitting a divergence as `⚠️ NEEDS TUNING`. Outputs a copy-paste-ready YAML patch (in a form that can be pasted into either `providers.yaml` or `model-capabilities.yaml`)
+- **CI for a registry snapshot**: running `coderouter doctor --check-model` weekly against every entry in providers.yaml, dropping divergences as a PR-ready artifact (symmetric with v0.5-D's OpenRouter roster cron)
+- **An HF-on-Ollama reference profile in v0.7-C**: adding a reference `model-capabilities.yaml` entry + `providers.yaml` stanza to examples, for using an HF-distilled model (qwen3.5 / qwen3.6 etc.) via Ollama
+- **Adding bundled defaults for tools / max_context_tokens / reasoning_passthrough**: currently the bundled default only covers thinking. Envisions accumulating v0.7-B doctor probe results and progressively promoting them into the bundled default (policy: "only write real-hardware-verified facts into bundled")
+- **Merging with the Capabilities class** (v1.0+): `ProviderConfig.capabilities` was flagged in the v0.5 retro as trending toward a "kitchen sink" (nearing 10 flags). To be reorganized on the registry side too, once merged with v1.0's `reasoning_control` / `mcp` Literal abstraction
 
 ---
 
 ## [v0.6.0] — 2026-04-20 (umbrella tag for v0.6-A / v0.6-B / v0.6-C / v0.6-D)
 
-**Theme: Chain as a first-class object.** v0.6-A (launch-time profile selection + startup validation), v0.6-B (profile-level parameter override `timeout_s` / `append_system_prompt` + `ProviderCallOverrides`), v0.6-C (宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` 集約 warn), v0.6-D (`mode_aliases` + `X-CodeRouter-Mode` header — intent / implementation 名前空間分離) の 4 サブリリースを一本の tag にまとめる意味合い。**startup fast-fail validator** (4 例) と **typed log payload + chokepoint helper** (v0.6-C = v0.5.1 A-1 パターンの 2 例目) が minor 全体に通底する設計 spine として確立。`_resolve_chain` が 4 engine entry-points を束ねる chokepoint であることが v0.6-C warn 配置で再確認された (v0.4-A の polymorphic chain 化の dividend)。§9.3 の v0.5 未着手分は capability mismatch→chain skip (v1.0+ / vision 同梱) を除いて全消化。
+**Theme: Chain as a first-class object.** Bundles 4 sub-releases into a single tag: v0.6-A (launch-time profile selection + startup validation), v0.6-B (profile-level parameter overrides `timeout_s` / `append_system_prompt` + `ProviderCallOverrides`), v0.6-C (a declarative `ALLOW_PAID` gate + an aggregate `chain-paid-gate-blocked` warn), and v0.6-D (`mode_aliases` + the `X-CodeRouter-Mode` header — separating the intent / implementation namespaces). **Startup fast-fail validators** (4 instances) and **typed log payload + chokepoint helpers** (v0.6-C being the 2nd instance of the v0.5.1 A-1 pattern) are established as the design spine running through the whole minor release. That `_resolve_chain` is the chokepoint tying together the 4 engine entry points was reconfirmed by where v0.6-C's warn was placed (a dividend of v0.4-A's move to a polymorphic chain). Of the v0.5-scope items left unstarted in §9.3, all are now cleared except capability-mismatch→chain-skip (bundled with v1.0+ / the vision).
 
-- Commits: v0.6-A → v0.6-B → v0.6-C → v0.6-D (+ 各 sub-release docs commit)
+- Commits: v0.6-A → v0.6-B → v0.6-C → v0.6-D (plus a docs commit for each sub-release)
 - Tests: 267 → **306** (+39, +15%)
 - Narrative & design through-lines: [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md)
 - Per-sub-release detail: sections `[v0.6-A]` / `[v0.6-B]` / `[v0.6-C]` / `[v0.6-D]` below.
-- 5-dep bound 維持 (SDK 非依存、v0.5 で確認した「translation 層は SDK より薄い」賭けが routing / ingress 層にも継続)
+- The 5-dep bound is maintained (still SDK-independent; the bet confirmed in v0.5 that "the translation layer is thinner than an SDK" continues into the routing / ingress layers)
 
 ---
 
-## [v0.6-D] — 2026-04-20 (`mode_aliases` — `X-CodeRouter-Mode: coding` → profile 名 mapping)
+## [v0.6-D] — 2026-04-20 (`mode_aliases` — mapping `X-CodeRouter-Mode: coding` → a profile name)
 
-**Theme: 「intent と implementation を名前空間で分ける」。** v0.1 から `profile` (body/header) で chain を選べたが、client 側はいつも「`default` / `fast` / `long-context`」のような**実装寄りの名前**を直接指している状態だった。v0.6-D で `mode_aliases` YAML block と `X-CodeRouter-Mode` header を導入し、client は**意図** (`coding` / `long` / `fast` ...) を送れば済むようにした。profile 名は router 内の実装詳細に格下げされ、裏の chain を付け替えても client には影響しない。§9.3 残 #5 を消化。
+**Theme: "separate intent from implementation via namespace."** Since v0.1, `profile` (body/header) could already select a chain, but the client side always had to point directly at an **implementation-leaning name** like `default` / `fast` / `long-context`. v0.6-D introduces the `mode_aliases` YAML block and the `X-CodeRouter-Mode` header, letting a client just send its **intent** (`coding` / `long` / `fast` ...). Profile names are demoted to the router's internal implementation detail, so swapping the underlying chain has no effect on the client. Clears the remaining #5 in §9.3.
 
-- Tests: 291 → **306** (+15、schema 3 / OpenAI ingress 6 / Anthropic ingress 6)
-- precedence: body `profile` > `X-CodeRouter-Profile` header > `X-CodeRouter-Mode` header > `default_profile` — Mode は Profile より下 (明示された implementation が最優先)
-- 起動時 fast-fail: `mode_aliases` が未知の profile を指していれば `ValidationError` で serve 起動前に落ちる (v0.6-A `default_profile` 検証と同じ philosophy)
+- Tests: 291 → **306** (+15: schema 3 / OpenAI ingress 6 / Anthropic ingress 6)
+- Precedence: body `profile` > the `X-CodeRouter-Profile` header > the `X-CodeRouter-Mode` header > `default_profile` — Mode ranks below Profile (an explicit implementation always wins)
+- Startup fast-fail: if `mode_aliases` points to an unknown profile, a `ValidationError` fails before `serve` even starts (the same philosophy as v0.6-A's `default_profile` validation)
 
 ### Added
 
 - **`coderouter/config/schemas.py`**
-  - `CodeRouterConfig.mode_aliases: dict[str, str]` (`default_factory=dict`) — keys が mode 名、values が profile 名
-  - `_check_mode_alias_targets_exist` model validator — 全 alias target が declared profile に存在するか起動時に検証
-  - `CodeRouterConfig.resolve_mode(mode) -> str` — alias 引き (見つからなければ `KeyError`、ingress 側で 400 に変換)
+  - `CodeRouterConfig.mode_aliases: dict[str, str]` (`default_factory=dict`) — keys are mode names, values are profile names
+  - The `_check_mode_alias_targets_exist` model validator — verifies at startup that every alias target exists among the declared profiles
+  - `CodeRouterConfig.resolve_mode(mode) -> str` — resolves an alias (raising `KeyError` if not found, converted to a 400 on the ingress side)
 - **`coderouter/ingress/openai_routes.py`**
-  - 新 header param `x_coderouter_mode: str | None` (`X-CodeRouter-Mode` alias)
-  - profile 未決定かつ mode header 有りのとき `config.resolve_mode()` → `mode-alias-resolved` INFO log → `chat_req.profile` に反映。未知 mode は 400 に known modes 列挙付きで返す
-  - module docstring を 4-level precedence (body > profile-header > mode-header > default) に更新
-- **`coderouter/ingress/anthropic_routes.py`** — 同じパターンを Anthropic route にも適用。`anthropic-version` / `anthropic-beta` 処理の並びの中に自然に組み込み
-- **`tests/test_config.py`** (+3) — `resolve_mode` 正常系 + KeyError / 未知 target で `ValidationError` at load / 未宣言なら `mode_aliases == {}` デフォルト
-- **`tests/test_ingress_profile.py`** (+6) — mode header → aliased profile / Profile header > Mode header / body profile > Mode header / unknown mode → 400 + known list / `mode_aliases` 空のとき mode header は 400 / 解決結果が engine に届く
-- **`tests/test_ingress_anthropic.py`** (+6) — 上記パターンを Anthropic route でも (streaming path も含む)
+  - A new header param, `x_coderouter_mode: str | None` (aliasing `X-CodeRouter-Mode`)
+  - When the profile is undetermined and a mode header is present, calls `config.resolve_mode()` → logs `mode-alias-resolved` at INFO → assigns the result to `chat_req.profile`. An unknown mode returns 400 listing the known modes
+  - Updated the module docstring to the 4-level precedence (body > profile-header > mode-header > default)
+- **`coderouter/ingress/anthropic_routes.py`** — applies the same pattern to the Anthropic route, naturally slotting into the existing handling of `anthropic-version` / `anthropic-beta`
+- **`tests/test_config.py`** (+3) — `resolve_mode` happy path + KeyError / an unknown target raising `ValidationError` at load / an undeclared `mode_aliases` defaulting to `{}`
+- **`tests/test_ingress_profile.py`** (+6) — mode header → aliased profile / a Profile header outranks a Mode header / a body profile outranks a Mode header / an unknown mode → 400 + the known list / an empty `mode_aliases` makes the mode header 400 / the resolved result reaches the engine
+- **`tests/test_ingress_anthropic.py`** (+6) — the same patterns for the Anthropic route (including the streaming path)
 
 ### Design notes
 
-- **Mode < Profile の理由.** caller が **concrete な profile 名**を送ってきた場合、その caller は router の内部名を知ってて意図的にそれを指定している。そこに Mode を上書きさせると「proxy 経由で mode header が混入したときに profile が無視される」事故が起きる。intent (Mode) は implementation (Profile) で既に specify されていれば負け、という自然な precedence
-- **header only — body field は足さない.** profile は body field にもあるが、mode は header だけに留めた。理由は「body は API の契約、header は ops-layer の orchestration」という住み分け。Mode は operator が proxy で注入したい典型例 (例: API gateway が intent を付与する運用) なので header に置くのが筋。body に置くと OpenAI/Anthropic 両方の `*Request` に field を生やす必要があり、scope が肥大化
-- **無効 mode → 400 (silent fallback しない).** `mode_aliases` 空 or 未知 mode が来たら fall through で default profile を使う設計もあり得たが、典型的な failure mode は「client/proxy の typo」。silent fallback は「動くけど想定と違う profile に乗ってる」状況を作るので 400 にした。error body に known modes を列挙して self-correctable に
-- **起動時検証 (v0.6-A 踏襲).** 実行時に 400 ではなく起動時に `ValidationError` で落ちるのは、`default_profile` 検証と同じ fast-fail 哲学。broken alias が request まで届くと「動くはずの mode が動かない」という間欠的な症状になる
-- **`mode-alias-resolved` INFO log の狙い.** mode → profile の解決は client には見えない操作なので、「何が何に解決されたか」を 1 行残す。operator が「coding mode で呼んだ request が fast profile に乗ってる」といった診断を grep でできる
+- **Why Mode ranks below Profile.** If the caller has sent a **concrete profile name**, that caller already knows the router's internal name and intentionally specified it. Letting Mode override that would risk an accident where "a mode header injected through a proxy causes the profile to be ignored." The natural precedence: intent (Mode) loses whenever implementation (Profile) has already been specified
+- **Header only — no body field added.** Profile exists as a body field too, but Mode is kept header-only. The rationale is the division of labor "body is the API's contract, header is ops-layer orchestration." Mode is the typical case an operator wants to inject via a proxy (e.g., an API gateway attaching intent), so a header is the natural fit. Putting it in the body would require adding a field to both OpenAI/Anthropic `*Request` shapes, bloating the scope
+- **An invalid mode → 400 (no silent fallback).** A design where an empty `mode_aliases` or an unknown mode falls through to the default profile was possible, but the typical failure mode is "a client/proxy typo." A silent fallback creates the situation of "it works, but on a different profile than intended," so it's a 400 instead. The error body lists the known modes, making it self-correctable
+- **Startup validation (following v0.6-A).** Failing at startup with a `ValidationError`, rather than at request time with a 400, follows the same fast-fail philosophy as the `default_profile` validation. If a broken alias reached request time, it would show up as an intermittent symptom of "a mode that should work doesn't"
+- **The intent behind the `mode-alias-resolved` INFO log.** Since the mode → profile resolution is invisible to the client, a single log line records "what resolved to what." This lets an operator grep-diagnose things like "a request called with coding mode ended up on the fast profile"
 
 ### Follow-ons
 
-- **v0.7+**: `mode_aliases` の階層化 (例: `coding.fast` / `coding.thorough` みたいな dotted name) を考えるかどうか。現時点ではフラット dict で十分 (使う側も 3〜5 種類に収束するはず) なので over-engineering は回避
-- **examples/providers.yaml**: 今回は `mode_aliases` block のサンプルは未追加 (実 YAML を壊さずに追加する判別が要る)。v0.6-D docs pass の中で低リスクに足すか、v1.0 近辺の example overhaul でまとめて整理するか要判断
+- **v0.7+**: whether to consider a hierarchy for `mode_aliases` (e.g., dotted names like `coding.fast` / `coding.thorough`). For now, a flat dict is sufficient (usage is expected to converge to 3-5 kinds), so over-engineering is avoided
+- **examples/providers.yaml**: no `mode_aliases` block sample was added this time (adding one without breaking the real YAML needs care). To be decided whether to add it at low risk during the v0.6-D docs pass, or to organize it together during an example overhaul around v1.0
 
 ---
 
-## [v0.6-C] — 2026-04-20 (宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` 集約 warn)
+## [v0.6-C] — 2026-04-20 (A declarative `ALLOW_PAID` gate + an aggregate `chain-paid-gate-blocked` warn)
 
-**Theme: 「宣言された gate」を chain-granularity の 1 行に昇格。** v0.1 から既に `paid: true` provider は `ALLOW_PAID=false` のとき filter されていたが、per-provider INFO (`skip-paid-provider`) だけで、「chain 全体が paid gate で空になった」ケースは `NoProvidersAvailableError` に埋もれていた。v0.6-C で**集約 warn** (`chain-paid-gate-blocked`) を追加し、gate が chain を empty にした瞬間に hint 付きで 1 行出る。v0.5 capability gate の `capability-degraded` と同じ「typed payload + chokepoint helper + logging.py 居住」パターンを踏襲。
+**Theme: promote "a declared gate" to a single line at chain-granularity.** Since v0.1, `paid: true` providers were already filtered out when `ALLOW_PAID=false`, but this only produced a per-provider INFO (`skip-paid-provider`); the case where "the entire chain went empty due to the paid gate" was buried inside `NoProvidersAvailableError`. v0.6-C adds an **aggregate warn** (`chain-paid-gate-blocked`), firing a single line with a hint the moment the gate empties out a chain. Follows the same "typed payload + chokepoint helper + resides in logging.py" pattern as v0.5's `capability-degraded` capability gate.
 
-- Tests: 283 → **291** (+8, `tests/test_fallback_paid_gate.py` 新規)
-- 振る舞い変更ゼロ: 既存 `NoProvidersAvailableError` の例外 shape は非破壊、`skip-paid-provider` INFO は per-provider レベルで温存
-- 4 entry point (generate / stream / generate_anthropic / stream_anthropic) 全てで発火 — `_resolve_chain` に一本化したので共通経路 1 箇所の変更で済んだ
+- Tests: 283 → **291** (+8, new `tests/test_fallback_paid_gate.py`)
+- Zero behavior change: the existing `NoProvidersAvailableError` exception shape is non-breaking, and the `skip-paid-provider` INFO is preserved at the per-provider level
+- Fires across all 4 entry points (generate / stream / generate_anthropic / stream_anthropic) — since they're consolidated into `_resolve_chain`, a single change to the shared path was enough
 
 ### Added
 
 - **`coderouter/logging.py`**
-  - `ChainPaidGateBlockedPayload` TypedDict — `profile` / `blocked_providers: list[str]` / `hint: str` の 3 field
-  - `log_chain_paid_gate_blocked(logger, *, profile, blocked_providers, hint=...)` chokepoint helper (warn level)
-  - `_DEFAULT_PAID_GATE_HINT` — `"set ALLOW_PAID=true, mark a provider paid=false, or add a free provider to this profile's chain"` のデフォルト文言 (grep-friendly, 必要なら call site で差し替え可)
+  - The `ChainPaidGateBlockedPayload` TypedDict — 3 fields: `profile` / `blocked_providers: list[str]` / `hint: str`
+  - The `log_chain_paid_gate_blocked(logger, *, profile, blocked_providers, hint=...)` chokepoint helper (warn level)
+  - `_DEFAULT_PAID_GATE_HINT` — the default text, `"set ALLOW_PAID=true, mark a provider paid=false, or add a free provider to this profile's chain"` (grep-friendly, overridable per call site if needed)
 - **`coderouter/routing/fallback.py`**
-  - `_resolve_chain` が paid-blocked provider 名を `blocked_by_paid` リストで収集。chain 解決後に `adapters == [] and blocked_by_paid` なら `log_chain_paid_gate_blocked` を発火
+  - `_resolve_chain` collects paid-blocked provider names into a `blocked_by_paid` list. Once the chain is resolved, if `adapters == [] and blocked_by_paid`, it fires `log_chain_paid_gate_blocked`
   - `from coderouter.logging import get_logger, log_chain_paid_gate_blocked`
-- **`tests/test_fallback_paid_gate.py`** (新規 +8) — 全 paid chain で warn 発火 / multi-paid で blocked_providers が chain 順 / mixed chain では warn しない (free が生き残るから) / ALLOW_PAID=true では skip-paid も warn も無し / unknown-only chain では warn しない / streaming / generate_anthropic / stream_anthropic 各 path で warn 発火を確認
+- **`tests/test_fallback_paid_gate.py`** (new, +8) — warn fires on an all-paid chain / `blocked_providers` follows chain order with multiple paid entries / no warn on a mixed chain (since a free one survives) / neither skip-paid nor warn with ALLOW_PAID=true / no warn on an unknown-only chain / confirms the warn fires on streaming / generate_anthropic / stream_anthropic paths
 
 ### Design notes
 
-- **集約 warn が必要だった理由.** `skip-paid-provider` は per-provider INFO なので、chain=[paid-A, paid-B, paid-C] のとき 3 行吐かれる。operator が「これが chain 全体を空にした原因か？」を判断するには `skip-paid-provider` → `NoProvidersAvailableError` の時系列を grep で組み直す必要があった。v0.6-C はこれを「1 行で宣言的に」示す
-- **warn vs info の選択.** v0.5 の `capability-degraded` は info (gate は常時動いてる normal path)。v0.6-C は warn (chain が empty = 設定ミスの疑いが濃厚、operator の目線を奪う価値がある)。`skip-paid-provider` 側は info のまま (chain は生き延びる余地がある瞬間もある)
-- **`logging.py` 居住の継続.** `routing/capability.py` ではなく `logging.py` に helper を置く方針 (v0.5.1 A-1) を踏襲。理由も同じ: `routing/__init__.py` が eager import で `FallbackEngine` を引くので、adapter 側から paid-gate warn を撃ちたい将来の拡張に対して循環を避けておく
-- **mixed chain で warn しない理由.** paid-blocked な provider が居ても、free な provider が 1 つでも生きていれば chain は exercise される。その場合の「全 free が失敗した」診断は `provider-failed` のレーンが既に narrate してくれるので、warn が被るだけ。v0.5.1 A-3 (`chain-uniform-auth-failure`) と同じ「aggregate は empty/uniform の時だけ吠える」ルール
-- **`retry_max` / startup enumeration は scope 外.** §9.3 #3 には「起動時に paid provider を列挙」という旨も含意されていたが、現 v0.6-A で `coderouter-startup` log に全 provider 情報が既に出ているので別口で足すよりコストが高い。今は chain 時 warn を優先
+- **Why the aggregate warn was needed.** Since `skip-paid-provider` is per-provider INFO, a chain=[paid-A, paid-B, paid-C] emits 3 lines. For an operator to judge "is this what emptied the whole chain?" required reconstructing the timeline from `skip-paid-provider` → `NoProvidersAvailableError` via grep. v0.6-C surfaces this "declaratively, in one line"
+- **Choosing warn over info.** v0.5's `capability-degraded` is info (the gate is always operating on a normal path). v0.6-C is warn (an empty chain strongly suggests a misconfiguration, worth grabbing the operator's attention). The `skip-paid-provider` side stays info (there are moments where the chain still has a chance to survive)
+- **Continuing to reside in `logging.py`.** Follows the same policy (from v0.5.1 A-1) of placing the helper in `logging.py` rather than `routing/capability.py`. Same rationale: since `routing/__init__.py` eagerly imports `FallbackEngine`, this avoids a future cycle for when the adapter side might want to fire a paid-gate warn too
+- **Why no warn on a mixed chain.** Even with paid-blocked providers present, the chain is still exercised as long as at least one free provider survives. In that case, the "all free providers failed" diagnosis is already narrated by the `provider-failed` lane, so a warn would just be redundant. The same "aggregate only barks when empty/uniform" rule as v0.5.1 A-3 (`chain-uniform-auth-failure`)
+- **`retry_max` / startup enumeration are out of scope.** §9.3 #3 implied something like "enumerate paid providers at startup," but since v0.6-A's `coderouter-startup` log already shows full provider info, adding this separately would cost more than it's worth. Prioritizing the chain-time warn for now
 
 ### Follow-ons
 
-- **v0.6-D**: `mode_aliases` YAML block で `X-CodeRouter-Mode: coding` → profile 名の mapping (§9.3 残 #5)
-- **v0.6+**: `chain-paid-gate-blocked` の hint 文言を profile 単位で override できると便利 (例: `claude-code-direct` profile なら "set ANTHROPIC_API_KEY and ALLOW_PAID=true" みたいな文脈追加)。現状は helper の `hint=` で call site 上書きが可能
+- **v0.6-D**: a `mode_aliases` YAML block mapping `X-CodeRouter-Mode: coding` → a profile name (remaining item #5 in §9.3)
+- **v0.6+**: it would be convenient to override `chain-paid-gate-blocked`'s hint text per profile (e.g., adding context like "set ANTHROPIC_API_KEY and ALLOW_PAID=true" for the `claude-code-direct` profile). Currently overridable per call site via the helper's `hint=`
 
 ---
 
 ## [v0.6-B] — 2026-04-20 (profile-level `timeout_s` / `append_system_prompt` override)
 
-**Theme: profile を「providers の並び + 制御パラメータ」に昇格。** v0.6-A で profile 選択そのものは CLI/env で差し替えられるようになったが、profile ごとに「こっちは local の低レイテンシー想定だから timeout は短く」「あっちの /no_think 付与は fast-profile だけ」といった**制御パラメータ差分は provider-level にしか存在しなかった**。v0.6-B で `FallbackChain` に optional `timeout_s` / `append_system_prompt` を足し、engine が profile 解決時に一度だけ `ProviderCallOverrides` を組み立てて chain 全体に配る。
+**Theme: elevate a profile to "an ordered list of providers plus control parameters."** v0.6-A made profile selection itself swappable via CLI/env, but per-profile **control-parameter differences — like "this one assumes local low latency so keep the timeout short" or "that /no_think addition only applies to the fast-profile" — only existed at the provider level.** v0.6-B adds optional `timeout_s` / `append_system_prompt` to `FallbackChain`, with the engine building a single `ProviderCallOverrides` once at profile-resolution time and distributing it across the whole chain.
 
-- Tests: 275 → **283** (+8、fallback engine 5 / openai_compat adapter 3)
-- 優先順位: profile 値 (設定あれば) → provider 値 → 既定値 — **置き換え** (append ではなく replace) セマンティクス。混乱を避けるため `timeout_s` と同じ挙動に揃えた
-- `retry_max` は adapter 層に既存の retry 機構が無いため scope 外 (§9.3 #4 の partial)
+- Tests: 275 → **283** (+8: 5 fallback engine / 3 openai_compat adapter)
+- Precedence: the profile value (if set) → the provider value → the built-in default — **replace** (not append) semantics. Aligned with `timeout_s`'s existing behavior to avoid confusion
+- `retry_max` is out of scope since the adapter layer has no existing retry mechanism (a partial handling of §9.3 #4)
 
 ### Added
 
 - **`coderouter/config/schemas.py`**
-  - `FallbackChain.timeout_s: float | None` (`ge=1.0, le=600.0`) — `ProviderConfig.timeout_s` と同じ範囲制約
-  - `FallbackChain.append_system_prompt: str | None` — profile 側で "" を明示すれば provider 側の directive を「この profile に限り無効化」できる特別セマンティクス
+  - `FallbackChain.timeout_s: float | None` (`ge=1.0, le=600.0`) — the same range constraint as `ProviderConfig.timeout_s`
+  - `FallbackChain.append_system_prompt: str | None` — a special semantics where explicitly setting `""` on the profile side lets you "disable the provider-side directive, just for this profile"
 - **`coderouter/adapters/base.py`**
-  - `ProviderCallOverrides` pydantic モデル (`extra="forbid"`, 全 field optional)。engine が profile 単位で 1 回組み立て、同 chain の全 adapter 呼び出しに配る
-  - `BaseAdapter.effective_timeout(overrides)` / `effective_append_system_prompt(overrides)` — override > provider default を決定する共通 helper
-  - `generate` / `stream` 抽象に `overrides: ProviderCallOverrides | None = None` kwarg を追加 (keyword-only、default None で backward-compat)
-- **`coderouter/adapters/openai_compat.py`** — `_prepare_messages` / `_payload` / `generate` / `stream` が `overrides` を受け取り、`httpx.AsyncClient(timeout=...)` と system message 注入の双方に反映
-- **`coderouter/adapters/anthropic_native.py`** — `generate_anthropic` / `stream_anthropic` / (reverse) `generate` / `stream` が `overrides` を受け取り、native passthrough 経路の httpx timeout に反映 (`append_system_prompt` は anthropic_native では元々非対応なので timeout のみ)
+  - The `ProviderCallOverrides` pydantic model (`extra="forbid"`, all fields optional). Built once per profile by the engine, distributed to every adapter call within the same chain
+  - `BaseAdapter.effective_timeout(overrides)` / `effective_append_system_prompt(overrides)` — shared helpers deciding override > provider default
+  - Added an `overrides: ProviderCallOverrides | None = None` kwarg to the `generate` / `stream` abstractions (keyword-only, defaulting to None for backward compat)
+- **`coderouter/adapters/openai_compat.py`** — `_prepare_messages` / `_payload` / `generate` / `stream` now accept `overrides`, reflected into both `httpx.AsyncClient(timeout=...)` and system-message injection
+- **`coderouter/adapters/anthropic_native.py`** — `generate_anthropic` / `stream_anthropic` / (reverse) `generate` / `stream` now accept `overrides`, reflected into the native passthrough path's httpx timeout (`append_system_prompt` isn't natively supported in anthropic_native to begin with, so only timeout applies)
 - **`coderouter/routing/fallback.py`**
-  - `_resolve_profile_overrides(profile_name)` helper — profile から `ProviderCallOverrides` を 1 回だけ組み立て
-  - `generate` / `stream` / `generate_anthropic` / `stream_anthropic` の 4 entry point すべてで解決 → adapter 呼び出しに `overrides=` を渡す
-- **`tests/test_fallback.py`** (+5) — timeout override が adapter に届く / unset 時は provider 値に落ちる / append_system_prompt の置き換え / `""` で clear する / FallbackChain schema sanity
-- **`tests/test_openai_compat.py`** (+3) — `ProviderCallOverrides(append_system_prompt="/x")` が outbound に出る / `""` で system 注入がスキップされる / `ProviderCallOverrides()` は `None` と観測的に等価 (回帰ガード)
+  - The `_resolve_profile_overrides(profile_name)` helper — builds a `ProviderCallOverrides` once from the profile
+  - All 4 entry points — `generate` / `stream` / `generate_anthropic` / `stream_anthropic` — resolve it and pass `overrides=` into the adapter call
+- **`tests/test_fallback.py`** (+5) — the timeout override reaches the adapter / falls back to the provider value when unset / replacement of append_system_prompt / clearing it with `""` / FallbackChain schema sanity
+- **`tests/test_openai_compat.py`** (+3) — `ProviderCallOverrides(append_system_prompt="/x")` shows up outbound / `""` skips the system injection / `ProviderCallOverrides()` is observationally equivalent to `None` (a regression guard)
 
 ### Changed
 
-- **`tests/test_fallback.py` / `tests/test_fallback_anthropic.py`** — fake adapter 群の `generate` / `stream` / `generate_anthropic` / `stream_anthropic` 署名に `overrides` kwarg を追加。engine が常に `overrides=` を渡すようになったため、kwarg を受け取れない fake は `TypeError` で落ちる
+- **`tests/test_fallback.py` / `tests/test_fallback_anthropic.py`** — added the `overrides` kwarg to the fake adapters' `generate` / `stream` / `generate_anthropic` / `stream_anthropic` signatures. Since the engine now always passes `overrides=`, a fake that can't accept the kwarg fails with `TypeError`
 
 ### Design notes
 
-- **置き換え vs 追加.** `append_system_prompt` は「文字列なので追加が自然」「いや provider と profile で二重に刺さると混乱する」の両論あったが、`timeout_s` がスカラー制約で「置き換え」しかありえない以上、同じ field family に属する `append_system_prompt` も置き換えに揃えた方が意味論がシンプル。profile 側で両方刺したいユースケースが出てきたら v0.6+ で `append_mode: "replace" | "concat"` を別フィールドとして足せる
-- **"" で clear する非対称性.** pydantic の field で `None` と `""` は区別できるので、profile が「この profile だけ provider directive を無効化したい」をちゃんと表現できるように、`effective_append_system_prompt` 内で `overrides.append_system_prompt == ""` → `None` を返す特別扱いを入れた。`None` = "override 無し" と意味が被らないよう、helper のコメントで明示
-- **override resolution の位置.** engine が「chain ごとに 1 回 override を組み立てて全 adapter 呼び出しに配る」方式を採った。adapter 側で per-call lookup すると (a) config 依存が adapter まで広がる、(b) profile 名を adapter に渡すことになる、の両方を避けられる。profile は immutable per-request なので 1 回解決で十分
-- **abstract signature 破壊.** `BaseAdapter.generate` に kwarg を追加したため、既存の fake adapter (tests) は署名を合わせる必要あり。ただし (i) default が `None`、(ii) keyword-only、の 2 条件を満たすので **本体 adapter を実装するサードパーティ (まだ存在しないが) は影響ゼロ**。tests でしか気付かない破壊
-- **retry_max の scope 外.** §9.3 #4 は本来 `retry_max` も含んでいたが、adapter 層に現時点で「1 provider 内での retry」概念が無い (retry 相当は fallback chain そのもの)。この mechanism を先に入れると「provider 内 retry → それでも駄目なら fallback」の挙動分岐が発生し、midstream guard との相互作用が非自明になる。v0.6-D 以降で設計込みで再検討
+- **Replace vs. append.** There were arguments both ways for `append_system_prompt` — "it's a string, so appending feels natural" vs. "no, having both provider and profile stack would be confusing" — but since `timeout_s` is a scalar constraint that can only be "replaced," keeping `append_system_prompt` (in the same field family) as replace too keeps the semantics simpler. If a use case for stacking both at the profile side emerges, a separate `append_mode: "replace" | "concat"` field could be added in v0.6+
+- **The asymmetry of clearing via `""`.** Since pydantic can distinguish `None` from `""` at the field level, a special case was added inside `effective_append_system_prompt` so a profile can properly express "disable the provider directive, just for this profile": `overrides.append_system_prompt == ""` → returns `None`. The helper's comment makes explicit that this shouldn't be confused with `None` meaning "no override"
+- **Where override resolution happens.** The engine adopted the approach of "build the override once per chain and distribute it to every adapter call." Doing a per-call lookup on the adapter side would avoid both (a) spreading config dependency into the adapter and (b) having to pass the profile name into the adapter. Since a profile is immutable per request, resolving it once is sufficient
+- **Breaking the abstract signature.** Since a kwarg was added to `BaseAdapter.generate`, existing fake adapters (in tests) needed their signatures updated. However, since it satisfies both (i) defaulting to `None` and (ii) being keyword-only, **any third-party implementing a real adapter (none exist yet) would see zero impact.** A break only noticeable in tests
+- **`retry_max` out of scope.** §9.3 #4 originally covered `retry_max` too, but the adapter layer currently has no concept of "retry within a single provider" (the fallback chain itself is the retry-equivalent mechanism). Introducing this mechanism first would create a behavior branch of "retry within the provider → fall back if that still fails," with non-obvious interaction with the midstream guard. To be reconsidered with a fuller design in v0.6-D or later
 
 ### Follow-ons
 
-- **v0.6-C**: `ALLOW_PAID` 宣言的 gate の強化 — startup log に paid provider 列挙 + `chain-paid-gate-blocked` structured log (§9.3 残 #3)
-- **v0.6-D**: `mode_aliases` YAML block で `X-CodeRouter-Mode: coding` → profile 名の mapping (§9.3 残 #5)
-- **後日**: `retry_max` (profile + provider の階層) を含む adapter-level retry 機構。midstream guard との整合性が設計のキモ
+- **v0.6-C**: strengthening the declarative `ALLOW_PAID` gate — enumerating paid providers in the startup log + a `chain-paid-gate-blocked` structured log (remaining item #3 in §9.3)
+- **v0.6-D**: a `mode_aliases` YAML block mapping `X-CodeRouter-Mode: coding` → a profile name (remaining item #5 in §9.3)
+- **Later**: an adapter-level retry mechanism including `retry_max` (at both the profile and provider levels). Consistency with the midstream guard is the crux of the design
 
 ---
 
 ## [v0.6-A] — 2026-04-20 (`--mode` CLI + CODEROUTER_MODE env + startup validation)
 
-**Theme: サーバー起動時点の profile 選択を 1 級市民に昇格。** v0.5 までは「YAML の `default_profile` を書き換える」か「クライアントごとに header を毎回投げる」の二択だった。v0.6-A で `--mode <profile>` CLI オプション + `CODEROUTER_MODE` 環境変数を追加し、サーバー単位 / プロセス単位の軽い override を可能に。併せて `default_profile` が profiles リストに存在しない場合は起動時に fast-fail するように (従来は最初のリクエスト時に 500)。
+**Theme: promote server-startup-time profile selection to a first-class citizen.** Through v0.5, the only options were "rewrite `default_profile` in the YAML" or "have every client send the header on every request." v0.6-A adds the `--mode <profile>` CLI option plus the `CODEROUTER_MODE` env var, enabling a lightweight server-wide / process-wide override. It also makes an unrecognized `default_profile` (one that doesn't exist in the profiles list) fail fast at startup (previously it only failed with a 500 on the first request).
 
-- Tests: 267 → **275** (+8, CLI 5 + config loader 3)
-- 優先順位: request per-call > `--mode` (= `CODEROUTER_MODE`) > YAML `default_profile` > built-in "default"
-- §9.3 の 5 項目中 2 項目 (`--mode` CLI / 起動時 fast-fail) を消化
+- Tests: 267 → **275** (+8: 5 CLI + 3 config loader)
+- Precedence: per-request > `--mode` (= `CODEROUTER_MODE`) > YAML `default_profile` > the built-in "default"
+- Clears 2 of the 5 items in §9.3 (`--mode` CLI / startup fast-fail)
 
 ### Added
 
 - **`coderouter/cli.py`**
-  - `serve --mode <profile>` 引数。指定値の前後 whitespace を strip してから `CODEROUTER_MODE` env var を export (shell quoting 事故で `" coding "` が渡ってきても loader まで届かない)
-  - 既存 `CODEROUTER_MODE` が shell に pre-set されている場合、`--mode` が未指定なら尊重、指定されていれば上書き
+  - A `serve --mode <profile>` argument. Strips surrounding whitespace from the given value before exporting the `CODEROUTER_MODE` env var (so a shell-quoting mishap producing `" coding "` never reaches the loader)
+  - If `CODEROUTER_MODE` is already pre-set in the shell, it's respected when `--mode` isn't given, and overridden when `--mode` is given
 - **`coderouter/config/schemas.py`**
-  - `CodeRouterConfig` に `@model_validator(mode="after")` で `default_profile` が `profiles` に存在するかチェック。従来は `profile_by_name` lookup 時 (= 最初のリクエスト) まで typo が検出されなかった
+  - Added a `@model_validator(mode="after")` on `CodeRouterConfig` checking that `default_profile` exists among `profiles`. Previously a typo went undetected until the `profile_by_name` lookup (i.e., the first request)
 - **`coderouter/config/loader.py`**
-  - `CODEROUTER_MODE` env var (空白 strip 後に truthy なら) を `raw["default_profile"]` に被せてから pydantic validate。model-validator の存在チェックが「effective mode」に対して走る
+  - Overlays the `CODEROUTER_MODE` env var (if truthy after stripping whitespace) onto `raw["default_profile"]` before pydantic validation. This makes the model-validator's existence check run against the "effective mode"
 - **`coderouter/ingress/app.py`**
-  - 起動 log `coderouter-startup` に `default_profile` + `mode_source: "env" | "config"` を追加。operator が「shell が driver してる」か「YAML で決まってる」かを 1 行で把握可能
-- **`tests/test_cli.py`** (新規) — `--mode` → env, `--mode` vs pre-set env, whitespace strip, `--mode` 未指定時は env を触らない、既存 `--config` の回帰テスト (+5)
-- **`tests/test_config.py`** — `CODEROUTER_MODE` env override, 空文字列は ignore, YAML 側で default_profile が不正な場合の fast-fail (+3)
+  - Added `default_profile` + `mode_source: "env" | "config"` to the `coderouter-startup` log at startup. Lets the operator tell at a glance whether "the shell is driving this" or "it's determined by YAML"
+- **`tests/test_cli.py`** (new) — `--mode` → env, `--mode` vs. a pre-set env, whitespace stripping, `--mode` unset doesn't touch the env, plus a regression test for the existing `--config` (+5)
+- **`tests/test_config.py`** — `CODEROUTER_MODE` env override, an empty string is ignored, fast-fail when the YAML-side default_profile is invalid (+3)
 
 ### Changed
 
-- **`tests/conftest.py`** — `_clear_env` fixture に `CODEROUTER_MODE` を追加。テスト間で env が漏れるのを防ぐ既存パターンに合わせた
-- **`README.md`** — Claude Code セクションに `--mode` 例を追加。YAML 側の `default_profile:` を書き換える方法と併記
+- **`tests/conftest.py`** — added `CODEROUTER_MODE` to the `_clear_env` fixture, matching the existing pattern that prevents env leakage between tests
+- **`README.md`** — added a `--mode` example to the Claude Code section, alongside the method of rewriting `default_profile:` in the YAML
 
 ### Design notes
 
-- **なぜ env 一本化?** `--mode` は単に `CODEROUTER_MODE` を export する薄いラッパにした。`uvicorn --reload` が fork で worker を立ち上げる関係で、引数を直接渡すには factory 関数への引数付け足しが必要で、既存の `--config` と同じ env 経由パターンに揃えた方が自然。worker 側は `os.environ.get("CODEROUTER_MODE")` 1 発で拾える
-- **loader で env を raw に被せる順序.** `CodeRouterConfig.model_validate(raw)` の *前* に env override を適用している。これで model-validator の `default_profile exists` チェックが (a) YAML の値に対してではなく (b) 実際に使われる値に対して走る。結果として「YAML は古い profile 名を残してるが env で新しい名前を指してる」というケースが正しく通り、逆に env で typo を打つと起動時に即エラー
-- **空文字列の扱い.** `CODEROUTER_MODE=""` または `CODEROUTER_MODE="   "` は「未設定」と同義に扱う (strip 後 empty なら override しない)。shell で `export FOO=` が「clear」のセマンティクスを持つのに合わせた
-- **fast-fail の境界.** 未知 profile の検出は起動時 + loader 呼び出し時のみ。runtime (リクエスト中) に profile が "消える" ことはないので、毎リクエスト検証するオーバーヘッドは不要
+- **Why consolidate on env alone?** `--mode` was kept as a thin wrapper that just exports `CODEROUTER_MODE`. Since `uvicorn --reload` spawns workers via fork, passing an argument directly would require threading it through to the factory function; aligning with the existing `--config`'s env-based pattern is more natural. The worker side can pick it up with a single `os.environ.get("CODEROUTER_MODE")` call
+- **The order of overlaying env onto raw in the loader.** The env override is applied *before* `CodeRouterConfig.model_validate(raw)`. This makes the model-validator's `default_profile exists` check run against (a) not the YAML's value, but (b) the value actually used. As a result, a case where "the YAML still has an old profile name but env points at the new one" passes correctly, while a typo in env fails immediately at startup
+- **Handling an empty string.** `CODEROUTER_MODE=""` or `CODEROUTER_MODE="   "` are treated as equivalent to "unset" (no override if empty after stripping). Matches the shell semantics where `export FOO=` acts as "clear"
+- **The boundary of fast-fail.** Detection of an unknown profile only happens at startup + when the loader is invoked. Since a profile can never "disappear" at runtime (during a request), validating on every request would be unnecessary overhead
 
 ### Follow-ons
 
-- **v0.6-B**: profile-level `timeout_s` / `append_system_prompt` / `retry_max` override (§9.3 残 #4)
-- **v0.6-C**: `ALLOW_PAID` 宣言的 gate の強化 — startup log に paid provider 列挙 + `chain-paid-gate-blocked` structured log (§9.3 残 #3)
-- **v0.6-D**: `mode_aliases` YAML block で `X-CodeRouter-Mode: coding` → profile 名の mapping (§9.3 残 #5)
+- **v0.6-B**: profile-level `timeout_s` / `append_system_prompt` / `retry_max` overrides (remaining item #4 in §9.3)
+- **v0.6-C**: strengthening the declarative `ALLOW_PAID` gate — enumerating paid providers in the startup log + a `chain-paid-gate-blocked` structured log (remaining item #3 in §9.3)
+- **v0.6-D**: a `mode_aliases` YAML block mapping `X-CodeRouter-Mode: coding` → a profile name (remaining item #5 in §9.3)
 
 ---
 
 ## [v0.5-D] — 2026-04-20 (OpenRouter roster weekly cron)
 
-**Theme: proactive free-tier 棚卸の自動化。** v0.4-B で「消えた後でしか気付けなかった `deepseek-r1:free`」が動機。`scripts/openrouter_roster_diff.py` が `httpx + stdlib` だけで `/api/v1/models` を週次でポーリングし、free-tier (`pricing.prompt` と `pricing.completion` がどちらも数値 0) の差分を `docs/openrouter-roster/CHANGES.md` に newest-first で追記する。`coderouter` パッケージへの import は 0 — cron は本体が mid-change でも安全に動く。
+**Theme: automating proactive free-tier inventory.** Motivated by v0.4-B's experience of only noticing `deepseek-r1:free` had disappeared after the fact. `scripts/openrouter_roster_diff.py` polls `/api/v1/models` weekly using nothing but `httpx + stdlib`, appending free-tier (where both `pricing.prompt` and `pricing.completion` parse as numeric 0) diffs to `docs/openrouter-roster/CHANGES.md` newest-first. Zero imports from the `coderouter` package — the cron works safely even while the main body is mid-change.
 
 - Tests: 243 → **267** (+24)
-- Runbook + 設計メモ: [`docs/openrouter-roster/README.md`](./docs/openrouter-roster/README.md)
+- Runbook + design notes: [`docs/openrouter-roster/README.md`](./docs/openrouter-roster/README.md)
 
 ### Added
 
-- **`scripts/openrouter_roster_diff.py`** — 単一ファイル cron。
-  - `parse_models(raw) -> list[RosterEntry]` — OpenRouter レスポンスから id / context_length / pricing を抽出、malformed row は silent skip
-  - `is_free(entry)` — `pricing.prompt` と `pricing.completion` の双方が数値 0 に parse できた時のみ True。`:free` suffix は見ない (pricing が authoritative、suffix は hint)
-  - `diff_rosters(old, new) -> RosterDiff` — Added / Removed / pricing_changed / context_changed の 4 カテゴリ、id ソート出力
-  - `format_markdown(diff, *, fetched_at) -> str` — Removed を先頭に (`⚠️` 付き) 並べた markdown セクション
-  - `prepend_changes(path, section)` — 既存 CHANGES.md の先頭に追記 (newest-first)、atomic tmp+replace
-  - `run(...)` — 1st invocation は snapshot を書くが CHANGES.md には書かない (baseline noise を避ける)。2nd 以降が実トラッキング
-  - `main(argv)` — `--dry-run` / `--url` / `--snapshot` / `--changes`。exit 0 成功 / exit 2 HTTP エラー
-- **`tests/test_openrouter_roster_diff.py`** — 24 tests, 3 層構成。
-  - Tier 1 (8): `parse_models` / `is_free` / `filter_free` の pure logic
-  - Tier 2 (8): `diff_rosters` / `format_markdown` の pure diff
-  - Tier 3 (8): `run()` orchestration — `httpx_mock` で `/api/v1/models` を差し替え、first-run baseline / 2nd-run Removal 検出 / dry-run no-write / paid 除外 / 無変更 no-op / newest-first prepend / exit code 0/2 の end-to-end
-- **`docs/openrouter-roster/README.md`** — runbook (manual / scheduled の両モード)、triage cheatsheet、"free" の定義 (pricing-based)、future extension 候補 (streaming capability flag / rate-limit band)
+- **`scripts/openrouter_roster_diff.py`** — a single-file cron script.
+  - `parse_models(raw) -> list[RosterEntry]` — extracts id / context_length / pricing from the OpenRouter response; malformed rows are silently skipped
+  - `is_free(entry)` — True only when both `pricing.prompt` and `pricing.completion` parse as numeric 0. Doesn't look at the `:free` suffix (pricing is authoritative, the suffix is just a hint)
+  - `diff_rosters(old, new) -> RosterDiff` — 4 categories: Added / Removed / pricing_changed / context_changed, output sorted by id
+  - `format_markdown(diff, *, fetched_at) -> str` — a markdown section with Removed listed first (marked with `⚠️`)
+  - `prepend_changes(path, section)` — prepends to the existing CHANGES.md (newest-first), via an atomic tmp+replace
+  - `run(...)` — the 1st invocation writes a snapshot but doesn't write to CHANGES.md (avoiding baseline noise). Tracking starts from the 2nd invocation onward
+  - `main(argv)` — `--dry-run` / `--url` / `--snapshot` / `--changes`. Exit 0 on success / exit 2 on an HTTP error
+- **`tests/test_openrouter_roster_diff.py`** — 24 tests across 3 tiers.
+  - Tier 1 (8): pure logic for `parse_models` / `is_free` / `filter_free`
+  - Tier 2 (8): pure diffing for `diff_rosters` / `format_markdown`
+  - Tier 3 (8): `run()` orchestration — swapping `/api/v1/models` via `httpx_mock`, end-to-end coverage of first-run baseline / 2nd-run Removal detection / dry-run no-write / paid exclusion / no-change no-op / newest-first prepend / exit codes 0/2
+- **`docs/openrouter-roster/README.md`** — a runbook (both manual and scheduled modes), a triage cheatsheet, the definition of "free" (pricing-based), and future extension candidates (a streaming-capability flag / a rate-limit band)
 
 ### Design notes
 
-- **なぜ `coderouter` パッケージに置かずに `scripts/` + 独立 import?** v0.4-B の教訓で「roster 棚卸は本体の健全性に依存しない方が良い (本体が壊れている時こそ棚卸したい)」。`stdlib + httpx` だけなら、pre-merge の branch でも、production 凍結中でも、どこからでも 1 コマンドで走る
-- **pricing が authoritative、`:free` suffix は hint.** OpenRouter は時期によって `:free` suffix 付きで nonzero completion 価格を出すことがある (v0.4-B 棚卸期間中に観測)。`test_is_free_does_not_require_free_suffix` で invariant を pin
-- **first-run baseline は silent.** 初回に "Added: 100 models" を書くと log の signal が劣化するので、snapshot だけ書いて CHANGES.md は触らない。トラッキングは 2nd run から
-- **prepend (newest-first) を採用.** `git log -p CHANGES.md` 派の他に `head CHANGES.md` 派もいるので、time 順で直感的な newest-first に寄せた。append だと「最新が末尾」になり head では見えない
-- **週次 cadence 想定。** OpenRouter の roster が日次で変わるほど激しくないのと、週次なら PR レビュー負荷も年間 52 件で許容範囲。schedule skill で登録する場合は平日朝 JST を推奨 (README runbook 参照)
+- **Why put this in `scripts/` with an independent import, rather than inside the `coderouter` package?** A lesson from v0.4-B: "roster inventory is better off not depending on the main body's health (you want to inventory it especially when the main body is broken)." With only `stdlib + httpx`, it can run with a single command from anywhere — a pre-merge branch, or even while production is frozen
+- **Pricing is authoritative; the `:free` suffix is just a hint.** OpenRouter sometimes shows a nonzero completion price with the `:free` suffix still attached, depending on the period (observed during the v0.4-B inventory period). The invariant is pinned via `test_is_free_does_not_require_free_suffix`
+- **The first-run baseline stays silent.** Writing "Added: 100 models" on the first run would degrade the log's signal, so only the snapshot is written and CHANGES.md is left untouched. Tracking starts from the 2nd run
+- **Adopted prepend (newest-first).** Since some prefer `git log -p CHANGES.md` and others prefer `head CHANGES.md`, it leans toward the more intuitive newest-first in time order. With append, "the latest" would end up at the tail, invisible via head
+- **Assumes a weekly cadence.** OpenRouter's roster doesn't change violently enough to need daily checks, and weekly keeps the PR-review load at a tolerable ~52/year. When registering via the schedule skill, weekday mornings JST are recommended (see the README runbook)
 
-### Follow-ons (v0.5-D を起点)
+### Follow-ons (starting from v0.5-D)
 
-- 週次 cron の `schedule` skill 登録 — 手動で README runbook に従うか、skill で週次タスク化するかは運用判断。v0.5-D では script + docs + tests の地盤整備まで
-- 初回 `latest.json` baseline のコミット — v0.5-D 本体では作らず (real `OPENROUTER_API_KEY` は roster GET に不要だが、実データを v0.5.x 内に混ぜたくなかった)。次回マニュアル実行時に自然に生える
-- Streaming capability flag のトラッキング (README §Future extensions) — v0.5 期間中に観測した `gpt-oss-120b:free` の SSE 挙動変化を説明しうる候補。実装コストは data 追加 1 列
+- Registering the weekly cron with the `schedule` skill — whether to follow the README runbook manually or turn it into a scheduled task via the skill is an operational decision. v0.5-D itself only lays the groundwork of script + docs + tests
+- Committing an initial `latest.json` baseline — not done within v0.5-D itself (a real `OPENROUTER_API_KEY` isn't needed for the roster GET, but real data wasn't wanted mixed into v0.5.x). It'll naturally appear on the next manual run
+- Tracking the streaming capability flag (README §Future extensions) — a candidate that could explain the SSE behavior change observed in `gpt-oss-120b:free` during the v0.5 period. Implementation cost is adding 1 data column
 
 ---
 
 ## [v0.5.1] — 2026-04-20 (closeout pack)
 
-**Theme: v0.5 retrospective Follow-ons を 3 本束ねて締める。** v0.5-verify の real-machine run から出てきた 3 件の小 Follow-on (payload 型付け / streaming verify / 401 uniform 警告) を closeout pack として一括投入。コア挙動の変更はゼロ (ログ shape の型付け + 観測ツール + 診断ログの追加のみ)、`NoProvidersAvailableError` などの public surface は非破壊。
+
+**Theme: close out 3 v0.5-retrospective follow-ons in a single bundle.** Bundles 3 small follow-ons that emerged from v0.5-verify's real-machine run (payload typing / streaming verify / a 401-uniform warning) into a closeout pack. Zero change to core behavior (only typing the log shape + an observation tool + an additional diagnostic log); the public surface, including `NoProvidersAvailableError`, remains non-breaking.
 
 - Tests: 225 → **243** (+18)
 - Per-item narrative below: `[v0.5.1-A1]` / `[v0.5.1-A2]` / `[v0.5.1-A3]`
@@ -3827,40 +3831,40 @@ v0.7 各 sub-release の follow-on は該当 section を参照。umbrella level 
 ### Added
 
 - **`coderouter/logging.py`** (A-1)
-  - `CapabilityDegradedReason = Literal["provider-does-not-support", "translation-lossy", "non-standard-field"]` — v0.5 gate trio の 3 reason を型として凍結
-  - `CapabilityDegradedPayload(TypedDict)` — `provider` / `dropped` / `reason` の構造契約
-  - `log_capability_degraded(logger, *, provider, dropped, reason)` — 全 gate が通る single chokepoint。キーワード限定引数で TypedDict contract を static-type で enforce
+  - `CapabilityDegradedReason = Literal["provider-does-not-support", "translation-lossy", "non-standard-field"]` — freezes the v0.5 gate trio's 3 reasons as a type
+  - `CapabilityDegradedPayload(TypedDict)` — the structural contract for `provider` / `dropped` / `reason`
+  - `log_capability_degraded(logger, *, provider, dropped, reason)` — the single chokepoint every gate goes through. Keyword-only arguments statically enforce the TypedDict contract
 - **`coderouter/routing/fallback.py`** (A-3)
   - `_AUTH_STATUS_CODES: Final[frozenset[int]] = frozenset({401, 403})`
-  - `_warn_if_uniform_auth_failure(errors, *, profile)` — chain の全 attempt が同 auth status + 全て non-retryable の時だけ `chain-uniform-auth-failure` warn を吐く。`profile` / `status` / `count` / `providers` / `hint: "probable-misconfig"` を extra に持つ
+  - `_warn_if_uniform_auth_failure(errors, *, profile)` — fires a `chain-uniform-auth-failure` warn only when every attempt in the chain shares the same auth status and all are non-retryable. Carries `profile` / `status` / `count` / `providers` / `hint: "probable-misconfig"` as extras
 - **`scripts/verify_v0_5.sh`** (A-2)
-  - `run_scenario_streaming()` — `curl -N` + SSE 解析で streaming scenario を実行、HTTP 2xx / `capability-degraded` 1 発ちょうど / 全 chunk で `delta.<field>` 不在 の 3 assertion を自動化
-  - `D-reasoning-stream` シナリオ追加 — v0.5-C の "log once per stream" dedup 契約の real-machine 確認
-- **`tests/test_capability_degraded_payload.py`** — Literal 列挙 / TypedDict required_keys / helper emit shape / 3 reason parametrized smoke / logger 名保持 / 払い出し独立性 (+9 tests)
-- **`tests/test_fallback_misconfig_warn.py`** — 1-provider 401 発火 / 403 同扱い / 400 非発火 / retryable 非発火 / mixed status 非発火 / 空 chain 非発火 / streaming path 発火 (+9 tests)
+  - `run_scenario_streaming()` — runs the streaming scenario via `curl -N` + SSE parsing, automating 3 assertions: HTTP 2xx / exactly one `capability-degraded` fire / absence of `delta.<field>` in every chunk
+  - Added the `D-reasoning-stream` scenario — real-machine confirmation of v0.5-C's "log once per stream" dedup contract
+- **`tests/test_capability_degraded_payload.py`** — Literal enumeration / TypedDict required_keys / the helper's emit shape / parametrized smoke tests across the 3 reasons / logger-name preservation / dispatch independence (+9 tests)
+- **`tests/test_fallback_misconfig_warn.py`** — fires on a single-provider 401 / 403 treated the same / no fire on 400 / no fire when retryable / no fire on mixed status / no fire on an empty chain / fires on the streaming path (+9 tests)
 
 ### Changed
 
-- **`coderouter/adapters/openai_compat.py`** (A-1) — `log_capability_degraded` を `coderouter.logging` から直接 import。`coderouter.routing.capability` 経由にすると `routing/__init__.py` が `FallbackEngine` → `adapters/registry` → `openai_compat` を再帰的に呼ぶ import cycle が発生するため、leaf の `logging.py` に helper を置いて回避。`generate()` / `stream()` の reasoning strip ログは unified helper 経由に
-- **`coderouter/routing/capability.py`** (A-1) — `CapabilityDegradedReason` / `CapabilityDegradedPayload` / `log_capability_degraded` を `coderouter.logging` から re-export。semantic ownership (capability gate のログ) はこのモジュールが持ちつつ、実体の置き場所は cycle 安全な leaf に委譲
-- **`coderouter/routing/fallback.py`** (A-3) — 4 raise site (generate / stream / generate_anthropic / stream_anthropic) の直前で `_warn_if_uniform_auth_failure(errors, profile=profile)` を呼ぶ。例外 shape は非破壊
+- **`coderouter/adapters/openai_compat.py`** (A-1) — imports `log_capability_degraded` directly from `coderouter.logging`. Going through `coderouter.routing.capability` would trigger an import cycle, since `routing/__init__.py` recursively calls `FallbackEngine` → `adapters/registry` → `openai_compat`; placing the helper in the leaf module `logging.py` avoids this. The reasoning-strip logs in `generate()` / `stream()` now go through the unified helper
+- **`coderouter/routing/capability.py`** (A-1) — re-exports `CapabilityDegradedReason` / `CapabilityDegradedPayload` / `log_capability_degraded` from `coderouter.logging`. This module retains semantic ownership (logging for the capability gate) while delegating the actual location to a cycle-safe leaf
+- **`coderouter/routing/fallback.py`** (A-3) — calls `_warn_if_uniform_auth_failure(errors, profile=profile)` right before all 4 raise sites (generate / stream / generate_anthropic / stream_anthropic). The exception shape remains non-breaking
 
 ### Design notes
 
-- **logging.py を選んだ理由 (A-1)**. `CapabilityDegraded*` の semantic な置き場は `routing/capability.py` だが、実体をそちらに置くと `adapters/openai_compat.py` が import した瞬間 `routing/__init__.py` が eager に走り `FallbackEngine` → `adapters/registry` → `openai_compat` という cycle を踏む (Python の package init の仕様)。`logging.py` は dependency 無しの leaf なので、そこに型 + helper を置いて capability.py から re-export する形で「ソースは leaf / 概念上の所有は routing」を両立。両モジュールの docstring に why を明示
-- **401/403 限定スコープ (A-3)**. 400 "model not found" のような非 retryable error も chain 全滅しうるが、これは env-var 問題ではなく provider-model mismatch。`probable-misconfig` という同じ hint で括ると操作者に誤誘導になるので auth scope に絞った。非 retryable 全般への拡張は future decision
-- **`chain-uniform-auth-failure` は warn であって raise ではない (A-3)**. `NoProvidersAvailableError` の例外 shape を維持しないと既存 ingress / tests が壊れるので、追加情報は **ログレーンに並走** させるのみ。1 行の grep で拾える位置 (既存 `provider-failed` トレイルの直後) に出る
+- **Why `logging.py` was chosen (A-1).** The semantic home for `CapabilityDegraded*` is `routing/capability.py`, but placing the actual implementation there would trigger `routing/__init__.py`'s eager execution the moment `adapters/openai_compat.py` imports it, hitting the cycle `FallbackEngine` → `adapters/registry` → `openai_compat` (a quirk of Python package init). `logging.py` is a dependency-free leaf, so placing the type + helper there and re-exporting from capability.py achieves both "the source lives in a leaf" and "conceptual ownership stays with routing." Both modules' docstrings spell out the why
+- **The 401/403-only scope (A-3).** A non-retryable error like a 400 "model not found" could also wipe out the whole chain, but that's a provider-model mismatch, not an env-var problem. Bundling it under the same `probable-misconfig` hint would mislead the operator, so the scope was narrowed to auth. Extending to non-retryable errors in general is a future decision
+- **`chain-uniform-auth-failure` is a warn, not a raise (A-3).** Since preserving `NoProvidersAvailableError`'s exception shape is required to avoid breaking existing ingress / tests, the additional information only **runs alongside in the log lane.** It appears at a position grep-able in one line (right after the existing `provider-failed` trail)
 
 ### Follow-ons unchanged
 
-- v0.5-D: OpenRouter roster 週次 cron diff (retro §Follow-ons) — v0.5.1 では未着手、次候補
-- 当初 v0.5 スコープの本丸 (`profiles.yaml` / `--mode` CLI / 宣言的 ALLOW_PAID / timeout-retry) — v0.6-A に送り継続
+- v0.5-D: the OpenRouter roster weekly cron diff (retro §Follow-ons) — untouched in v0.5.1, the next candidate
+- The original v0.5-scope centerpiece (`profiles.yaml` / `--mode` CLI / declarative ALLOW_PAID / timeout-retry) — carried forward into v0.6-A
 
 ---
 
 ## [v0.5.0] — 2026-04-20 (umbrella tag for v0.5-A / v0.5-B / v0.5-C)
 
-**Theme: Capability gate trio.** v0.5-A (thinking, request-side strip + chain reorder), v0.5-B (cache_control, observability-only), v0.5-C (OpenRouter `reasoning` field, response-side strip) の 3 サブリリースを一本の tag にまとめる意味合い。gate の共通設計 (unified `capability-degraded` ログ名 / varying `reason` / YAML escape hatch first / SDK 非依存) が 3 ピース通じて確立した。
+**Theme: the Capability gate trio.** Bundles 3 sub-releases into a single tag: v0.5-A (thinking, request-side strip + chain reorder), v0.5-B (cache_control, observability-only), v0.5-C (the OpenRouter `reasoning` field, response-side strip). A shared gate design (a unified `capability-degraded` log name / a varying `reason` / a YAML escape hatch first / SDK-independent) was established across all 3 pieces.
 
 - Commits: `ff7ca27` (v0.5-A) → `e8803da` (v0.5-B) → `e20fb36` (v0.5-C)
 - Tests: 153 → **225** (+72, +47%)
@@ -3873,71 +3877,78 @@ v0.7 各 sub-release の follow-on は該当 section を参照。umbrella level 
 
 ### OpenRouter `reasoning` field passive strip
 
-v0.4-B の棚卸で実機検出した非標準フィールドの適正処理。OpenRouter の一部
-free-tier モデル (実機確認: `openai/gpt-oss-120b:free` 2026-04-20) が OpenAI
-Chat Completions spec 非準拠の `reasoning` フィールドを response choice の
-`message` / `delta` に同梱してくる。
+Proper handling of the non-standard field discovered on real hardware during
+v0.4-B's inventory. Some OpenRouter free-tier models (confirmed on real
+hardware: `openai/gpt-oss-120b:free`, 2026-04-20) bundle a `reasoning` field
+into the response choice's `message` / `delta`, non-compliant with the OpenAI
+Chat Completions spec.
 
-Spec 外の key なので strict downstream (openai SDK の一部 typed class, 厳格な
-validator) が TypeError を出す可能性があり、v0.4 retro §Follow-ons で「passive
-strip + log を将来入れる」と括って保留していた。v0.5-C で adapter 層の出口に
-1 枚噛ませて解決する。
+Since it's a key outside the spec, strict downstream consumers (some typed
+classes in the openai SDK, strict validators) could raise a TypeError. This
+was flagged and deferred in the v0.4 retro §Follow-ons as "add passive strip +
+log in the future." v0.5-C resolves it by inserting a single layer at the
+adapter's exit point.
 
 #### Added
 
 - **`coderouter/config/schemas.py`**
-  - `Capabilities.reasoning_passthrough: bool = False` — opt-out flag。
-    `true` なら strip もログも skip (CodeRouter を reasoning-aware な
-    downstream に中継する時の escape hatch)
+  - `Capabilities.reasoning_passthrough: bool = False` — an opt-out flag.
+    When `true`, both the strip and the log are skipped (an escape hatch for
+    when relaying CodeRouter to a reasoning-aware downstream consumer)
 - **`coderouter/adapters/openai_compat.py`**
-  - `_strip_reasoning_field(choices, *, delta_key)` — 純粋関数。
-    `choices[*].message.reasoning` (non-stream) / `choices[*].delta.reasoning`
-    (stream) を in-place で除去。戻り値は「1 件でも除去したか」の bool
-    (one-shot ログ判定用)。None / 空 list / 非 dict choice は defensive
-    にスキップ
+  - `_strip_reasoning_field(choices, *, delta_key)` — a pure function.
+    Removes `choices[*].message.reasoning` (non-stream) / `choices[*].delta.reasoning`
+    (stream) in-place. Returns a bool indicating whether anything was removed
+    (used to gate the one-shot log). None / an empty list / a non-dict choice
+    are defensively skipped
 
 #### Changed
 
 - **`coderouter/adapters/openai_compat.py`**
-  - `generate()`: response JSON decode 直後、`ChatResponse` 構築前に
-    `_strip_reasoning_field(..., delta_key=False)` を適用。strip が発生
-    したら構造化ログ `capability-degraded` (`provider` / `dropped:
-    ["reasoning"]` / `reason: "non-standard-field"`)
-  - `stream()`: 各 chunk を yield する直前に同じ strip を適用。log は
-    stream 中 **1 回だけ** (local `reasoning_logged` flag) で chunk ごとの
-    連投を防ぐ。長い reasoning track でログが溢れない
-  - v0.5-A (`provider-does-not-support`) / v0.5-B (`translation-lossy`) と
-    同じ `capability-degraded` メッセージ名 + `reason` 識別で grep しやすい
+  - `generate()`: applies `_strip_reasoning_field(..., delta_key=False)` right
+    after decoding the response JSON, before constructing `ChatResponse`. If a
+    strip occurred, logs the structured `capability-degraded` event
+    (`provider` / `dropped: ["reasoning"]` / `reason: "non-standard-field"`)
+  - `stream()`: applies the same strip right before yielding each chunk. The
+    log fires **only once** per stream (a local `reasoning_logged` flag),
+    preventing repeated logging per chunk. Avoids flooding the log on a long
+    reasoning track
+  - Uses the same `capability-degraded` message name + `reason` discriminator
+    as v0.5-A (`provider-does-not-support`) / v0.5-B (`translation-lossy`),
+    keeping it grep-friendly
 
 #### Tests
 
-- **+15 件** (合計 **225 件 green**, 210 → 225)
-  - `test_reasoning_strip.py` (新規):
-    - unit: `_strip_reasoning_field` の message / delta 剥離, no-op 挙動
-      (field 欠落 / None / empty list / 非 dict choice / wrong delta_key),
-      multi-choice
-    - non-streaming: strip + `capability-degraded` ログ発火 / reasoning
-      欠落時は無発火 / `reasoning_passthrough: true` で保持 + 無発火 /
-      content 非破壊
-    - streaming: 全 delta から strip + ログは 1 回のみ / 欠落時は無発火 /
-      passthrough で保持 + 無発火 / `delta.content` 非破壊
+- **+15 cases** (total **225 green**, 210 → 225)
+  - `test_reasoning_strip.py` (new):
+    - Unit: `_strip_reasoning_field`'s message / delta stripping, no-op
+      behavior (field missing / None / empty list / non-dict choice / wrong
+      delta_key), multi-choice
+    - Non-streaming: strip + `capability-degraded` log fires / no fire when
+      reasoning is absent / preserved + no fire with
+      `reasoning_passthrough: true` / content stays intact
+    - Streaming: stripped from every delta + logged only once / no fire when
+      absent / preserved + no fire with passthrough / `delta.content` stays
+      intact
 
 #### Notes
 
-- **既存挙動への影響ゼロ**: `reasoning` を元々出さない provider (llama.cpp /
-  Ollama / OpenRouter の従来モデル / Anthropic 経由) は strip 判定が偽で
-  終わるため、payload も log も変わらない
-- **native anthropic adapter** は対象外。Anthropic wire の response には
-  `reasoning` に相当するフィールドが存在しないため、gate は OpenAI-shape の
-  adapter だけで完結する
-- **実機 verify**: v0.4-B の棚卸で `openai/gpt-oss-120b:free` が返す生
-  response を確認済み (retro §3.2 参照)。v0.5-C はその再現を httpx_mock で
-  テストに落としているので、今後 OpenRouter 側が同じ挙動を続けても継続的に
-  担保される
-- **運用上の使い方**: `reason: "non-standard-field"` で grep すると「どの
-  provider が非標準キーを送ってきたか」が構造化ログから一括で取れる。新
-  モデルが追加されて reasoning 以外の key が出始めたら同じ関数を拡張する
-  想定 (今のところは reasoning だけなのでシンプルに)
+- **Zero impact on existing behavior**: providers that never emitted
+  `reasoning` in the first place (llama.cpp / Ollama / OpenRouter's older
+  models / via Anthropic) end the strip check with a false result, so neither
+  the payload nor the log changes
+- **The native anthropic adapter is out of scope**. Since the Anthropic wire
+  response has no field equivalent to `reasoning`, the gate is entirely
+  contained to the OpenAI-shape adapter
+- **Real-machine verify**: the raw response returned by
+  `openai/gpt-oss-120b:free` was already confirmed during v0.4-B's inventory
+  (see retro §3.2). v0.5-C has reproduced that as a test via httpx_mock, so
+  it stays continuously guaranteed even if OpenRouter keeps the same behavior
+  going forward
+- **Operational usage**: grepping for `reason: "non-standard-field"` gives a
+  bulk view, from the structured log, of "which provider sent a non-standard
+  key." If a new model starts emitting keys other than reasoning, the plan is
+  to extend the same function (kept simple for now, since it's reasoning-only)
 
 ---
 
@@ -3945,84 +3956,101 @@ strip + log を将来入れる」と括って保留していた。v0.5-C で ada
 
 ### cache_control observability
 
-v0.5-A (thinking) に続く capability gate の 2 ピース目。thinking が「未対応
-model に投げると 400」というハードエラーだったのに対して、cache_control は
-もっと性質が違う — Anthropic → OpenAI translation の段階で **silent に落ちる**
-(content block 上のマーカーに OpenAI wire 側の等価物がない)。エラーにならず、
-上流の Anthropic prompt cache の課金最適化が単に無効化されるだけ。
+The 2nd piece of the capability gate, following v0.5-A (thinking). Whereas
+thinking was a hard error — "a 400 if you send it to an unsupported model" —
+cache_control has quite different properties: it **silently drops** during
+the Anthropic → OpenAI translation step (there's no OpenAI-wire equivalent
+for the marker on a content block). It doesn't error; upstream's Anthropic
+prompt-cache billing optimization is simply disabled.
 
-v0.5-B はこの非対称性を踏まえて **observability-only** (no chain reorder /
-no strip) で着地させる:
+Given this asymmetry, v0.5-B lands as **observability-only** (no chain
+reorder / no strip):
 
-- cache_control 付きリクエストが openai_compat provider に渡る際、構造化ログ
-  `capability-degraded` (`reason: "translation-lossy"`) を出す
-- chain 順序は **変えない** — ユーザーの provider 順序は latency / cost の意
-  図を反映しており、cache-hit の節約でそれを上書きしない方針
-- strip もしない — `to_chat_request` の既存 translation が自動で marker を落
-  とすので router 側で追加処理する必要がない
+- When a cache_control-bearing request is routed to an openai_compat
+  provider, it logs the structured `capability-degraded` event
+  (`reason: "translation-lossy"`)
+- Chain order is **not changed** — the user's provider ordering reflects
+  their intent around latency / cost, and the policy is not to override
+  that for cache-hit savings
+- No stripping either — the existing `to_chat_request` translation already
+  drops the marker automatically, so no additional processing is needed on
+  the router side
 
 #### Added
 
-- **`coderouter/routing/capability.py`** — 関数 2 つ + helper 1 つ:
-  - `provider_supports_cache_control(provider)` — `kind: anthropic` は常に
-    True (native passthrough で end-to-end 保持)、`kind: openai_compat` は
-    デフォルト False (wire 等価物なし)。`capabilities.prompt_cache: true` を
-    YAML で明示すると openai_compat でも True に昇格 (escape hatch: 将来
-    OpenAI wire を拡張した upstream が出た場合用)
-  - `anthropic_request_has_cache_control(request)` — `system` (list 形式)
-    `tools[*]` (Pydantic extras 経由) `messages[*].content` (list 形式) を
-    再帰的に walk し、`cache_control` key を持つブロックが 1 つでもあれば
-    True
-  - `_block_has_cache_control(block)` — 内部 helper (dict 判定 + key 存在判定)
+- **`coderouter/routing/capability.py`** — 2 functions plus 1 helper:
+  - `provider_supports_cache_control(provider)` — always True for
+    `kind: anthropic` (preserved end-to-end via native passthrough); defaults
+    to False for `kind: openai_compat` (no wire equivalent). Explicitly
+    declaring `capabilities.prompt_cache: true` in YAML promotes it to True
+    even for openai_compat (an escape hatch for when a future upstream
+    extends the OpenAI wire)
+  - `anthropic_request_has_cache_control(request)` — recursively walks
+    `system` (list form), `tools[*]` (via Pydantic extras), and
+    `messages[*].content` (list form), returning True if even a single block
+    carries a `cache_control` key
+  - `_block_has_cache_control(block)` — an internal helper (dict check + key
+    existence check)
 
 #### Changed
 
-- **`coderouter/routing/fallback.py`** — `generate_anthropic` / `stream_anthropic`
-  の両方で:
-  - ループ内の provider ごとに `anthropic_request_has_cache_control(request)`
-    かつ `not provider_supports_cache_control(adapter.config)` なら
-    `capability-degraded` ログ (`provider` / `dropped: ["cache_control"]` /
-    `reason: "translation-lossy"`) を発火
-  - v0.5-A の thinking gate (`provider-does-not-support`) とは `reason` が
-    違うので運用側で絞り込み可能
-  - `_resolve_anthropic_chain` は **変更なし** — cache_control では reorder
-    しない。同じメソッド内で 2 種類のログが出るようになっただけ
+- **`coderouter/routing/fallback.py`** — in both `generate_anthropic` /
+  `stream_anthropic`:
+  - For each provider in the loop, if
+    `anthropic_request_has_cache_control(request)` and
+    `not provider_supports_cache_control(adapter.config)`, fires the
+    `capability-degraded` log (`provider` / `dropped: ["cache_control"]` /
+    `reason: "translation-lossy"`)
+  - The `reason` differs from v0.5-A's thinking gate
+    (`provider-does-not-support`), so operators can filter between them
+  - `_resolve_anthropic_chain` is **unchanged** — no reorder occurs for
+    cache_control. The only change is that 2 kinds of logs can now fire
+    within the same method
 
 #### Tests
 
-- **+21 件** (合計 **210 件 green**, 189 → 210)
+- **+21 cases** (total **210 green**, 189 → 210)
   - `test_capability.py` +13:
-    - `provider_supports_cache_control`: anthropic デフォルト True, openai_compat
-      デフォルト False, `prompt_cache: true` で openai_compat を昇格, anthropic
-      に prompt_cache: true は redundant だが壊れない
-    - `anthropic_request_has_cache_control`: plain request / bare-string system /
-      system block with marker / system block without marker / tool-level marker /
-      message content block marker / string-form content は常に False / 2nd
-      message でも検出 / image block 上の marker (type 非依存)
-  - `test_fallback_cache_control.py` (新規) +8:
-    - openai_compat + cache_control → log 発火 (reason=translation-lossy, dropped=["cache_control"])
-    - anthropic kind + cache_control → log 発火しない
-    - plain request + openai_compat → log 発火しない
-    - **chain 順序が reorder されない** (v0.5-A との重要な差分テスト)
-    - `prompt_cache: true` escape hatch でログ抑制
-    - fallback chain で複数の openai_compat を踏む場合、1 provider ごとにログ発火
-    - streaming path の mirror (openai_compat 発火 / anthropic 発火しない)
+    - `provider_supports_cache_control`: defaults to True for anthropic,
+      defaults to False for openai_compat, promoted for openai_compat via
+      `prompt_cache: true`, redundant-but-harmless `prompt_cache: true` on
+      anthropic
+    - `anthropic_request_has_cache_control`: a plain request / a bare-string
+      system / a system block with the marker / a system block without the
+      marker / a tool-level marker / a message content-block marker /
+      string-form content always returns False / detection on a 2nd message
+      too / a marker on an image block (type-independent)
+  - New `test_fallback_cache_control.py` +8:
+    - openai_compat + cache_control → log fires (reason=translation-lossy,
+      dropped=["cache_control"])
+    - anthropic kind + cache_control → log doesn't fire
+    - a plain request + openai_compat → log doesn't fire
+    - **chain order is not reordered** (an important differential test
+      against v0.5-A)
+    - the `prompt_cache: true` escape hatch suppresses the log
+    - when the fallback chain touches multiple openai_compat providers, the
+      log fires once per provider
+    - a mirror for the streaming path (fires for openai_compat / doesn't for
+      anthropic)
 
 #### Notes
 
-- **Anthropic prompt cache の 1024-token 下限**: v0.4 retrospective §What was
-  sharp で既出の footgun。system prompt が 1024 token 未満だと、supported
-  provider でも Anthropic 側が `cached_tokens: 0` を返す。v0.5-B の gate は
-  この Anthropic 側の制約には関知しない (そもそもマーカーを保持することだけを
-  扱う層) — なので「小さい prompt でキャッシュヒットが 0 なのは CodeRouter の
-  バグ」という誤解を招かないよう docstring にコメント済み
-- **実機 verify**: v0.4-D retro で「1321 tokens written on call 1, 1321 read
-  on call 2」を実機で確認済み (native anthropic 経由)。v0.5-B は routing 側の
-  gate なので、translation layer の既存挙動 + 新規ログのみが差分
-- **運用上の使い方**: `reason: "translation-lossy"` で grep すると「ユーザー
-  は cache 意図を送ったが本リクエストは openai_compat に流れた」イベントが
-  全部拾える。頻度が高ければ YAML 側で anthropic-direct を上に挙げるか、
-  openai_compat 側に `prompt_cache: true` を立てる判断材料になる
+- **Anthropic prompt cache's 1024-token floor**: a footgun already noted in
+  the v0.4 retrospective §What was sharp. If the system prompt is under 1024
+  tokens, Anthropic returns `cached_tokens: 0` even for a supported provider.
+  v0.5-B's gate has nothing to do with this Anthropic-side constraint (this
+  layer only deals with preserving the marker) — so the docstring already
+  notes this to avoid the misunderstanding that "a cache-hit of 0 on a small
+  prompt is a CodeRouter bug"
+- **Real-machine verify**: the v0.4-D retro already confirmed on real
+  hardware "1321 tokens written on call 1, 1321 read on call 2" (via native
+  anthropic). Since v0.5-B is a routing-side gate, the only diff is the
+  translation layer's existing behavior plus the new log
+- **Operational usage**: grepping for `reason: "translation-lossy"` captures
+  every event where "the user sent cache intent, but this request was routed
+  to openai_compat." If this happens frequently, it's a decision point for
+  either moving anthropic-direct higher in the YAML or setting
+  `prompt_cache: true` on the openai_compat side
 
 ---
 
@@ -4030,75 +4058,87 @@ no strip) で着地させる:
 
 ### thinking capability gate
 
-v0.4-D retrospective で follow-on に挙げた「capability gate」の最初のピース。
-Anthropic の `thinking: {type: "enabled"}` を対応モデルだけにルーティングし、
-未対応モデルには silent strip + 構造化ログで degrade する。
+The first piece of the "capability gate" flagged as a follow-on in the
+v0.4-D retrospective. Routes Anthropic's `thinking: {type: "enabled"}` only
+to supported models, degrading gracefully with a silent strip plus a
+structured log for unsupported ones.
 
-背景: v0.4-D 実機テストで `claude-sonnet-4-5-20250929` が adaptive thinking
-リクエストに 400 を返す問題にぶつかり、`claude-sonnet-4-6` に差し替えて回避し
-た。ユーザーのモデル選択が「正当性に影響する決定」になっていた状態を、v0.5-A
-で「純粋に経済性の決定」に降格させる。
+Background: the v0.4-D real-hardware test ran into `claude-sonnet-4-5-20250929`
+returning a 400 on an adaptive thinking request, worked around by swapping to
+`claude-sonnet-4-6`. v0.5-A demotes the user's model choice from "a decision
+affecting correctness" to "purely an economic decision."
 
 #### Added
 
-- **`coderouter/routing/capability.py`** (新規) — 純粋関数 3 つ:
-  - `provider_supports_thinking(provider)` — YAML flag 優先、未指定なら
-    model 名 heuristic (`^claude-(opus|sonnet|haiku)-4-(6|7)`, `claude-opus-4-`,
-    `claude-haiku-4-` にマッチすれば capable)。`kind: openai_compat` は
-    model 名にかかわらず常に incapable (OpenAI wire に thinking field なし)
-  - `anthropic_request_requires_thinking(request)` — `model_extra["thinking"]`
-    が `{"type": "enabled"}` かどうかを判定。disabled / 欠落 / 非 dict は False
-  - `strip_thinking(request)` — extras から `thinking` を除いた複製を返す
-    (mutation-free)。`profile` / `anthropic_beta` (exclude=True fields) は保持
+- **`coderouter/routing/capability.py`** (new) — 3 pure functions:
+  - `provider_supports_thinking(provider)` — the YAML flag takes priority; if
+    unset, falls back to a model-name heuristic (capable if it matches
+    `^claude-(opus|sonnet|haiku)-4-(6|7)`, `claude-opus-4-`, or
+    `claude-haiku-4-`). `kind: openai_compat` is always incapable regardless
+    of model name (the OpenAI wire has no thinking field)
+  - `anthropic_request_requires_thinking(request)` — determines whether
+    `model_extra["thinking"]` is `{"type": "enabled"}`. Disabled / missing /
+    non-dict all return False
+  - `strip_thinking(request)` — returns a copy with `thinking` removed from
+    extras (mutation-free). `profile` / `anthropic_beta` (exclude=True
+    fields) are preserved
 - **`coderouter/config/schemas.py`**
-  - `Capabilities.thinking: bool = False` 追加。YAML で明示的に `true` を
-    立てると heuristic を上書きできる (新モデルファミリーが出た時の escape
-    hatch)。`reasoning_control: Literal[...]` (v1.0+ abstract interface) とは
-    別物なので併存
+  - Added `Capabilities.thinking: bool = False`. Explicitly setting `true` in
+    YAML overrides the heuristic (an escape hatch for when a new model family
+    appears). Coexists with `reasoning_control: Literal[...]` (the v1.0+
+    abstract interface), since they're separate concerns
 - **`coderouter/routing/fallback.py`**
-  - `_resolve_anthropic_chain(request)` — `request` が thinking を要求して
-    いる場合、chain を `capable` / `degraded` の 2 バケットに stable-sort し
-    て返す。要求なしの場合は従来通り declared order を保つ
+  - `_resolve_anthropic_chain(request)` — when `request` requires thinking,
+    returns the chain stable-sorted into 2 buckets: `capable` / `degraded`.
+    When not required, preserves the declared order as before
 
 #### Changed
 
-- **`coderouter/routing/fallback.py`** — `generate_anthropic` / `stream_anthropic`
-  の両方で:
-  - `_resolve_chain(...)` → `_resolve_anthropic_chain(...)` に差し替え。戻り値が
-    `list[tuple[BaseAdapter, bool]]` になり、各 provider について
-    `will_degrade` フラグが付く
-  - `will_degrade=True` の provider を呼ぶ前に `strip_thinking(request)` + 構造化
-    ログ `capability-degraded` (`provider` / `dropped: ["thinking"]` / `reason`)
-  - 既存の `try-provider` ログに `"degraded": will_degrade` を追加
-- OpenAI ingress (`/v1/chat/completions`) 経路は変更なし。ChatRequest に
-  thinking field がそもそもないため、capability logic を通す必要がない
+- **`coderouter/routing/fallback.py`** — in both `generate_anthropic` /
+  `stream_anthropic`:
+  - Replaced `_resolve_chain(...)` with `_resolve_anthropic_chain(...)`. The
+    return value is now `list[tuple[BaseAdapter, bool]]`, with a
+    `will_degrade` flag attached per provider
+  - Before calling a provider with `will_degrade=True`, applies
+    `strip_thinking(request)` plus the structured `capability-degraded` log
+    (`provider` / `dropped: ["thinking"]` / `reason`)
+  - Added `"degraded": will_degrade` to the existing `try-provider` log
+- The OpenAI ingress (`/v1/chat/completions`) path is unchanged. Since
+  ChatRequest has no thinking field to begin with, there's no need to route
+  it through the capability logic
 
 #### Tests
 
-- **+36 件** (合計 **189 件 green**)
-  - `test_capability.py` (新規) +27: heuristic の capable/incapable ファミリー
-    (パラメトリック), openai_compat 常時 incapable, YAML 明示 true が両 kind で
-    wins, `requires_thinking` の enabled/disabled/missing/非 dict 各種, `strip`
-    の除去 / 保持 / noop / wire-body clean / 他 extras 非破壊
-  - `test_fallback_thinking.py` (新規) +9: capable-pull-to-front, plain-request
-    順序保持, degraded fallback + `capability-degraded` ログ発火, strip 後の
-    adapter 引数が wire-body レベルで clean, no-degraded-log when capable 成功
-    / plain request, openai_compat は Claude-like slug でも incapable 扱い, YAML
-    thinking:true で heuristic 外モデルを capable に昇格, streaming path も
-    同じ preference
+- **+36 cases** (total **189 green**)
+  - `test_capability.py` (new) +27: the heuristic's capable/incapable
+    families (parametrized), openai_compat always incapable, an explicit
+    YAML `true` winning for both kinds, `requires_thinking`'s
+    enabled/disabled/missing/non-dict variants, `strip`'s removal /
+    preservation / no-op / wire-body cleanliness / other extras staying
+    intact
+  - `test_fallback_thinking.py` (new) +9: pulling capable providers to the
+    front, order preservation for a plain request, degraded fallback +
+    firing the `capability-degraded` log, adapter args staying clean at the
+    wire-body level after stripping, no-degraded-log on capable success /
+    a plain request, openai_compat treated as incapable even for a
+    Claude-like slug, promoting a model outside the heuristic to capable
+    via YAML `thinking:true`, the same preference on the streaming path
 
 #### Notes
 
-- **v0.5-B で予定**: `cache_control` の normalization。thinking と違って
-  「400 vs 200」の二値ではなく「openai_compat 経由だと lossy で pass-through
-  する / anthropic で preserve」という非対称性なので、別リリースで扱う
-- **heuristic table のメンテナンス**: 新しい Claude family が出たら
-  `capability.py` の `_THINKING_CAPABLE_PATTERNS` に regex を追加。allow-list
-  なので古いパターンを削る必要はない (deprecated 家族がマッチしても害はない)
-- **実機 verify は任意**: 本リリースの挙動は 36 件の unit/engine tests で確認
-  済み。実機で chain 再選択を見たい場合は `providers.yaml` に capable/incapable
-  の 2 つを置き、thinking 付きリクエストを `/v1/messages` に投げると
-  `capability-degraded` ログの有無で確認できる
+- **Planned for v0.5-B**: normalizing `cache_control`. Unlike thinking's
+  binary "400 vs 200," this has an asymmetry — "lossy pass-through via
+  openai_compat / preserved via anthropic" — so it's handled in a separate
+  release
+- **Maintaining the heuristic table**: when a new Claude family appears, add
+  a regex to `capability.py`'s `_THINKING_CAPABLE_PATTERNS`. Since it's an
+  allow-list, there's no need to remove old patterns (a deprecated family
+  matching causes no harm)
+- **Real-machine verify is optional**: this release's behavior is already
+  confirmed via 36 unit/engine tests. To see the chain reselection on real
+  hardware, place a capable and an incapable provider in `providers.yaml`
+  and send a thinking-enabled request to `/v1/messages`, checking for the
+  presence or absence of the `capability-degraded` log
 
 ---
 
@@ -4106,42 +4146,46 @@ Anthropic の `thinking: {type: "enabled"}` を対応モデルだけにルーテ
 
 ### `anthropic-beta` header passthrough (Claude Code 400 fix)
 
-Claude Code → CodeRouter → `anthropic-direct` を実機で叩くと Anthropic から
-`400 Bad Gateway` が返ってくる件の修正。ルートコーズは body field
-`context_management` が `anthropic-beta: context-management-2025-06-27` header
-なしでは拒否されること。Claude Code は header を送ってきていたが CodeRouter が
-それを `api.anthropic.com` まで転送していなかった。
+A fix for a `400 Bad Gateway` returned from Anthropic when hitting Claude
+Code → CodeRouter → `anthropic-direct` on real hardware. The root cause is
+that the body field `context_management` gets rejected without the
+`anthropic-beta: context-management-2025-06-27` header. Claude Code was
+sending the header, but CodeRouter wasn't forwarding it on to
+`api.anthropic.com`.
 
 #### Added
 
 - **`coderouter/translation/anthropic.py`**
   - `AnthropicRequest.anthropic_beta: str | None = Field(default=None, exclude=True)`
-    — header-hop 用の stash。`exclude=True` なので `model_dump()` には出てこず、
-    wire body にリークしない
+    — a stash for the header hop. Since `exclude=True`, it never appears in
+    `model_dump()`, so it doesn't leak into the wire body
 - **`coderouter/ingress/anthropic_routes.py`**
-  - `anthropic_beta: str | None = Header(alias="anthropic-beta")` を `messages()`
-    ハンドラ引数に追加
-  - 値が来ていれば `anth_req.anthropic_beta = anthropic_beta` で request に積む
+  - Added `anthropic_beta: str | None = Header(alias="anthropic-beta")` to
+    the `messages()` handler's arguments
+  - If a value is present, sets it on the request via
+    `anth_req.anthropic_beta = anthropic_beta`
 - **`coderouter/adapters/anthropic_native.py`**
-  - `_headers(request: AnthropicRequest | None = None)` シグネチャ変更。
-    `request.anthropic_beta` が set なら `headers["anthropic-beta"]` に verbatim
-    forward。`/v1/chat/completions` 逆翻訳パスは request を渡さないので OpenAI
-    クライアントの既存挙動は変わらない (OpenAI 側は header を持たない前提)
-  - `generate_anthropic` / `stream_anthropic` の `self._headers()` コールを
-    `self._headers(request)` に置換。`healthcheck()` は request 文脈なしで呼ぶ
-    ので引数なしのまま
+  - Changed the `_headers(request: AnthropicRequest | None = None)`
+    signature. If `request.anthropic_beta` is set, forwards it verbatim into
+    `headers["anthropic-beta"]`. Since the `/v1/chat/completions` reverse
+    translation path doesn't pass a request, existing OpenAI-client behavior
+    is unaffected (the OpenAI side has no such header to begin with)
+  - Replaced the `self._headers()` calls in `generate_anthropic` /
+    `stream_anthropic` with `self._headers(request)`. `healthcheck()` is
+    called without a request context, so it stays argument-free
 
 #### Changed
 
-- **`coderouter/routing/fallback.py`** — 診断性能の底上げ。
-  `provider-failed` / `provider-failed-midstream` ログ 6 箇所に
-  `"error": str(exc)[:500]` を追加。今回の 400 の中身 (`context_management`
-  rejection の正確な wording) がこれで構造化ログに乗った。将来の同種のバグも
-  server log を見るだけで当たりがつく
+- **`coderouter/routing/fallback.py`** — improving diagnosability. Added
+  `"error": str(exc)[:500]` to 6 spots in the `provider-failed` /
+  `provider-failed-midstream` logs. This surfaced the exact contents of this
+  400 (the precise wording of the `context_management` rejection) into the
+  structured log. Future bugs of the same kind can now be narrowed down just
+  by reading the server log
 
 #### Tests
 
-- **+6 件** (合計 **153 件 green**)
+- **+6 cases** (total **153 green**)
   - `test_adapter_anthropic.py` +4:
     `test_headers_omit_anthropic_beta_when_not_set` /
     `test_headers_forward_anthropic_beta_when_set` /
@@ -4150,137 +4194,174 @@ Claude Code → CodeRouter → `anthropic-direct` を実機で叩くと Anthropi
   - `test_ingress_anthropic.py` +2:
     `test_anthropic_beta_header_threads_through_to_request` /
     `test_missing_anthropic_beta_header_leaves_field_none`
-- カバー範囲: (a) field が body に leak しないこと (`Field(exclude=True)` の
-  実挙動を outbound JSON で検証) / (b) header が outbound request に乗ること
-  (streaming / non-streaming 両パス) / (c) ingress が header を抽出して
-  request に積むこと / (d) 負のケース (header 未指定 → None のまま)
+- Coverage: (a) the field never leaks into the body (verifying
+  `Field(exclude=True)`'s actual behavior against outbound JSON) / (b) the
+  header reaches the outbound request (both streaming / non-streaming
+  paths) / (c) ingress extracts the header and sets it on the request /
+  (d) the negative case (header unset → stays None)
 
 #### Notes
 
-- 将来、他の beta feature も同じ経路で通せる。`anthropic-beta` はカンマ区切りで
-  複数 feature flag を取る仕様なので、値は触らず verbatim forward が正しい
-- v0.2 §8.4.1 の `?beta=true` クエリ文字列問題とは別件。あちらは Anthropic 側が
-  黙殺するだけだが、今回は body field 不許可で 400 を返す heavier failure mode
+- Other beta features could go through the same path in the future.
+  `anthropic-beta` is specced to take multiple comma-separated feature
+  flags, so forwarding the value verbatim without touching it is correct
+- Unrelated to v0.2 §8.4.1's `?beta=true` query-string issue. That one was
+  simply ignored by Anthropic; this one is a heavier failure mode returning
+  a 400 due to a disallowed body field
 
 ---
 
 ## [v0.4-A] — 2026-04-20
 
-### ChatRequest → AnthropicRequest 逆翻訳 (OpenAI ingress → kind:anthropic provider)
+### ChatRequest → AnthropicRequest reverse translation (OpenAI ingress → kind:anthropic provider)
 
-v0.3.x-1 の設計決定 F で意図的に out of scope としていた「OpenAI クライアントから
-Anthropic-native provider を叩く」経路を埋める。`AnthropicAdapter.generate` /
-`.stream` が retryable=False で reject していたのをやめ、
-`ChatRequest → AnthropicRequest` および `AnthropicResponse → ChatResponse` /
-`AnthropicStreamEvent* → StreamChunk*` の逆方向翻訳で上流 Anthropic Messages API
-を呼ぶようにする。これにより `/v1/chat/completions` ingress と `kind: anthropic`
-provider の組み合わせが対称的に動作するようになる。
+Fills in the path — deliberately left out of scope under design decision F
+in v0.3.x-1 — of "hitting an Anthropic-native provider from an OpenAI
+client." Removes `AnthropicAdapter.generate` / `.stream`'s previous
+retryable=False rejection, instead calling the upstream Anthropic Messages
+API via a reverse translation of `ChatRequest → AnthropicRequest` and
+`AnthropicResponse → ChatResponse` / `AnthropicStreamEvent* → StreamChunk*`.
+This makes the combination of the `/v1/chat/completions` ingress and a
+`kind: anthropic` provider work symmetrically.
 
 #### Added
 
-- **`coderouter/translation/convert.py`** — 逆方向の翻訳ヘルパを追加 (~300 lines)
+- **`coderouter/translation/convert.py`** — added reverse-direction
+  translation helpers (~300 lines)
   - `to_anthropic_request(ChatRequest) → AnthropicRequest`
-    - `role: "system"` メッセージを top-level `system` フィールドに集約（複数 system
-      メッセージは `\n` で結合）
-    - 連続する `role: "tool"` メッセージを 1 つの user turn にまとめ、複数の
-      `tool_result` block として格納（Anthropic canonical shape）
-    - assistant の `tool_calls` を `tool_use` content block に変換
-    - `image_url` content part を `data:` URI 判定で base64 / url source に振り分け
-    - OpenAI `tools` → Anthropic `tools`（`parameters` → `input_schema`）
-    - `tool_choice` 双方向マップ: `"auto"↔{type:auto}` / `"required"↔{type:any}` /
-      `"none"↔{type:none}` / `{type:function}↔{type:tool}`
-    - `max_tokens` 省略時は 4096 をデフォルト（Anthropic は必須、OpenAI は optional）
-    - malformed JSON な `tool_calls.arguments` は `{"_raw": <string>}` に保持
+    - Consolidates `role: "system"` messages into the top-level `system`
+      field (multiple system messages joined with `\n`)
+    - Merges consecutive `role: "tool"` messages into a single user turn,
+      stored as multiple `tool_result` blocks (the Anthropic canonical
+      shape)
+    - Converts an assistant's `tool_calls` into `tool_use` content blocks
+    - Routes `image_url` content parts into base64 or url sources based on
+      whether it's a `data:` URI
+    - Converts OpenAI `tools` → Anthropic `tools` (`parameters` →
+      `input_schema`)
+    - Bidirectional `tool_choice` mapping: `"auto"↔{type:auto}` /
+      `"required"↔{type:any}` / `"none"↔{type:none}` /
+      `{type:function}↔{type:tool}`
+    - Defaults `max_tokens` to 4096 when omitted (Anthropic requires it;
+      OpenAI treats it as optional)
+    - Malformed JSON in `tool_calls.arguments` is preserved as
+      `{"_raw": <string>}`
   - `to_chat_response(AnthropicResponse) → ChatResponse`
-    - 複数 text block は連結、`tool_use` block は top-level `tool_calls` に昇格
-    - stop_reason 逆マップ: `end_turn→stop` / `max_tokens→length` /
+    - Concatenates multiple text blocks; promotes `tool_use` blocks to
+      top-level `tool_calls`
+    - Reverse-maps stop_reason: `end_turn→stop` / `max_tokens→length` /
       `tool_use→tool_calls` / `stop_sequence→stop`
-    - `usage.input_tokens`/`output_tokens` → OpenAI `prompt_tokens` /
-      `completion_tokens` / `total_tokens`
+    - Maps `usage.input_tokens`/`output_tokens` to OpenAI's
+      `prompt_tokens` / `completion_tokens` / `total_tokens`
   - `stream_anthropic_to_chat_chunks(AnthropicStreamEvent*) → StreamChunk*`
-    - stateful 翻訳: Anthropic の per-block index → OpenAI `tool_calls[].index` を
-      `_ReverseStreamState.block_idx_to_tool_idx` で対応付け
-    - 初期 `message_start` で `delta.role = "assistant"` を emit（OpenAI 慣例）
+    - Stateful translation: maps Anthropic's per-block index to OpenAI's
+      `tool_calls[].index` via `_ReverseStreamState.block_idx_to_tool_idx`
+    - Emits `delta.role = "assistant"` on the initial `message_start`
+      (OpenAI convention)
     - `text_delta` → `delta.content`
-    - `tool_use` block_start → `delta.tool_calls[].function.name`（args 空）
-    - `input_json_delta` → `delta.tool_calls[].function.arguments` 断片
-    - 終端で finish_reason 付きチャンク + `choices: []` な usage チャンクを emit
-      （OpenAI `stream_options.include_usage=true` と同形式）
-    - Anthropic `event: error` は `AdapterError(retryable=False)` を raise。engine の
-      v0.3-B mid-stream guard が `MidStreamError` に変換する経路はそのまま
-- **`coderouter/adapters/anthropic_native.py`** — `generate` / `stream` を実装に差替
+    - A `tool_use` block_start → `delta.tool_calls[].function.name` (args
+      empty)
+    - `input_json_delta` → fragments of
+      `delta.tool_calls[].function.arguments`
+    - Emits a finish_reason-bearing chunk plus a `choices: []` usage chunk
+      at the end (matching OpenAI's `stream_options.include_usage=true`
+      shape)
+    - An Anthropic `event: error` raises `AdapterError(retryable=False)`.
+      The engine's existing v0.3-B mid-stream guard path, which converts it
+      to `MidStreamError`, is unaffected
+- **`coderouter/adapters/anthropic_native.py`** — replaced the `generate` /
+  `stream` implementations
   - `generate(ChatRequest) → ChatResponse`:
     `to_anthropic_request` → `self.generate_anthropic` → `to_chat_response`
   - `stream(ChatRequest) → AsyncIterator[StreamChunk]`:
-    `to_anthropic_request` → `self.stream_anthropic` → `stream_anthropic_to_chat_chunks`
-  - retryable semantics は内部で呼ぶ `generate_anthropic` / `stream_anthropic` の
-    ステータスコード分類をそのまま引き継ぐ（429 は retryable、400 は not）
-  - `coderouter_provider` タグは両方向で保持
-- **`coderouter/translation/__init__.py`** — 新規 export
-  - `to_anthropic_request` / `to_chat_response` / `stream_anthropic_to_chat_chunks`
+    `to_anthropic_request` → `self.stream_anthropic` →
+    `stream_anthropic_to_chat_chunks`
+  - Retryable semantics carry over as-is from the status-code
+    classification of the internally-called `generate_anthropic` /
+    `stream_anthropic` (429 retryable, 400 not)
+  - The `coderouter_provider` tag is preserved in both directions
+- **`coderouter/translation/__init__.py`** — new exports:
+  `to_anthropic_request` / `to_chat_response` /
+  `stream_anthropic_to_chat_chunks`
 
 #### Changed
 
-- **`FallbackEngine.generate` / `.stream`** — コード変更なし。`AnthropicAdapter` の
-  OpenAI-shape メソッドが正しく動くようになったため、engine の polymorphic ループが
-  自然に kind:anthropic provider を含む profile を扱えるようになる（混在 chain も含む）
-- **`coderouter/ingress/openai_routes.py`** — 変更なし。`/v1/chat/completions` が
-  `kind: anthropic` provider に到達できる経路が開通（従来は即 500）
+- **`FallbackEngine.generate` / `.stream`** — no code changes. Since
+  `AnthropicAdapter`'s OpenAI-shape methods now work correctly, the
+  engine's polymorphic loop naturally handles a profile that includes a
+  kind:anthropic provider (including a mixed chain)
+- **`coderouter/ingress/openai_routes.py`** — no changes. A path opened up
+  for `/v1/chat/completions` to reach a `kind: anthropic` provider
+  (previously an immediate 500)
 
 #### Tests
 
-v0.3.x-1 完了時点 110 件 → **147 件 (+37 件)**:
+Grew from 110 (at v0.3.x-1 completion) to **147 (+37)**:
 
-- `tests/test_adapter_anthropic.py` — OpenAI-shape エントリポイントの 2 件を
-  「retryable=False で reject」テストから「reverse 翻訳で正常動作」テストに差替 (+2 net)
-  - `test_openai_shaped_generate_reverse_translates`: system / user / assistant+tool_calls /
-    tool / user の 5 メッセージ → 送信 body（system 昇格 / tool_result batching /
-    tools shape / tool_choice map / max_tokens default）を検証、text+tool_use の
-    レスポンスが `ChatResponse` に戻ることを確認
-  - `test_openai_shaped_generate_429_is_retryable`: 429 → retryable=True が reverse
-    経路でも保持される
-  - `test_openai_shaped_stream_reverse_translates`: SSE を `adapter.stream` で消費し、
-    role 初期チャンク / content delta / finish / trailing usage の順を検証
-  - `test_openai_shaped_stream_anthropic_error_event_is_non_retryable`: upstream
-    `event: error` が `AdapterError(retryable=False)` として surface する
-- `tests/test_translation_reverse.py` **31 件（新設）**
-  - `to_anthropic_request`: simple text / system 昇格 / 複数 system join / system list /
-    assistant tool_calls / 連続 tool batching / tool-then-user flush / image data URI /
-    image URL / tools 変換 / tool_choice 4 ケース / max_tokens passthrough /
-    malformed JSON args / 空 user 省略 / 空 assistant placeholder / stream+profile+stop
-  - `to_chat_response`: text only / tool_use only / mixed / 複数 text 連結 /
-    stop_reason 4 ケース
-  - `stream_anthropic_to_chat_chunks`: text stream / tool_use stream (args 断片結合) /
-    parallel tool_use blocks の index 分離 / `event: error` → retryable=False
-- `tests/test_fallback_anthropic.py` **+4 件**
+- `tests/test_adapter_anthropic.py` — replaced 2 OpenAI-shape entry-point
+  tests, previously "reject with retryable=False," with "works correctly
+  via reverse translation" (+2 net)
+  - `test_openai_shaped_generate_reverse_translates`: verifies the outbound
+    body (system consolidation / tool_result batching / tools shape /
+    tool_choice mapping / max_tokens default) for 5 messages — system /
+    user / assistant+tool_calls / tool / user — and confirms a text+tool_use
+    response comes back as a `ChatResponse`
+  - `test_openai_shaped_generate_429_is_retryable`: confirms retryable=True
+    is preserved for a 429 even through the reverse path
+  - `test_openai_shaped_stream_reverse_translates`: consumes SSE via
+    `adapter.stream`, verifying the order of the initial role chunk /
+    content delta / finish / trailing usage
+  - `test_openai_shaped_stream_anthropic_error_event_is_non_retryable`:
+    confirms an upstream `event: error` surfaces as
+    `AdapterError(retryable=False)`
+- `tests/test_translation_reverse.py` **31 cases (new)**
+  - `to_anthropic_request`: simple text / system consolidation / joining
+    multiple system messages / a system list / assistant tool_calls /
+    consecutive tool batching / tool-then-user flush / an image data URI /
+    an image URL / tools conversion / 4 tool_choice cases / max_tokens
+    passthrough / malformed JSON args / omitting an empty user / an empty
+    assistant placeholder / stream+profile+stop
+  - `to_chat_response`: text only / tool_use only / mixed / concatenating
+    multiple text blocks / 4 stop_reason cases
+  - `stream_anthropic_to_chat_chunks`: a text stream / a tool_use stream
+    (joining arg fragments) / index separation for parallel tool_use blocks
+    / `event: error` → retryable=False
+- `tests/test_fallback_anthropic.py` **+4 cases**
   - `test_openai_generate_routes_to_kind_anthropic_via_reverse_translation`
   - `test_openai_stream_routes_to_kind_anthropic_via_reverse_translation`
   - `test_openai_generate_mixed_chain_falls_over_openai_to_anthropic`
   - `test_openai_stream_midstream_kind_anthropic_raises_midstream_error`
 
-テスト合計: **147 passed**。lint: v0.4-A で導入した issue は 0。
+Test total: **147 passed**. Lint: 0 issues introduced by v0.4-A.
 
 #### Design Decisions
 
-- **A**: adapter 層で透過的に変換する（engine を変えない）。`FallbackEngine.generate` /
-  `.stream` は provider kind を気にせずループするため、reverse 翻訳は
-  `AnthropicAdapter.generate` / `.stream` の内部実装で閉じる
-- **B**: client 送信の `model` は placeholder 扱いとし、provider config の `model` が
-  常に優先（v0.3.x-1 の openai_compat / anthropic-native ルールと同じ）
-- **C**: OpenAI の `role: "tool"` を複数連続して受けた場合、Anthropic の canonical shape
-  （1 つの user turn に複数の `tool_result` block）にまとめる
-- **D**: Anthropic `event: error` → `AdapterError(retryable=False)`。初期の
-  `message_start` で既に role チャンクを emit 済みなので engine の mid-stream guard
-  が `MidStreamError` に変換する動作も検証済み
+- **A**: convert transparently at the adapter layer (leave the engine
+  unchanged). Since `FallbackEngine.generate` / `.stream` loop without
+  caring about the provider kind, the reverse translation stays entirely
+  self-contained within `AnthropicAdapter.generate` / `.stream`'s internal
+  implementation
+- **B**: treat the `model` sent by the client as a placeholder; the
+  provider config's `model` always takes priority (the same rule as
+  v0.3.x-1's openai_compat / anthropic-native rules)
+- **C**: when receiving multiple consecutive OpenAI `role: "tool"`
+  messages, consolidate them into Anthropic's canonical shape (a single
+  user turn with multiple `tool_result` blocks)
+- **D**: an Anthropic `event: error` → `AdapterError(retryable=False)`.
+  Since the role chunk is already emitted at the initial `message_start`,
+  the engine's mid-stream guard converting this to `MidStreamError` has
+  also been verified to work correctly
 
 #### Known Limitations
 
-- 「OpenAI ingress → kind:anthropic provider」経路で送る場合、`max_tokens` を
-  client が省略すると 4096 にデフォルトされる。精密に制御したいユーザは
-  `/v1/chat/completions` body に `max_tokens` を明示する必要あり
-- Anthropic 独自の `cache_control` / `thinking` ブロックは OpenAI 側に等価表現が
-  ないため、OpenAI ingress からは設定不可。cache_control を活かしたい場合は
-  v0.3.x-1 で追加した `/v1/messages` ingress を使う
+- When sending via the "OpenAI ingress → kind:anthropic provider" path, if
+  the client omits `max_tokens`, it defaults to 4096. Users who want
+  precise control need to explicitly set `max_tokens` in the
+  `/v1/chat/completions` body
+- Anthropic-specific `cache_control` / `thinking` blocks have no OpenAI-side
+  equivalent, so they can't be set from the OpenAI ingress. Users who want
+  to make use of cache_control should use the `/v1/messages` ingress added
+  in v0.3.x-1
 
 ---
 
@@ -4288,236 +4369,297 @@ v0.3.x-1 完了時点 110 件 → **147 件 (+37 件)**:
 
 ### Anthropic Native Adapter (passthrough)
 
-Claude 本家 / OpenRouter の Anthropic 互換エンドポイントに対し、翻訳コスト
-ゼロで素通しする native adapter。`ProviderConfig.kind: "anthropic"` で有効化し、
-`/v1/messages` → `AnthropicAdapter` → upstream Anthropic Messages API の経路で
-cache_control / thinking / structured tool_use などの Anthropic 固有フィールドを
-そのまま活用できるようにする。openai_compat provider と混在した fallback chain
-もサポート（native 先頭 → openai_compat 後続、あるいはその逆）。
+A native adapter that passes through, at zero translation cost, to Claude's
+own or OpenRouter's Anthropic-compatible endpoints. Enabled via
+`ProviderConfig.kind: "anthropic"`, it lets Anthropic-specific fields —
+cache_control / thinking / structured tool_use, etc. — be used as-is along
+the path `/v1/messages` → `AnthropicAdapter` → the upstream Anthropic
+Messages API. Also supports a fallback chain mixed with openai_compat
+providers (native first → openai_compat afterward, or vice versa).
 
 #### Added
 
 - **`coderouter/adapters/anthropic_native.py`** — `AnthropicAdapter(BaseAdapter)`
-  - 認証: `x-api-key` ヘッダ（Authorization: Bearer ではない）、`api_key_env` から取得
-  - `anthropic-version: 2023-06-01` をデフォルト付与。`extra_body.anthropic_version` で上書き可
-  - `base_url` は `/v1` 終端有無の両方を正規化して `{base}/v1/messages` を叩く
-  - `generate_anthropic(AnthropicRequest) → AnthropicResponse` — httpx 直叩きの passthrough
+  - Auth: the `x-api-key` header (not Authorization: Bearer), sourced from `api_key_env`
+  - Defaults `anthropic-version: 2023-06-01`; overridable via `extra_body.anthropic_version`
+  - Normalizes `base_url` regardless of whether it ends in `/v1`, hitting `{base}/v1/messages`
+  - `generate_anthropic(AnthropicRequest) → AnthropicResponse` — a direct httpx passthrough call
   - `stream_anthropic(AnthropicRequest) → AsyncIterator[AnthropicStreamEvent]`
-    - SSE を `event:` / `data:` ペアで buffer、空行境界で block 確定
-    - heartbeat コメント行と malformed block は silently skip
-  - OpenAI-shape の `generate` / `stream` は `retryable=False` の `AdapterError` を raise
-    （逆翻訳 `ChatRequest → AnthropicRequest` は設計決定 F で out of scope）
-  - retryable status code: `{404, 408, 425, 429, 500, 502, 503, 504}`
-  - クライアント送信の `model` は strip、provider config の `model` が常に優先
-- **`coderouter/routing/fallback.py`** — Anthropic 用 dispatch 追加 (~110 lines)
+    - Buffers SSE as `event:` / `data:` pairs, finalizing a block at blank-line boundaries
+    - Silently skips heartbeat comment lines and malformed blocks
+  - The OpenAI-shape `generate` / `stream` raise an `AdapterError` with
+    `retryable=False` (the reverse translation `ChatRequest → AnthropicRequest`
+    is out of scope per design decision F)
+  - Retryable status codes: `{404, 408, 425, 429, 500, 502, 503, 504}`
+  - Strips the client-sent `model`; the provider config's `model` always wins
+- **`coderouter/routing/fallback.py`** — added Anthropic-specific dispatch (~110 lines)
   - `generate_anthropic(AnthropicRequest) → AnthropicResponse`:
-    adapter ごとに `isinstance(adapter, AnthropicAdapter)` で native / openai_compat を切替。
-    native は passthrough、openai_compat は `to_chat_request` → `adapter.generate`
-    → `to_anthropic_response(allowed_tool_names=...)` の経路（v0.3-A repair が発火）
+    switches between native / openai_compat per adapter via
+    `isinstance(adapter, AnthropicAdapter)`. Native is a straight passthrough;
+    openai_compat goes through `to_chat_request` → `adapter.generate` →
+    `to_anthropic_response(allowed_tool_names=...)` (triggering the v0.3-A repair)
   - `stream_anthropic(AnthropicRequest) → AsyncIterator[AnthropicStreamEvent]`:
-    native は `adapter.stream_anthropic` を直 passthrough、openai_compat + tools は
-    v0.3-D downgrade（内部非 stream → repair → `synthesize_anthropic_stream_from_response`）、
-    openai_compat no-tools は `stream_chat_to_anthropic_events` 経由の真 streaming
-  - mid-stream ガードは既存 `stream()` と同一セマンティクスを維持
-    （first event 送出後の `AdapterError` → `MidStreamError`、fallback 禁止）
+    native does a straight passthrough of `adapter.stream_anthropic`;
+    openai_compat + tools uses the v0.3-D downgrade (internal non-stream →
+    repair → `synthesize_anthropic_stream_from_response`); openai_compat
+    without tools uses real streaming via `stream_chat_to_anthropic_events`
+  - The mid-stream guard preserves the same semantics as the existing
+    `stream()` (`AdapterError` after the first event is sent →
+    `MidStreamError`, no fallback allowed)
 
 #### Changed
 
-- **`coderouter/config/schemas.py`** — `ProviderConfig.kind` の `Literal` に `"anthropic"` を追加
-  （`openai_compat` と並列）。既存設定は default のまま `openai_compat` が継続
-- **`coderouter/adapters/registry.py`** — `build_adapter` が `kind="anthropic"` で
-  `AnthropicAdapter` をインスタンス化するよう分岐
-- **`coderouter/ingress/anthropic_routes.py`** — v0.3-D downgrade ロジックを engine に移設した
-  副作用で大幅に簡素化。`messages()` ハンドラは `engine.generate_anthropic` /
-  `engine.stream_anthropic` を呼ぶだけになり、ingress は HTTP 境界 + SSE wire format の
-  責務のみ保持。`_anthropic_sse_iterator` は engine から流れる event を wrap しつつ
-  `NoProvidersAvailableError → overloaded_error` / `MidStreamError → api_error` に変換
-- **`examples/providers.yaml`** — `anthropic-direct` サンプル provider を追記
-  (`kind: anthropic`, `paid: true`, `ANTHROPIC_API_KEY` 参照)
+- **`coderouter/config/schemas.py`** — added `"anthropic"` to `ProviderConfig.kind`'s
+  `Literal` (alongside `openai_compat`). Existing configs continue defaulting to `openai_compat`
+- **`coderouter/adapters/registry.py`** — `build_adapter` now branches to
+  instantiate `AnthropicAdapter` for `kind="anthropic"`
+- **`coderouter/ingress/anthropic_routes.py`** — substantially simplified as a
+  side effect of moving the v0.3-D downgrade logic into the engine. The
+  `messages()` handler now just calls `engine.generate_anthropic` /
+  `engine.stream_anthropic`, with ingress retaining only the responsibility
+  for the HTTP boundary + SSE wire format. `_anthropic_sse_iterator` wraps
+  events flowing from the engine while converting
+  `NoProvidersAvailableError → overloaded_error` /
+  `MidStreamError → api_error`
+- **`examples/providers.yaml`** — added an `anthropic-direct` sample provider
+  (`kind: anthropic`, `paid: true`, referencing `ANTHROPIC_API_KEY`)
 
 #### Tests
 
-v0.3 完了時点 87 件 → **110 件 (+23 件)**:
+Grew from 87 (at v0.3 completion) to **110 (+23)**:
 
-- `tests/test_adapter_anthropic.py` **11 件（新設）**
-  - URL 正規化 (`/v1` 終端有無両対応)
-  - `x-api-key` / `anthropic-version` ヘッダ（default / override 両方）
-  - OpenAI-shape `generate` / `stream` は retryable=False で reject
-  - `generate_anthropic`: payload shape（client の model は無視、provider config が勝つ）、
-    429 / 400 / 500 の status マッピング
-  - `stream_anthropic`: SSE パースで `event:`/`data:` ペアを AnthropicStreamEvent に、
-    `stream: true` が body に入る、初期 4xx は AdapterError、heartbeat / malformed block skip
-- `tests/test_fallback_anthropic.py` **12 件（新設）**
-  - native passthrough / openai_compat 経由の round-trip
-  - tool-call repair が openai_compat 経由の generate_anthropic でも発火
-  - 混在 chain（native → openai_compat / openai_compat → native）の fallback 双方向
-  - 全 provider 失敗 → `NoProvidersAvailableError`、non-retryable は即中断
-  - stream: native 真 streaming、openai_compat no-tools 真 streaming、
-    openai_compat + tools は downgrade（`generate_calls` のみ埋まり `stream_calls == []`）、
-    **native + tools は downgrade せず** native の structured tool_use を passthrough
-  - mid-stream 失敗 → `MidStreamError`、初期失敗は従来どおり fallback
-- `tests/test_ingress_anthropic.py` — engine への責務移譲に合わせ stub engines を
-  `AnthropicRequest` / `AnthropicResponse` / `AnthropicStreamEvent` を直接やり取りする
-  形にリライト。downgrade 関連の ingress 側テストは engine 側 (`test_fallback_anthropic.py`)
-  に移譲
+- `tests/test_adapter_anthropic.py` **11 cases (new)**
+  - URL normalization (both with and without a trailing `/v1`)
+  - `x-api-key` / `anthropic-version` headers (both default and override)
+  - OpenAI-shape `generate` / `stream` reject with retryable=False
+  - `generate_anthropic`: payload shape (the client's model is ignored, the
+    provider config wins), status mapping for 429 / 400 / 500
+  - `stream_anthropic`: SSE parsing turns `event:`/`data:` pairs into
+    AnthropicStreamEvent, `stream: true` lands in the body, an initial 4xx
+    becomes AdapterError, heartbeat / malformed blocks are skipped
+- `tests/test_fallback_anthropic.py` **12 cases (new)**
+  - A round trip for both native passthrough and via openai_compat
+  - Tool-call repair firing even for `generate_anthropic` via openai_compat
+  - Bidirectional fallback across mixed chains (native → openai_compat /
+    openai_compat → native)
+  - All providers failing → `NoProvidersAvailableError`, an immediate abort
+    on non-retryable
+  - Streaming: real streaming for native, real streaming for openai_compat
+    without tools, downgrade for openai_compat + tools (only
+    `generate_calls` gets filled, `stream_calls == []`), and **no downgrade
+    for native + tools** — native's structured tool_use passes through as-is
+  - A mid-stream failure → `MidStreamError`; an initial failure still falls
+    back as before
+- `tests/test_ingress_anthropic.py` — rewritten so the stub engines directly
+  exchange `AnthropicRequest` / `AnthropicResponse` / `AnthropicStreamEvent`,
+  matching the transfer of responsibility to the engine. Downgrade-related
+  ingress-side tests moved to the engine side (`test_fallback_anthropic.py`)
 
-テスト合計: **110 passed**。lint: v0.3.x-1 で導入した issue は 0
-（新規 `anthropic_native.py` の SIM117 は既存 `openai_compat.py` と同じパターンで意図的に踏襲）。
+Test total: **110 passed**. Lint: 0 issues introduced by v0.3.x-1 (the new
+`anthropic_native.py`'s SIM117 deliberately follows the same pattern as the
+existing `openai_compat.py`).
 
 #### Design Decisions
 
-- **A-1**: Anthropic-shape entry points を engine に追加（adapter 側だけで完結させず、
-  既存の fallback / mid-stream guard / profile resolution をそのまま再利用する）
-- **B**: 混在 chain（native + openai_compat が 1 profile に共存）を第一級サポート
-- **C**: SSE は parse ベース（line-based → block-based）で受ける。mid-stream guard を
-  event 単位で効かせるため
-- **D**: 認証は `api_key_env` + `x-api-key` 固定、`anthropic-version` ヘッダ追加
-- **E**: 5 依存原則を維持（`anthropic` SDK は使わず httpx 直叩き）
-- **F**: 逆翻訳（`ChatRequest → AnthropicRequest`）は out of scope。OpenAI クライアントから
-  Anthropic-native provider を叩く経路は今後のスコープ（`generate` / `stream` は
-  retryable=False で即 reject）
+- **A-1**: add Anthropic-shape entry points to the engine (not self-contained
+  within the adapter alone, reusing the existing fallback / mid-stream guard
+  / profile resolution as-is)
+- **B**: first-class support for a mixed chain (native + openai_compat
+  coexisting in a single profile)
+- **C**: SSE is received on a parse basis (line-based → block-based), so the
+  mid-stream guard can act at the event level
+- **D**: auth is fixed to `api_key_env` + `x-api-key`, with the
+  `anthropic-version` header added
+- **E**: preserves the 5-dependency principle (no `anthropic` SDK, raw httpx)
+- **F**: reverse translation (`ChatRequest → AnthropicRequest`) is out of
+  scope. The path of hitting an Anthropic-native provider from an OpenAI
+  client is future scope (`generate` / `stream` reject immediately with
+  retryable=False)
 
 #### Known Limitations
 
-- client が `/v1/messages` に送る `model` は無視され、provider config の `model` が勝つ
-  （OpenAI-compat adapter と同じ挙動）。profile 経由でしかモデルを切替できないが、
-  これは CodeRouter のルーティング設計として意図的
-- `ChatRequest` → `AnthropicRequest` の逆方向翻訳は未実装（設計決定 F）。
-  OpenAI クライアントから Anthropic-native provider を叩きたい場合は v0.4+ の課題
+- The `model` a client sends to `/v1/messages` is ignored; the provider
+  config's `model` wins (the same behavior as the OpenAI-compat adapter).
+  Models can only be switched via a profile, which is a deliberate part of
+  CodeRouter's routing design
+- The reverse translation of `ChatRequest` → `AnthropicRequest` is not yet
+  implemented (design decision F). Hitting an Anthropic-native provider from
+  an OpenAI client is a v0.4+ concern
 
 ---
 
 ## [v0.3.0] — 2026-04-20
 
-### v0.3: 実運用向け品質改善
+### v0.3: quality improvements for real-world operation
 
-Claude Code + ローカル LLM (qwen2.5-coder:14b など) で実運用したときに浮いた
-3つの課題を潰すフェーズ。いずれも v0.2 で「仕様通りには動いているが実モデル
-が歪んだ出力を返したときに壊れる」領域。
+A phase closing 3 issues that surfaced during real-world operation of Claude
+Code + a local LLM (qwen2.5-coder:14b etc.). All 3 fall into the area of
+"working as specced, but breaking once a real model returns malformed
+output" left over from v0.2.
 
 #### Added
 
 - **Tool-call repair (non-streaming / v0.3-A)** — `coderouter/translation/tool_repair.py`
-  - 上流モデル（特に qwen2.5-coder:14b）が `tool_calls` フィールドを使わず
-    `{"name": ..., "arguments": ...}` を平文 text で返す失敗パターンに対応
-  - balanced-brace scanner（文字列/エスケープ認識）で text body から JSON を抽出
-  - fenced ``` ```json ``` ブロックも検出
-  - リクエストが宣言した tool 名 allowlist に照合し、未知の tool 名は text のまま残す
-  - 抽出された JSON は OpenAI `tool_calls` 形式に正規化され、後段で通常どおり
-    Anthropic `tool_use` content block に変換される
-  - `to_anthropic_response(..., allowed_tool_names=[...])` で呼び出し
+  - Handles the failure pattern where an upstream model (especially
+    qwen2.5-coder:14b) doesn't use the `tool_calls` field, instead returning
+    `{"name": ..., "arguments": ...}` as plain text
+  - Extracts JSON from the text body via a balanced-brace scanner (aware of
+    strings/escapes)
+  - Also detects fenced ` ```json ` blocks
+  - Cross-checks against the tool-name allowlist declared by the request;
+    unknown tool names are left as plain text
+  - Extracted JSON is normalized into the OpenAI `tool_calls` shape, later
+    converted as usual into an Anthropic `tool_use` content block
+  - Invoked via `to_anthropic_response(..., allowed_tool_names=[...])`
 - **Mid-stream fallback guard (v0.3-B)** — `coderouter/routing/fallback.py`
-  - 新しい例外 `MidStreamError(provider, original)` を追加
-  - `FallbackEngine.stream()` は first byte 送出後に AdapterError が出たら
-    次 provider に fall through せず `MidStreamError` を raise
-  - `_anthropic_sse_iterator` が `MidStreamError` を捕まえ `event: error` /
-    `type: api_error` を emit して SSE を閉じる（「最初の 1 byte も出せない」
-    `overloaded_error` とは区別）
-  - 目的: Claude Code の画面に部分応答 + 重複コンテンツが届く事故を防ぐ
+  - Added a new exception, `MidStreamError(provider, original)`
+  - `FallbackEngine.stream()` now raises `MidStreamError` instead of falling
+    through to the next provider if an AdapterError occurs after the first
+    byte has been sent
+  - `_anthropic_sse_iterator` catches `MidStreamError`, emitting
+    `event: error` / `type: api_error` and closing the SSE (distinguished
+    from `overloaded_error`, which is "couldn't even send the first byte")
+  - Purpose: prevent Claude Code's screen from receiving a partial response
+    plus duplicated content
 - **Usage aggregation (v0.3-C)** — `coderouter/translation/convert.py`
-  - stream 終端の `message_delta.usage.output_tokens` を正しく埋める
-  - 優先順位: upstream の `completion_tokens`（authoritative） > `(emitted_chars + 3) // 4` 概算
-  - `input_tokens` は upstream が `prompt_tokens` を送ってきた場合のみ反映
-  - OpenAI-compat adapter は streaming 時に自動で `stream_options: {"include_usage": true}` を付与。
-    provider 側が `extra_body` で上書きしていればそちらが優先
-  - Ollama のように flag を無視する upstream でも、char 概算のおかげで 0 にはならない
+  - Correctly fills `message_delta.usage.output_tokens` at the end of a stream
+  - Priority: upstream's `completion_tokens` (authoritative) >
+    `(emitted_chars + 3) // 4` as an estimate
+  - `input_tokens` is only populated if upstream sends `prompt_tokens`
+  - The OpenAI-compat adapter now automatically attaches
+    `stream_options: {"include_usage": true}` when streaming. If the
+    provider overrides it via `extra_body`, that takes priority
+  - Even for upstream servers that ignore the flag, like Ollama, the char
+    estimate keeps the value from being zero
 - **Tool-call repair (streaming / v0.3-D)** — strategy 2: downgrade to non-stream
-  - `tools` を宣言した streaming リクエストは内部で `stream=false` に切り替え、
-    v0.3-A の repair を通してから `synthesize_anthropic_stream_from_response` で
-    Anthropic SSE イベント列を合成して返す
-  - クライアントから見た wire はあくまで streaming（`message_start → … → message_stop`）
-  - tool を含まない streaming は従来通り真の streaming パス
-  - トレードオフ: tool ターンは first-byte latency が full response 時間まで伸びる
-    （tool ターンは実質的に「完成してから次の手」が前提なので許容）
+  - A streaming request that declares `tools` internally switches to
+    `stream=false`, runs through v0.3-A's repair, then synthesizes an
+    Anthropic SSE event sequence via
+    `synthesize_anthropic_stream_from_response`
+  - From the client's view, the wire is still streaming
+    (`message_start → … → message_stop`)
+  - Streaming without tools continues to use the real streaming path as before
+  - Trade-off: for a tool turn, first-byte latency stretches out to the full
+    response time (acceptable since a tool turn effectively presumes
+    "act on the finished result" anyway)
 
 #### Changed
 
-- `coderouter/adapters/openai_compat.py` — streaming 時 `stream_options.include_usage` を既定で true
-- `coderouter/translation/__init__.py` — `synthesize_anthropic_stream_from_response` を export
-- `coderouter/routing/__init__.py` — `MidStreamError` を export
-- `_handle_delta` が `emitted_chars` を累積（text_delta + tool name + input_json_delta）
+- `coderouter/adapters/openai_compat.py` — defaults `stream_options.include_usage`
+  to true when streaming
+- `coderouter/translation/__init__.py` — exports
+  `synthesize_anthropic_stream_from_response`
+- `coderouter/routing/__init__.py` — exports `MidStreamError`
+- `_handle_delta` now accumulates `emitted_chars` (text_delta + tool name +
+  input_json_delta)
 
 #### Fixed
 
-- **`Message.content = None` が pydantic ValidationError で 500 を返す** — Claude Code が
-  multi-turn 履歴に「tool_use だけ / text なし」の assistant ターンを含めてくると、
-  `_convert_anthropic_message` が `content: None` を吐き、`Message` モデルが reject していた。
-  OpenAI spec は `tool_calls` を持つ assistant message に `content: null` を許可しているので、
-  `coderouter/adapters/base.py` の `Message.content` 型を `str | list[dict[str, Any]] | None = None`
-  に拡張し、`exclude_none=True` のシリアライズで upstream には content キーを送らない挙動に統一。
-  regression test を `tests/test_translation_anthropic.py::test_assistant_message_with_only_tool_use_has_null_content` に追加。
+- **`Message.content = None` triggered a pydantic ValidationError, returning
+  a 500** — when Claude Code includes an assistant turn with "only
+  tool_use / no text" in a multi-turn history, `_convert_anthropic_message`
+  emitted `content: None`, which the `Message` model rejected. Since the
+  OpenAI spec allows `content: null` on an assistant message that carries
+  `tool_calls`, `Message.content`'s type in `coderouter/adapters/base.py`
+  was widened to `str | list[dict[str, Any]] | None = None`, and serialization
+  with `exclude_none=True` unifies behavior so the content key is never sent
+  upstream at all. A regression test was added at
+  `tests/test_translation_anthropic.py::test_assistant_message_with_only_tool_use_has_null_content`.
 
 #### Tests
 
-v0.2 完了時点 54 件 → v0.3 完了後 **86 件（+32 件）**:
+Grew from 54 (at v0.2 completion) to **86 (+32)** after v0.3:
 
-- `tests/test_tool_repair.py` **13 件**（新設） — text 埋込 JSON 抽出の全パターン
-- `tests/test_translation_anthropic.py` **+8 件**
-  - repair 連携 3 件
-  - usage 集計 5 件（upstream 優先 / 概算 fallback / tool args 込み / 空応答 0 / upstream が estimate を override）
-  - synthesizer 3 件（text-only / tool_use / mixed）
-- `tests/test_ingress_anthropic.py` **+4 件**
-  - mid-stream 時の `event: error` / `type: api_error`
-  - tool 付き streaming の downgrade + repair
-  - tool なし streaming は real streaming のまま
-  - downgrade パスでも 502 は error event で surface
-- `tests/test_fallback.py` **+2 件** — mid-stream で MidStreamError, 初期エラーは従来どおり fallback
-- `tests/test_openai_compat.py` **+2 件** — stream_options.include_usage 自動付与 / extra_body 上書き尊重
+- `tests/test_tool_repair.py` **13 cases (new)** — every pattern of
+  extracting JSON embedded in text
+- `tests/test_translation_anthropic.py` **+8 cases**
+  - 3 cases for repair integration
+  - 5 cases for usage aggregation (upstream priority / estimate fallback /
+    including tool args / 0 for an empty response / upstream overriding the
+    estimate)
+  - 3 cases for the synthesizer (text-only / tool_use / mixed)
+- `tests/test_ingress_anthropic.py` **+4 cases**
+  - `event: error` / `type: api_error` during a mid-stream failure
+  - Downgrade + repair for streaming with tools
+  - Streaming without tools stays real streaming
+  - Even in the downgrade path, a 502 still surfaces as an error event
+- `tests/test_fallback.py` **+2 cases** — MidStreamError on a mid-stream
+  failure, an initial error still falls back as before
+- `tests/test_openai_compat.py` **+2 cases** — auto-attaching
+  stream_options.include_usage / respecting an extra_body override
 
-lint (ruff): v0.3 で導入した issue は 0。残 11 件はすべて v0.1/v0.2 由来の既知事項。
+Lint (ruff): 0 issues introduced by v0.3. The remaining 11 are all pre-existing, from v0.1/v0.2.
 
-#### Verified (2026-04-20 実機)
+#### Verified (2026-04-20, real hardware)
 
-Ollama + qwen2.5-coder:14b + Claude Code (`ANTHROPIC_BASE_URL=http://localhost:8088`) で疎通確認。
+Connectivity confirmed with Ollama + qwen2.5-coder:14b + Claude Code
+(`ANTHROPIC_BASE_URL=http://localhost:8088`).
 
-- **(a) tool なし text streaming (curl 直撃 `/v1/messages`)** — real streaming path
-  (`engine.stream()` → `stream_chat_to_anthropic_events`) で
-  `message_start → content_block_start → content_block_delta × N → content_block_stop →
-  message_delta → message_stop` まで spec 準拠。
-  - 1 回目: `usage: {output_tokens: 122, input_tokens: 46}` ← Ollama が
-    `stream_options.include_usage: true` を honor → v0.3-C の **upstream authoritative パス**
-    が発火。
-  - 2 回目: `usage: {output_tokens: 97}` (input_tokens 欠落) ← Ollama が terminal usage chunk
-    を省略 → v0.3-C の **char-based estimate fallback** が発火。2 経路とも実機で踏めた。
-- **(b) Claude Code + tool 付き streaming** — `_anthropic_downgraded_tool_iterator` が
-  動作 (サーバログに `try-provider ... stream: false` → `provider-ok ... stream: false`)。
-  `tool_use` content block が Claude Code UI に tool invocation として描画された
-  (`⏺ Glob()` など)。ただしモデルの tool 選択の妥当性は別レイヤの問題
-  (qwen2.5-coder:14b は `pwd` 要求に対して Bash でなく Glob を選ぶなどした)。
-- **プロファイル経路**: `skip-paid-provider` (openrouter-claude, `ALLOW_PAID=false`)
-  → `ollama-qwen-coder-14b` の fallback を実機で確認。
-- **Bug fix (実機疎通中に発見)**: `Message.content = None` を pydantic が reject して 500
-  を返していた問題を修正。Claude Code は multi-turn 履歴に「tool_use のみ / text なし」の
-  assistant ターンを含めるため、2 ターン目以降で必ず踏む構造のバグだった。
-  - `coderouter/adapters/base.py` の `Message.content` を
-    `str | list[dict[str, Any]] | None = None` に拡張
-  - `_prepare_messages` は `exclude_none=True` で dump するので upstream には
-    content キーごと送らない → OpenAI spec どおりの shape を維持
-  - regression test: `test_translation_anthropic.py::
-    test_assistant_message_with_only_tool_use_has_null_content`
-- **(c) mid-stream guard**: unit test
-  (`test_ingress_anthropic.py::test_streaming_midstream_failure_emits_api_error_event`
-  ほか) でカバー。実機 pkill の timing を qwen の生成速度に合わせるのは困難で、
-  かつ Ollama の runner/serve 2 プロセス構成で graceful close を返されるケースがあり、
-  実機 smoke は optional とした。ロジック自体は代数的にテスト済み。
-- **Claude Code の tool 宣言挙動**: Claude Code は毎ターン全 tool (Bash/Glob/Read/Write/...)
-  を `tools: [...]` で送ってくるため、**Claude Code 経由では常に v0.3-D downgrade path
-  に入る**。real streaming path は tool を宣言しない OpenAI-shape 互換クライアントや
-  Anthropic direct curl でのみ使われる。この構造は CHANGELOG の Known Limitations
-  「tool を含む streaming は実質的に非 streaming と同じ遅延プロファイル」と一致。
+- **(a) text streaming without tools (curl directly hitting `/v1/messages`)**
+  — the real streaming path (`engine.stream()` →
+  `stream_chat_to_anthropic_events`) matches spec through
+  `message_start → content_block_start → content_block_delta × N →
+  content_block_stop → message_delta → message_stop`.
+  - Run 1: `usage: {output_tokens: 122, input_tokens: 46}` ← Ollama honored
+    `stream_options.include_usage: true` → v0.3-C's **upstream-authoritative
+    path** fired.
+  - Run 2: `usage: {output_tokens: 97}` (input_tokens missing) ← Ollama
+    omitted the terminal usage chunk → v0.3-C's **char-based estimate
+    fallback** fired. Both paths were exercised on real hardware.
+- **(b) Claude Code + streaming with tools** — `_anthropic_downgraded_tool_iterator`
+  worked (the server log showed `try-provider ... stream: false` →
+  `provider-ok ... stream: false`). The `tool_use` content block rendered in
+  the Claude Code UI as a tool invocation (e.g., `⏺ Glob()`). However, the
+  correctness of the model's tool choice is a separate-layer concern
+  (qwen2.5-coder:14b, for instance, chose Glob instead of Bash for a `pwd`
+  request).
+- **Profile path**: confirmed on real hardware the fallback from
+  `skip-paid-provider` (openrouter-claude, `ALLOW_PAID=false`) →
+  `ollama-qwen-coder-14b`.
+- **Bug fix (discovered during real-hardware connectivity testing)**: fixed
+  the issue where pydantic rejected `Message.content = None`, returning a
+  500. Since Claude Code includes an assistant turn with "tool_use only, no
+  text" in its multi-turn history, this was a structural bug guaranteed to
+  be hit from the 2nd turn onward.
+  - Widened `Message.content` in `coderouter/adapters/base.py` to
+    `str | list[dict[str, Any]] | None = None`
+  - Since `_prepare_messages` dumps with `exclude_none=True`, the content
+    key is never sent upstream at all → preserving the shape spec-compliant
+    with OpenAI
+  - Regression test:
+    `test_translation_anthropic.py::test_assistant_message_with_only_tool_use_has_null_content`
+- **(c) mid-stream guard**: covered via unit tests (including
+  `test_ingress_anthropic.py::test_streaming_midstream_failure_emits_api_error_event`).
+  Timing a real `pkill` to qwen's generation speed proved difficult, and
+  Ollama's 2-process runner/serve architecture sometimes returns a graceful
+  close, so real-hardware smoke testing was made optional. The logic itself
+  has been tested algebraically.
+- **Claude Code's tool-declaration behavior**: since Claude Code sends all
+  tools (Bash/Glob/Read/Write/...) via `tools: [...]` on every turn,
+  **going through Claude Code always enters the v0.3-D downgrade path.**
+  The real streaming path is only used by OpenAI-shape-compatible clients
+  that don't declare tools, or by an Anthropic-direct curl. This structure
+  matches the CHANGELOG's Known Limitations note that "streaming with tools
+  effectively has the same latency profile as non-streaming."
 
-総テスト件数: **87 passed** (86 + 実機疎通中の bug fix regression 1)。lint clean。
+Total test count: **87 passed** (86 plus 1 regression test for the bug fix
+found during real-hardware connectivity testing). Lint clean.
 
 #### Known Limitations
 
-- qwen2.5-coder:14b のような tool-call を text で返すモデルでも現在は repair で
-  wire 準拠に戻せるが、実際に tool が呼び出せるかは「モデルが引数を正しく組み立てるか」
-  という別レイヤの問題。repair は信号経路の話であり、モデル能力の補完ではない
-- tool を含む streaming は実質的に非 streaming と同じ遅延プロファイル。「tool 判断を
-  ユーザに見せながら stream」は v0.4+ の課題（strategy 1: 投機的 emit + rollback）
-- `input_tokens` は upstream が `prompt_tokens` を送った場合のみ。ローカル
-  tiktoken 同梱での事前計測は依存 5 パッケージ制約（plan.md §5.4）があるため v1.0+ で検討
-- OpenRouter / Claude 本家 API 経由では未検証（v0.3-E で補完予定）
+- Even for a model like qwen2.5-coder:14b that returns tool-calls as text,
+  repair can currently restore wire compliance, but whether the tool can
+  actually be invoked correctly is a separate-layer question of "whether the
+  model assembles the arguments correctly." Repair addresses the signal
+  path, not a substitute for model capability
+- Streaming with tools effectively has the same latency profile as
+  non-streaming. "Streaming while showing the user the tool decision" is a
+  v0.4+ concern (strategy 1: speculative emit + rollback)
+- `input_tokens` is only populated if upstream sends `prompt_tokens`.
+  Pre-measuring locally with a bundled tiktoken is deferred to v1.0+ due to
+  the 5-dependency-package constraint (plan.md §5.4)
+- Unverified via OpenRouter / the official Claude API (planned to be
+  covered in v0.3-E)
 
 ---
 
@@ -4525,53 +4667,77 @@ Ollama + qwen2.5-coder:14b + Claude Code (`ANTHROPIC_BASE_URL=http://localhost:8
 
 ### Anthropic Ingress
 
-Claude Code などの Anthropic クライアントから `ANTHROPIC_BASE_URL=http://localhost:8088`
-で直接 CodeRouter を叩けるようになりました。
+Anthropic clients like Claude Code can now hit CodeRouter directly via
+`ANTHROPIC_BASE_URL=http://localhost:8088`.
 
 #### Added
 
-- **`POST /v1/messages`** — Anthropic Messages API 互換 ingress
-  - 非 streaming / streaming (SSE) 両対応
-  - `message_start → content_block_start → content_block_delta(×N) → content_block_stop → message_delta → message_stop` の spec 準拠順で event 発火
-  - `tool_use` / `tool_result` / `image` / `text` の content block 4 種を双方向変換
-  - `system` は string / block list の両形を受け、内部では 1 本の system message に flatten
-  - `stop_sequences` / `temperature` / `top_p` / `top_k` を passthrough
-  - `anthropic-version` ヘッダを受理（enforce はしない、debug ログに残すのみ）
-  - profile 選択は既存 OpenAI route と同じく body > `X-CodeRouter-Profile` ヘッダ > default の順
-  - 未知 profile は 400、プロバイダ全滅は 502（非 stream）/ `event: error`（stream）
-- **`coderouter/translation/`** 新モジュール
-  - `anthropic.py` — Anthropic wire-format の pydantic models（request / response / stream event + content block 4 種）
-  - `convert.py` — Anthropic ⇄ 共通 `ChatRequest`/`ChatResponse` の双方向変換
+- **`POST /v1/messages`** — an Anthropic Messages API-compatible ingress
+  - Supports both non-streaming and streaming (SSE)
+  - Fires events in the spec-compliant order:
+    `message_start → content_block_start → content_block_delta(×N) → content_block_stop → message_delta → message_stop`
+  - Bidirectionally converts all 4 content block types: `tool_use` /
+    `tool_result` / `image` / `text`
+  - Accepts `system` in either string or block-list form, flattening it
+    internally into a single system message
+  - Passes through `stop_sequences` / `temperature` / `top_p` / `top_k`
+  - Accepts the `anthropic-version` header (not enforced, only kept in the
+    debug log)
+  - Profile selection follows the same order as the existing OpenAI route:
+    body > the `X-CodeRouter-Profile` header > default
+  - An unknown profile returns 400; every provider failing returns 502
+    (non-stream) / an `event: error` (stream)
+- **`coderouter/translation/`** — a new module
+  - `anthropic.py` — pydantic models for the Anthropic wire format (request /
+    response / stream event + all 4 content block types)
+  - `convert.py` — bidirectional conversion between Anthropic and the common
+    `ChatRequest`/`ChatResponse`
     - `to_chat_request`, `to_anthropic_response`
-    - `stream_chat_to_anthropic_events` は stateful に block index を管理（text→tool_use 切替時は text block を先に閉じる、multi tool_call に個別 index）
-  - malformed tool_call JSON は `_raw` 退避で素通しし、後段で修復可能に
-- **`/` と `HEAD /`** に tiny handler — Claude Code 起動時の preflight で 404 を返さないように
-- **テスト +28 件 / 総数 54 件**
-  - `tests/test_translation_anthropic.py` 17 件 — request / response / stream 変換ユニット
-  - `tests/test_ingress_anthropic.py` 11 件 — HTTP 境界、profile 経路、SSE event 順序、エラーマッピング
+    - `stream_chat_to_anthropic_events` stateful manages block indices
+      (closing a text block first before switching to tool_use, assigning a
+      separate index to each of multiple tool_calls)
+  - Malformed tool_call JSON is preserved via an `_raw` stash and passed
+    through, so it can be repaired downstream
+- Added tiny handlers for **`/` and `HEAD /`** — so Claude Code's startup
+  preflight doesn't get a 404
+- **+28 tests / 54 total**
+  - `tests/test_translation_anthropic.py` 17 cases — unit tests for
+    request / response / stream conversion
+  - `tests/test_ingress_anthropic.py` 11 cases — the HTTP boundary, profile
+    path, SSE event ordering, error mapping
 
 ### Changed
 
-- `providers.yaml` — `ollama-qwen-coder-14b` の `timeout_s` を 120 → 300
-  （Claude Code は 15-20K token の巨大 system prompt を毎ターン送るので、14B クラスでは 120s を平気で超えるため）
-- `plan.md` §8 を完了形に更新、§8.4 に実装知見 7 項目、§8.5 に v0.3 以降へ送った項目を明記
+- `providers.yaml` — changed `ollama-qwen-coder-14b`'s `timeout_s` from 120
+  to 300 (since Claude Code sends a huge 15-20K-token system prompt every
+  turn, a 14B-class model can easily exceed 120s)
+- Updated plan.md §8 to completed status, documenting 7 implementation
+  learnings in §8.4 and the items pushed to v0.3+ in §8.5
 
 ### Verified
 
-- `ANTHROPIC_BASE_URL=http://localhost:8088 claude` でフルパス疎通
-  - text 応答・streaming SSE 順序・tool 定義引き渡しまで一周
-- 全 54 テスト green
-- 本家 Ollama / qwen2.5-coder:14b 実機で動作
+- Full-path connectivity confirmed via
+  `ANTHROPIC_BASE_URL=http://localhost:8088 claude`
+  - Covered text responses, streaming SSE ordering, and passing through tool
+    definitions
+- All 54 tests green
+- Confirmed working on real hardware against official Ollama /
+  qwen2.5-coder:14b
 
-### Known Limitations (→ v0.3 以降)
+### Known Limitations (→ v0.3+)
 
-- **tool-call 構造化出力の不安定性**: qwen2.5-coder:14b に Claude Code の 10+ tool 定義を渡すと、
-  `tool_calls` フィールドではなく text 本文に JSON ブロックで返してくることがある。これは翻訳バグではなくモデル能力限界で、
-  v1.0 の「tool-call 信頼性」スコープで text → tool_calls 引き剥がしヒューリスティックを入れる。
-- **mid-stream fallback**: 初バイト送出後に provider が落ちた場合の fallback を現状は禁止していない。
-  v0.3 で `first_byte_sent` ガード + `event: error` emit に変更予定。
-- **`message_delta.usage.output_tokens`** が 0 固定（stream 終端で usage を集計していない）。v0.3 で改修。
-- **Anthropic native adapter** (`kind: "anthropic"`, 翻訳を通さない pass-through) は未実装。v0.3 以降。
+- **Instability of structured tool-call output**: passing Claude Code's 10+
+  tool definitions to qwen2.5-coder:14b sometimes returns a JSON block in
+  the text body instead of using the `tool_calls` field. This isn't a
+  translation bug but a model-capability limit; v1.0's "tool-call
+  reliability" scope will add a text → tool_calls extraction heuristic.
+- **Mid-stream fallback**: falling back to another provider after a provider
+  drops post-first-byte is not currently prohibited. Planned to change to a
+  `first_byte_sent` guard plus emitting `event: error` in v0.3.
+- **`message_delta.usage.output_tokens`** is fixed at 0 (usage isn't
+  aggregated at the end of a stream). To be fixed in v0.3.
+- **The Anthropic native adapter** (`kind: "anthropic"`, a pass-through that
+  skips translation) is not yet implemented. Planned for v0.3+.
 
 ---
 
@@ -4579,39 +4745,55 @@ Claude Code などの Anthropic クライアントから `ANTHROPIC_BASE_URL=htt
 
 ### Walking Skeleton
 
-"OpenAI 互換 ingress + ローカル 1 個 + フォールバック 1 個が動く" の最小骨組み。
+The minimal skeleton where "an OpenAI-compatible ingress plus 1 local
+provider plus 1 fallback" works.
 
 #### Added
 
-- **`POST /v1/chat/completions`** — OpenAI Chat Completions 互換 ingress（非 streaming / streaming SSE）
-- **adapter 層** — `BaseAdapter` + `OpenAICompatAdapter`（llama.cpp / Ollama / OpenRouter / LM Studio / Together / Groq を 1 枚でカバー）
-- **`FallbackEngine`** — 順次 fallback、`retryable=False` で中断、`paid=true` は `ALLOW_PAID=false` 環境で skip
-- **`providers.yaml` / `profiles`** — provider 定義 + fallback chain 名前付け
-- **profile 選択** — body `profile` フィールド > `X-CodeRouter-Profile` ヘッダ > `default_profile` の順
-- **`ProviderConfig.extra_body` / `append_system_prompt`** — モデル固有オプション
-- **JSON 構造化ログ** — `coderouter.routing.fallback` から `try-provider` / `provider-ok` / `provider-failed` / `skip-paid-provider`
-- **`/healthz`** エンドポイント
-- **テスト 26 件**（config / fallback / openai 互換 / profile 選択）
+- **`POST /v1/chat/completions`** — an OpenAI Chat Completions-compatible
+  ingress (non-streaming / streaming SSE)
+- **The adapter layer** — `BaseAdapter` + `OpenAICompatAdapter` (covering
+  llama.cpp / Ollama / OpenRouter / LM Studio / Together / Groq with a
+  single implementation)
+- **`FallbackEngine`** — sequential fallback, aborting on
+  `retryable=False`, skipping `paid=true` providers in an
+  `ALLOW_PAID=false` environment
+- **`providers.yaml` / `profiles`** — provider definitions + named fallback
+  chains
+- **Profile selection** — the order is body `profile` field >
+  `X-CodeRouter-Profile` header > `default_profile`
+- **`ProviderConfig.extra_body` / `append_system_prompt`** — model-specific
+  options
+- **JSON structured logging** — `try-provider` / `provider-ok` /
+  `provider-failed` / `skip-paid-provider` from
+  `coderouter.routing.fallback`
+- **The `/healthz`** endpoint
+- **26 tests** (config / fallback / OpenAI-compat / profile selection)
 
 ### Verified
 
-- curl で fizzbuzz 生成成功
-- fallback: 1 つ目の provider を外すと 2 つ目に自動遷移
-- fast profile 実機確認 (qwen2.5:1.5b → gemma3:1b の 2 ホップ成功)
-- 全 26 テスト green
+- Successfully generated fizzbuzz via curl
+- Fallback: removing the 1st provider automatically transitions to the 2nd
+- Confirmed the fast profile on real hardware (a successful 2-hop from
+  qwen2.5:1.5b → gemma3:1b)
+- All 26 tests green
 
 ### Notable Decisions / Implementation Learnings
 
-- **qwen3.x の thinking モードは抑制不能**
-  - Ollama は `think: false` を落とす / qwen3.5:4b は RL で `/no_think` を拒否
-  - fast profile からは qwen3.x を外し、dedicated `think` profile に移管
-- **Lazy module-level `app`** via `__getattr__`
-  - `uvicorn coderouter.ingress.app:app` は機能させつつ、テスト import で providers.yaml を eager load しない
-- **Bug fix**: `request.model` が provider の model を上書きしていた問題を修正（provider 固有 model を送る仕様に）
-- **Bug fix**: 404 を retryable に変更（ルート違いの fallback を許容）
+- **qwen3.x's thinking mode can't be suppressed**
+  - Ollama drops `think: false` / qwen3.5:4b refuses `/no_think` due to RL
+  - Removed qwen3.x from the fast profile, moving it to a dedicated `think`
+    profile
+- **A lazy module-level `app`** via `__getattr__`
+  - Keeps `uvicorn coderouter.ingress.app:app` working while avoiding an
+    eager load of providers.yaml on test import
+- **Bug fix**: fixed an issue where `request.model` was overwriting the
+  provider's model (now sends the provider-specific model as specced)
+- **Bug fix**: changed 404 to retryable (allowing fallback for a routing
+  mismatch)
 
 ---
 
 ## Unreleased
 
-v0.3 以降の候補は [`plan.md` §8.5](./plan.md) と [`plan.md` §18](./plan.md) を参照。
+See [`plan.md` §8.5](./plan.md) and [`plan.md` §18](./plan.md) for the v0.3+ candidate list.

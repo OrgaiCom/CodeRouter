@@ -1,5 +1,7 @@
 # Launcher ガイド — llama.cpp / vllm / mlx を GUI で起動する
 
+> English: [`launcher.en.md`](./launcher.en.md)
+
 CodeRouter Launcher は、ローカル推論バックエンド(llama.cpp / vllm / mlx)を**画面の操作で起動・管理**するツールです。長い起動コマンドを毎回打つ代わりに、モデルを選んでボタンを押すだけで起動できます。
 
 Launcher には 2 つの形態があります。

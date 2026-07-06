@@ -1,5 +1,7 @@
 # Context Budget Management (v2.0.0)
 
+English: [`context-budget.en.md`](./context-budget.en.md)
+
 長時間 agent session が context window を使い切って死ぬ問題を、CodeRouter が未然に防ぎます。
 
 ## なぜ必要か

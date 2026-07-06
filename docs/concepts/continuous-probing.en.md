@@ -1,6 +1,6 @@
 # Continuous Probing (v2.0-I)
 
-English: [`continuous-probing.en.md`](./continuous-probing.en.md)
+日本語版: [`continuous-probing.md`](./continuous-probing.md)
 
 ## Overview
 

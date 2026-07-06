@@ -1,5 +1,7 @@
 # CodeRouter アーキテクチャ詳細
 
+English: [`architecture.en.md`](./architecture.en.md)
+
 > **README に概要があります → [README.md](../../README.md)**
 > 本ページは内部構造、設定リファレンス、機能の仕組みを図入りで解説します。
 

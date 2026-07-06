@@ -1,5 +1,7 @@
 # CodeRouter ドキュメント / Documentation
 
+English: [`README.en.md`](./README.en.md)
+
 CodeRouter の公開ドキュメント索引です。「やりたいこと」から読むべきページを引けるよう整理しています。
 Index of CodeRouter's public documentation — find the right page by what you want to do.
 

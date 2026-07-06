@@ -151,7 +151,7 @@ tunable via `CODEROUTER_MAX_BODY_BYTES`.
 
 | Gate | Enforced in CI? | Rationale |
 |---|---|---|
-| `pytest` (453 tests) | Yes | Core regression surface |
+| `pytest` (full suite) | Yes | Core regression surface |
 | `ruff check` | Yes | Catches real bugs cheaply |
 | Forbidden-SDK grep | Yes | Architectural invariant (§2.1) |
 | `uv sync --frozen` | Yes | Lockfile drift = fail (§2.2) |

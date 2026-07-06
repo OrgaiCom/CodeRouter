@@ -1,5 +1,7 @@
 # gguf_dl.py
 
+> English: [`gguf_dl.en.md`](./gguf_dl.en.md)
+
 Hugging Face から GGUF（やその他のファイル）をローカルフォルダへダウンロードする補助スクリプトです。`huggingface.co` の URL を貼るだけで `repo_id` / リビジョン / ファイル名を自動解析し、対話モードや一括ダウンロードもサポートします。
 
 新 CLI `hf`（旧 `huggingface-cli`）の薄いラッパーではありますが、

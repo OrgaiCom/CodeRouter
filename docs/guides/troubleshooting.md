@@ -30,7 +30,7 @@ CodeRouter で「うまく動かない」ときに、どこから疑うかを 1 
 coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
-doctor は 6 種類の probe (auth + basic-chat / num_ctx / tool_calls / thinking / reasoning-leak / streaming) を実プロバイダに対して走らせ、`providers.yaml` の宣言と観測の不一致があれば**コピペ可能な YAML パッチ**を出します。
+doctor は 7 種類の probe (auth + basic-chat / num_ctx / tool_calls / thinking / reasoning-leak / streaming / cache) を実プロバイダに対して走らせ、`providers.yaml` の宣言と観測の不一致があれば**コピペ可能な YAML パッチ**を出します。
 
 終了コードは 3 バケット:
 
