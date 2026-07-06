@@ -1,19 +1,7 @@
 {
   "schema_version": 1,
-  "fetched_at": "2026-05-18T01:21:41Z",
+  "fetched_at": "2026-07-06T00:07:28Z",
   "entries": [
-    {
-      "id": "arcee-ai/trinity-large-thinking:free",
-      "context_length": 262144,
-      "pricing_prompt": "0",
-      "pricing_completion": "0"
-    },
-    {
-      "id": "baidu/cobuddy:free",
-      "context_length": 131072,
-      "pricing_prompt": "0",
-      "pricing_completion": "0"
-    },
     {
       "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
       "context_length": 32768,
@@ -21,8 +9,8 @@
       "pricing_completion": "0"
     },
     {
-      "id": "deepseek/deepseek-v4-flash:free",
-      "context_length": 1048576,
+      "id": "cohere/north-mini-code:free",
+      "context_length": 256000,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
@@ -75,12 +63,6 @@
       "pricing_completion": "0"
     },
     {
-      "id": "minimax/minimax-m2.5:free",
-      "context_length": 204800,
-      "pricing_prompt": "0",
-      "pricing_completion": "0"
-    },
-    {
       "id": "nousresearch/hermes-3-llama-3.1-405b:free",
       "context_length": 131072,
       "pricing_prompt": "0",
@@ -101,6 +83,18 @@
     {
       "id": "nvidia/nemotron-3-super-120b-a12b:free",
       "context_length": 1000000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "context_length": 1000000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-content-safety:free",
+      "context_length": 128000,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
@@ -135,20 +129,20 @@
       "pricing_completion": "0"
     },
     {
-      "id": "openrouter/owl-alpha",
-      "context_length": 1048756,
+      "id": "poolside/laguna-m.1:free",
+      "context_length": 262144,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
     {
-      "id": "poolside/laguna-m.1:free",
-      "context_length": 131072,
+      "id": "poolside/laguna-xs-2.1:free",
+      "context_length": 262144,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
     {
       "id": "poolside/laguna-xs.2:free",
-      "context_length": 131072,
+      "context_length": 262144,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     },
@@ -161,12 +155,6 @@
     {
       "id": "qwen/qwen3-next-80b-a3b-instruct:free",
       "context_length": 262144,
-      "pricing_prompt": "0",
-      "pricing_completion": "0"
-    },
-    {
-      "id": "z-ai/glm-4.5-air:free",
-      "context_length": 131072,
       "pricing_prompt": "0",
       "pricing_completion": "0"
     }

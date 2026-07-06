@@ -5,6 +5,29 @@ entries appear at the top. Each section records a delta between two
 consecutive snapshots — not a cumulative list of free-tier models.
 For the current list, see `latest.json` in this directory.
 
+## 2026-07-06T00:07:28Z
+
+### Removed (6) ⚠️
+
+- `arcee-ai/trinity-large-thinking:free` (was: ctx=262144, prompt=0, completion=0)
+- `baidu/cobuddy:free` (was: ctx=131072, prompt=0, completion=0)
+- `deepseek/deepseek-v4-flash:free` (was: ctx=1048576, prompt=0, completion=0)
+- `minimax/minimax-m2.5:free` (was: ctx=204800, prompt=0, completion=0)
+- `openrouter/owl-alpha` (was: ctx=1048756, prompt=0, completion=0)
+- `z-ai/glm-4.5-air:free` (was: ctx=131072, prompt=0, completion=0)
+
+### Added (4)
+
+- `cohere/north-mini-code:free` (ctx=256000)
+- `nvidia/nemotron-3-ultra-550b-a55b:free` (ctx=1000000)
+- `nvidia/nemotron-3.5-content-safety:free` (ctx=128000)
+- `poolside/laguna-xs-2.1:free` (ctx=262144)
+
+### Context changed (2)
+
+- `poolside/laguna-m.1:free`: 131072 → 262144
+- `poolside/laguna-xs.2:free`: 131072 → 262144
+
 ## 2026-05-18T01:21:41Z
 
 ### Removed (8) ⚠️
