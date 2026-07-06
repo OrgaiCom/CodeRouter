@@ -12,7 +12,7 @@ Each symptom is laid out as: what's happening / what to type to confirm / how to
 ## Contents
 
 - [0. First move: `coderouter doctor`](#0-first-move-coderouter-doctor)
-- [1. Five startup / config gotchas (added in v1.6.2)](#1-five-startup--config-gotchas-added-in-v162)
+- [1. Startup / config gotchas](#1-startup--config-gotchas)
 - [2. Reading logs and common patterns](#2-reading-logs-and-common-patterns)
 - [3. Ollama beginner — 5 silent-fail symptoms (v0.7-C)](#3-ollama-beginner--5-silent-fail-symptoms-v07-c)
 - [4. Claude Code integration gotchas (added in v1.6.2)](#4-claude-code-integration-gotchas-added-in-v162)
@@ -44,7 +44,7 @@ Run `doctor` from the **same shell that started the server** so env-var visibili
 
 ---
 
-## 1. Five startup / config gotchas (added in v1.6.2)
+## 1. Startup / config gotchas
 
 The class of "the server isn't even talking upstream correctly". If you see an upstream 401 like `Header of type 'authorization' was missing`, start here.
 
@@ -122,6 +122,33 @@ grep -rn NVIDIA_NIM_API_KEY ~/.zshrc ~/.zprofile ~/.bashrc ~/.bash_profile 2>/de
 ```
 
 Common causes: missing `export` keyword, line in `~/.zprofile` instead of `~/.zshrc`, etc.
+
+### 1-6. Other machines get `Host '...' is not allowed.` (403) — v2.7.0+
+
+You started `coderouter serve --host 0.0.0.0` to expose it on the LAN, but
+another PC gets `{"detail":"Host '192.168.x.x:8088' is not allowed."}` while
+`curl http://localhost:8088/healthz` on the host itself works. If a setup that
+worked on 2.6 broke on 2.7, this is almost certainly it.
+
+Not a bug: v2.7.0 added **Host-header validation** (DNS-rebinding guard). By
+default only loopback Hosts (`localhost` / `127.0.0.1` / `::1`) are accepted.
+
+Fix — allow-list **the IP / hostname clients type in the URL** (comma-separated,
+no port):
+
+```bash
+CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter serve --host 0.0.0.0 --port 8088
+```
+
+When in doubt, copy the value from the error message (minus the port). Note that
+`--host` (which NIC to listen on) and `ALLOWED_HOSTS` (which names clients may
+call you by) are different things. Since v2.7.5, starting with a non-loopback
+bind and no `CODEROUTER_ALLOWED_HOSTS` prints a startup warning.
+
+> ⚠️ The chat endpoints (`/v1/messages` / `/v1/chat/completions`) have no
+> authentication. Only open ALLOWED_HOSTS to a trusted LAN; for internet
+> exposure put an authenticating reverse proxy in front
+> ([security guide](./security.en.md)).
 
 ---
 
