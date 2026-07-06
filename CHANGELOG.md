@@ -9,6 +9,54 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.7.5] — 2026-07-06 (External-bind startup warning + remote-access guide + docs i18n)
+
+Driven by the first field report against the v2.7.0 Host-validation
+guard: a user upgrading 2.6 → 2.7 found `serve --host 0.0.0.0` silently
+403-ing every LAN client (**PR #54**), plus the day's documentation
+overhaul (**PR #51 / #52**). No config-schema changes, no new
+dependencies.
+
+### Added
+
+- **Startup warning for the loopback trap.** `serve` now prints a
+  stderr warning (before uvicorn takes the console) when binding beyond
+  loopback while `CODEROUTER_ALLOWED_HOSTS` is unset/blank — the exact
+  combination where every LAN request gets a 403 from the DNS-rebinding
+  guard with no hint. The message names the env var, states that the
+  value is **this server's address as it appears in the client's URL
+  bar (not the client's IP** — the first field tester got this wrong),
+  and carries the security caveat (chat endpoints are unauthenticated).
+  Loopback binds and configured exposures stay silent. 10 new tests.
+  (PR #54)
+- **Remote-access guide** (`docs/guides/remote-access.md` + `.en.md`):
+  the trust boundary made explicit (ALLOWED_HOSTS is Host validation,
+  not authentication), then four concrete exposure patterns with
+  configs — SSH tunnel (stays loopback), Tailscale (bind the tailnet
+  IP, never `0.0.0.0`), authenticating reverse proxy (Caddy example),
+  raw LAN + firewall for fully trusted home networks only. Cross-linked
+  from troubleshooting §1-6 (new symptom entry with the exact
+  `Host '...' is not allowed.` string) and both READMEs. (PR #54)
+
+### Docs
+
+- **Implementation-accuracy audit** across the living docs (PR #51/#52):
+  Memory Pressure guard description corrected (OOM → cooldown exclusion
+  → chain fall-through; not "switch to a lighter model"), drift is 6
+  signals, doctor is 7 probes (all occurrences incl. sample outputs),
+  broken CHANGELOG links in quickstart fixed.
+- **Full JA/EN doc pairs**: 13 English versions added (concepts ×5,
+  backends ×5, docs index, low-memory integration, remote access) with
+  reciprocal interlinks — every living doc now exists in both languages.
+- **CHANGELOG unified to English**: 55 historical Japanese entries
+  translated in place (versions/dates/PR numbers machine-verified
+  unchanged; quoted Japanese examples kept verbatim).
+- Volatile hardcoded counters swept: test counts now rounded ("1,500+"),
+  stale "964 tests" / "453 tests" removed; design constants (5 deps /
+  6 guards / 7 probes / 6 signals) stay literal.
+
+---
+
 ## [v2.7.4] — 2026-07-06 (Launcher provider auto-sync + /v1/models passthrough)
 
 Two PRs closing the "launcher started it, but nothing can route to it /
