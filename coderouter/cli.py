@@ -10,6 +10,35 @@ import uvicorn
 
 from coderouter import __version__
 
+# Bind addresses that keep the server loopback-only. Anything else means the
+# operator is deliberately exposing CodeRouter beyond this machine, at which
+# point the v2.7.0 Host-header validation (DNS-rebinding guard) will 403 every
+# request whose Host is not allow-listed — a combination that has confused
+# real users ("worked on 2.6, LAN access broken on 2.7").
+_LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
+
+def _external_bind_warning(host: str, allowed_hosts_env: str | None) -> str | None:
+    """Return a startup warning when binding beyond loopback needs config.
+
+    Fires only for the confusing combination: non-loopback bind (the operator
+    wants LAN/external access) while ``CODEROUTER_ALLOWED_HOSTS`` is unset
+    (so every non-loopback Host header will be rejected with 403). Returns
+    the warning text, or None when the configuration is coherent.
+    """
+    if host in _LOOPBACK_BIND_HOSTS:
+        return None
+    if allowed_hosts_env and allowed_hosts_env.strip():
+        return None
+    return (
+        f"serve: binding on {host!r} but CODEROUTER_ALLOWED_HOSTS is not set. "
+        "Requests whose Host header is not loopback will be rejected with 403 "
+        "(v2.7.0 DNS-rebinding guard). To allow LAN access, set "
+        "CODEROUTER_ALLOWED_HOSTS=<ip-or-hostname clients use in the URL> "
+        "(comma-separated, no port). Note the chat endpoints have no "
+        "authentication — do not expose CodeRouter directly to the internet."
+    )
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -365,6 +394,15 @@ def main(argv: list[str] | None = None) -> int:
             stripped = args.mode.strip()
             if stripped:
                 os.environ["CODEROUTER_MODE"] = stripped
+
+        # v2.7.5: warn about the "bound beyond loopback but Host validation
+        # will reject everything" trap BEFORE uvicorn takes over the console,
+        # so the hint is the first thing an operator sees.
+        warning = _external_bind_warning(
+            args.host, os.environ.get("CODEROUTER_ALLOWED_HOSTS")
+        )
+        if warning:
+            print(f"WARNING: {warning}", file=sys.stderr)
 
         uvicorn.run(
             "coderouter.ingress.app:create_app",
