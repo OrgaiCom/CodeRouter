@@ -367,7 +367,7 @@ llama_model_load: error loading model: error loading model architecture:
 
 #### 4-2-C. **Gemma 4 26B** は実機で完全動作 (v1.8.2 で確定)
 
-`coderouter doctor --check-model ollama-gemma4-26b` の `tool_calls` probe が無加工で `[OK]`。v1.8.2 で thinking モデル対応 probe バジェット (1024) を入れた後は **`num_ctx` / `streaming` も `[OK]`** で 6 probe 全クリア。`/v1/messages` Anthropic 互換経由で "Hello." を 2 秒応答 (M3 Max 64GB)、`tool_calls native OK`、`reasoning strip` 動作。
+`coderouter doctor --check-model ollama-gemma4-26b` の `tool_calls` probe が無加工で `[OK]`。v1.8.2 で thinking モデル対応 probe バジェット (1024) を入れた後は **`num_ctx` / `streaming` も `[OK]`** で全 probe クリア。`/v1/messages` Anthropic 互換経由で "Hello." を 2 秒応答 (M3 Max 64GB)、`tool_calls native OK`、`reasoning strip` 動作。
 
 ただし **interactive UX は若干重い** — Gemma 4 は thinking モデルなので `reasoning` フィールドにも応答時間を使う + 26B サイズ + Claude Code の agent loop (1 プロンプトで 3〜6 round-trip) で総応答時間が 30〜90 秒 / プロンプトになる。daily driver には `qwen2.5-coder:14b` のほうが速い。**Gemma 4 は tool_calls native + 高品質が要るときの選択肢**。
 
@@ -378,7 +378,7 @@ note 記事の「Gemma 4 が日常の王者」評価は **Claude Code agentic �
 実機運用での提案：
 
 1. **第一候補は枯れたもの**: `qwen2.5-coder:14b` / `qwen2.5-coder:7b` / `gemma4:26b` / `gemma4:e4b`
-2. **doctor で確認**: `cr doctor --check-model <provider>` で 6 probe を回す
+2. **doctor で確認**: `cr doctor --check-model <provider>` で 7 probe を回す
 3. **`--apply` で patch 適用**: NEEDS_TUNING の YAML パッチを非破壊書き戻し (`pip install 'coderouter-cli[doctor]'` 必要)
 4. **新興モデルは慎重に**: HF で見つけた新モデルは Ollama 0.20+ でも未対応のことあり、`ollama run` → server log で確認
 5. **fallback chain で守る**: ローカル primary が落ちても NIM / OpenRouter free に流れるように chain を厚く

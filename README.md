@@ -53,7 +53,7 @@
 | backend が落ちたらセッション終了 | ローカル → 無料 → 有料へ自動フォールバック |
 | 長時間で context 溢れ・drift・ループ | 6 系統ガード + self-healing |
 | モデル名がハードコード (リタイアで即エラー) | プロファイルで抽象化、差し替え 1 行 |
-| 何が悪いか分からない | `doctor` 6 プローブ + `/dashboard` + audit/replay |
+| 何が悪いか分からない | `doctor` 7 プローブ + `/dashboard` + audit/replay |
 
 直結で困っていないなら CodeRouter は不要です。**長時間・無人・弱いモデル**のどれかに当てはまったら、戻ってきてください。
 
@@ -122,14 +122,14 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | **Drift Detection** | モデルの応答品質が徐々に劣化 → 別 provider に切替 or KV cache flush (6 シグナル、`goal_mode` で目標達成停滞も検知) |
 | **Self-healing** | backend が落ちた → 自動除外 + restart + 回復 probe で自動復帰 |
 | **Tool Loop Guard** | 同じツールを無限に呼び続ける → 検知して停止 |
-| **Memory Pressure** | GPU メモリ不足を検知 → 軽量モデルに切替 |
+| **Memory Pressure** | OOM を出した backend を一時除外 → チェーンの次の provider へフォールスルー |
 | **Mid-stream Guard** | 応答途中で落ちた → 溜まったテキストを安全に返却 |
 
 ### 診断と可視化
 
 | 機能 | 何がわかるか |
 |---|---|
-| **`coderouter doctor`** | プロバイダの問題を 6 プローブで即診断 + 修正パッチ出力 |
+| **`coderouter doctor`** | プロバイダの問題を 7 プローブで即診断 + 修正パッチ出力 |
 | **`/dashboard`** | ブラウザで今何が起きてるかリアルタイム確認 |
 | **`coderouter audit`** | guard 発火履歴を検索 |
 | **`coderouter replay`** | provider 切替の効果を統計比較 (A/B 分析) / `--suggest-rules` でルール最適化提案 |

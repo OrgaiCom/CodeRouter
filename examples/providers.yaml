@@ -129,7 +129,7 @@ providers:
   # `--jinja` で GGUF metadata 埋め込みの chat template を使う (Unsloth GGUF は
   # 通常埋め込み済)。`-ngl 999` で全 layer GPU offload (Metal)。
   #
-  # CodeRouter doctor で 6 probe 全 OK 確認:
+  # CodeRouter doctor (7 probe) で確認:
   #   coderouter doctor --check-model llamacpp-qwen3-6-35b-a3b
   - name: llamacpp-qwen3-6-35b-a3b
     kind: openai_compat

@@ -152,7 +152,7 @@ ps aux | grep -E '[l]lama-server|[v]llm'
 
 # CodeRouter 側の状態
 open http://localhost:8088/dashboard            # 誰が落ちているか色で分かる
-coderouter doctor --check-model llama-cpp-local # provider を 6 プローブで診断
+coderouter doctor --check-model llama-cpp-local # provider を 7 プローブで診断
 ```
 
 ---

@@ -30,7 +30,7 @@ When you can't tell where the problem is, start by running `doctor` against the 
 coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
-`doctor` runs six probes (auth + basic-chat / num_ctx / tool_calls / thinking / reasoning-leak / streaming) against the live provider and emits **copy-paste YAML patches** for any declaration mismatch.
+`doctor` runs seven probes (auth + basic-chat / num_ctx / tool_calls / thinking / reasoning-leak / streaming / cache) against the live provider and emits **copy-paste YAML patches** for any declaration mismatch.
 
 Exit codes collapse into three buckets:
 
@@ -296,7 +296,7 @@ After v1.8.2's thinking-aware probe budgets, `num_ctx` and `streaming` clear, bu
 The doctor probe NEEDS_TUNING readings on `num_ctx` / `streaming` reported in v1.8.1 turned out to be **probe false positives** — Gemma 4 is a thinking model that emits a `reasoning` field, and the v1.8.1 probe budgets (`max_tokens=32` / `128`) were consumed entirely by the reasoning trace before any visible `content` could surface. Real-machine `/v1/messages` round-trip returns "Hello." in 2 seconds; `tool_calls` work natively. v1.8.2 widened the probe budget to 1024 tokens for thinking-flagged models.
 
 **4-2-D. Best practice — "boring models + observation tools."**
-Lead the `coding` chain with `qwen2.5-coder:14b` / `gemma4:26b`, run `coderouter doctor --check-model <name>` for a 6-probe sanity pass, and let the fallback chain pick up paid / cloud free for spillover.
+Lead the `coding` chain with `qwen2.5-coder:14b` / `gemma4:26b`, run `coderouter doctor --check-model <name>` for a 7-probe sanity pass, and let the fallback chain pick up paid / cloud free for spillover.
 
 **4-2-E. Doctor probe limits — thinking model awareness (v1.8.2).**
 Pre-v1.8.2 `num_ctx` / `streaming` probes used `max_tokens=32` / `128`, sufficient for non-thinking models but consumed entirely by `reasoning` token output on thinking models. v1.8.2 introduced `_is_reasoning_model(provider, resolved)` which checks `provider.capabilities.thinking`, `provider.capabilities.reasoning_passthrough`, and the registry-resolved equivalents — when any signals true, the probe budget bumps to 1024. Bundled `model-capabilities.yaml` declares `thinking: true` for `gemma4:*` and `qwen3.6:*`, so users see the corrected behavior without editing their `providers.yaml`. **Meta lesson**: diagnostic tools themselves need to keep being diagnosed (a corollary of plan.md §5.4's "real-machine evidence first" principle).

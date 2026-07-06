@@ -88,7 +88,7 @@ General-purpose (not coder-tuned, so typically `capabilities.tools: false` unles
 - **`llama3.2:3b` / `phi4:14b`** — general-purpose, not coder-tuned. Useful as a "fast" profile for short chat replies outside of code sessions.
 - **`gpt-oss:20b`** / **`gpt-oss:120b`** (OpenAI OSS family) — release tags vary by vendor mirror; the 20 B is the hardware sweet spot on a 24 GB GPU. Emits a non-standard `reasoning` field on each choice's `message` / `delta` that the v0.5-C `openai_compat` adapter already strips; probe once with `coderouter doctor` to confirm the strip fires and `reasoning-leak` returns `OK`.
 
-Use `coderouter doctor --check-model <provider>` after adding any new model — its six probes (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming) will tell you which `capabilities.*` flags and `extra_body.options.*` values the model actually wants. The doctor's verdicts are the source of truth; the table in §3 is the known-good starting point it checks you against.
+Use `coderouter doctor --check-model <provider>` after adding any new model — its seven probes (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming / cache) will tell you which `capabilities.*` flags and `extra_body.options.*` values the model actually wants. The doctor's verdicts are the source of truth; the table in §3 is the known-good starting point it checks you against.
 
 MoE footprint reminder: "N total / M active" means the router streams like an M-parameter model in latency terms but needs N-parameter weights resident in VRAM. Qwen3 30B-A3B loads like a 30 B but runs like a 3 B — an unusually good deal on Apple Silicon where memory bandwidth is the bottleneck, but only if you actually have the ~18 GB Q4 weights-fit budget.
 

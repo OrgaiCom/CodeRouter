@@ -23,7 +23,7 @@ Real-machine sessions in v1.8.1 → v1.8.3, plus community reports on X / Reddit
 
 - macOS (Apple Silicon, Metal GPU offload). Linux + CUDA also works — swap `-DGGML_METAL=ON` for `-DGGML_CUDA=ON`.
 - Recommended hardware: M3 Max 64GB (Q4_K_M = 22GB GGUF + KV cache + headroom fits comfortably). 32GB Macs work with less margin.
-- Required tools: `git`, `cmake`, `huggingface-cli` (`uv tool install huggingface_hub[cli]`).
+- Required tools: `git`, `cmake`, the `hf` CLI (`uv tool install huggingface_hub`; the old `huggingface-cli` name has been merged into `hf`).
 - Time: build 5-10 min + GGUF download 5-10 min ≈ 15-20 min total.
 
 ---
@@ -46,14 +46,18 @@ Verify with `./build/bin/llama-server --version`.
 ### Step 2. Download the Unsloth GGUF
 
 ```bash
-# huggingface-cli, if missing
-uv tool install huggingface_hub[cli]
+# hf CLI, if missing (ships inside huggingface_hub)
+uv tool install huggingface_hub
+# or the standalone installer:
+#   curl -LsSf https://hf.co/cli/install.sh | bash
 
 # Q4_K_M variant (UD = Unsloth Dynamic Quantization, ~22 GB)
-huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
+hf download unsloth/Qwen3.6-35B-A3B-GGUF \
   --include "*UD-Q4_K_M*" "*tokenizer*" "*chat_template*" \
   --local-dir ~/models/qwen3.6-35b-a3b-unsloth
 ```
+
+> **Migrating from the old `huggingface-cli`**: the command was renamed to `hf` and the subcommand structure was updated (`huggingface-cli download` → `hf download`, `huggingface-cli login` → `hf auth login`). This repo's helper script [`gguf_dl.py`](../../gguf_dl.py) wraps the equivalent of `hf download` — just paste an HF URL.
 
 > **Why UD-Q4_K_M?** Unsloth Dynamic Quantization — better accuracy at the same GGUF size than vanilla Q4_K_M. The de facto community standard per the Reddit / X reports.
 >
@@ -165,12 +169,13 @@ coderouter doctor --check-model llamacpp-qwen3-6-35b-a3b
 Expected:
 
 ```
-[1/6] auth+basic-chat …… [OK]
-[2/6] num_ctx ………………… [SKIP]    # port 8080 → not Ollama-shape, by design
-[3/6] tool_calls ………… [OK]    # native tool_calls observed
-[4/6] thinking ………… [SKIP]
-[5/6] reasoning-leak …… [OK]    # reasoning_content detected, adapter strips it
-[6/6] streaming ………… [SKIP]
+[1/7] auth+basic-chat …… [OK]
+[2/7] num_ctx ………………… [SKIP]    # port 8080 → not Ollama-shape, by design
+[3/7] tool_calls ………… [OK]    # native tool_calls observed
+[4/7] thinking ………… [SKIP]
+[5/7] reasoning-leak …… [OK]    # reasoning_content detected, adapter strips it
+[6/7] streaming ………… [SKIP]
+[7/7] cache ………………… [SKIP]    # kind: openai_compat is out of scope (cache_control is Anthropic-only)
 
 Summary: all probes match declarations.
 Exit: 0

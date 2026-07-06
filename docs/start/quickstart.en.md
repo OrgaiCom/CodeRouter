@@ -120,9 +120,9 @@ uv run coderouter serve --port 8088
 
 Prefix with `uv run` and you don't need `source .venv/bin/activate` (or use direnv for auto-activation).
 
-> **Naming note**: the PyPI distribution is `coderouter-cli` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く).
+> **Naming note**: the PyPI distribution is `coderouter-cli` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く).
 >
-> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) and [`examples/providers.yaml`](../../examples/providers.yaml) comments for the rationale.
+> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../../CHANGELOG.md) and [`examples/providers.yaml`](../../examples/providers.yaml) comments for the rationale.
 
 ### 3. Drop in a `providers.yaml`
 
