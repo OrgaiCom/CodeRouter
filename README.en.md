@@ -243,7 +243,7 @@ Open `http://localhost:8088/dashboard` while debugging — most issues become vi
 ## Tech Specs
 
 - **Runtime deps**: `fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml` — only 5
-- **Tests**: 1,569 (as of v2.7.4; the 5 runtime deps have never grown since the v1 line)
+- **Tests**: 1,500+ (the 5 runtime deps have never grown since v1)
 - **OS**: macOS (Apple Silicon recommended) / Linux / Windows WSL2
 - **Backends**: Ollama / llama.cpp / LM Studio / vLLM / MLX-LM / OpenRouter / NVIDIA NIM / Anthropic API
 - **License**: MIT
