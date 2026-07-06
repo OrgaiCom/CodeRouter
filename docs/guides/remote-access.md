@@ -42,15 +42,15 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 ## ② Tailscale — 複数端末・外出先(推奨)
 
-[Tailscale](https://tailscale.com/)(WireGuard ベースのメッシュ VPN)を両方の機体に入れると、**LAN 公開そのものが不要**になります。各端末に `100.x.y.z` の私設 IP と MagicDNS 名(例: `evox2.tailnet-name.ts.net`)が付き、tailnet に参加した端末からしか届きません。
+[Tailscale](https://tailscale.com/)(WireGuard ベースのメッシュ VPN)を両方の機体に入れると、**LAN 公開そのものが不要**になります。各端末に `100.x.y.z` の私設 IP と MagicDNS 名(例: `my-server.tailnet-name.ts.net`)が付き、tailnet に参加した端末からしか届きません。
 
 ```bash
 # サーバー側 — Tailscale IP でだけ待ち受け、その名前を許可
-CODEROUTER_ALLOWED_HOSTS=evox2.tailnet-name.ts.net,100.x.y.z \
+CODEROUTER_ALLOWED_HOSTS=my-server.tailnet-name.ts.net,100.x.y.z \
   coderouter serve --host 100.x.y.z --port 8088
 
 # クライアント側(tailnet 参加済みなら世界中どこからでも)
-open http://evox2.tailnet-name.ts.net:8088/dashboard
+open http://my-server.tailnet-name.ts.net:8088/dashboard
 ```
 
 - `--host 0.0.0.0` ではなく **Tailscale IP にバインド**するのがポイント(物理 LAN 側には一切開かない)
@@ -85,13 +85,13 @@ CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter serve --port 808
 家族しかいない自宅 LAN のような環境なら、シンプルにこれで動きます。
 
 ```bash
-# サーバー機(例: 192.168.4.85)で — ALLOWED_HOSTS はサーバー自身のIP(URLに打つ方)
-CODEROUTER_ALLOWED_HOSTS=192.168.4.85 coderouter serve --host 0.0.0.0 --port 8088
+# サーバー機(例: 192.168.1.10)で — ALLOWED_HOSTS はサーバー自身のIP(URLに打つ方)
+CODEROUTER_ALLOWED_HOSTS=192.168.1.10 coderouter serve --host 0.0.0.0 --port 8088
 ```
 
 やること 2 つ:
 
-1. **送信元をファイアウォールで絞る**(任意だが推奨): `sudo ufw allow from 192.168.4.21 to any port 8088` のように、許可する端末だけ列挙
+1. **送信元をファイアウォールで絞る**(任意だが推奨): `sudo ufw allow from 192.168.1.20 to any port 8088` のように、許可する端末だけ列挙
 2. **ルーターのポート開放・UPnP で 8088 が外に出ていないか確認**。グローバル IP を構内に振る環境(大学・企業の 133.x 系など)では、「LAN 内」のつもりがインターネット到達可能なことがあります
 
 > ⚠️ 共有オフィス・学内 LAN・ゲスト Wi-Fi が同居するネットワークでは④は使わず、①〜③にしてください。LAN 内の誰でもあなたのモデルで推論できてしまいます。

@@ -42,15 +42,15 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 ## ② Tailscale — multiple devices, works from anywhere (recommended)
 
-Install [Tailscale](https://tailscale.com/) (a WireGuard-based mesh VPN) on both machines and **LAN exposure becomes unnecessary**. Each device gets a private `100.x.y.z` address and a MagicDNS name (e.g. `evox2.tailnet-name.ts.net`), reachable only from devices in your tailnet.
+Install [Tailscale](https://tailscale.com/) (a WireGuard-based mesh VPN) on both machines and **LAN exposure becomes unnecessary**. Each device gets a private `100.x.y.z` address and a MagicDNS name (e.g. `my-server.tailnet-name.ts.net`), reachable only from devices in your tailnet.
 
 ```bash
 # server — bind to the Tailscale IP only, allow-list its names
-CODEROUTER_ALLOWED_HOSTS=evox2.tailnet-name.ts.net,100.x.y.z \
+CODEROUTER_ALLOWED_HOSTS=my-server.tailnet-name.ts.net,100.x.y.z \
   coderouter serve --host 100.x.y.z --port 8088
 
 # client (anywhere in the world, as long as it's in the tailnet)
-open http://evox2.tailnet-name.ts.net:8088/dashboard
+open http://my-server.tailnet-name.ts.net:8088/dashboard
 ```
 
 - The point is to **bind to the Tailscale IP**, not `0.0.0.0` — nothing opens on the physical LAN
@@ -85,13 +85,13 @@ CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter serve --port 808
 On a home LAN with only people you trust, this is fine and simple.
 
 ```bash
-# on the server (e.g. 192.168.4.85) — ALLOWED_HOSTS is the SERVER's address (the one in the URL)
-CODEROUTER_ALLOWED_HOSTS=192.168.4.85 coderouter serve --host 0.0.0.0 --port 8088
+# on the server (e.g. 192.168.1.10) — ALLOWED_HOSTS is the SERVER's address (the one in the URL)
+CODEROUTER_ALLOWED_HOSTS=192.168.1.10 coderouter serve --host 0.0.0.0 --port 8088
 ```
 
 Two chores:
 
-1. **Restrict source IPs with the OS firewall** (optional but recommended): e.g. `sudo ufw allow from 192.168.4.21 to any port 8088`, listing only the devices you allow
+1. **Restrict source IPs with the OS firewall** (optional but recommended): e.g. `sudo ufw allow from 192.168.1.20 to any port 8088`, listing only the devices you allow
 2. **Verify port 8088 is not reachable from the internet** (router port-forwards, UPnP). On networks that assign global IPs internally (universities, legacy corporate ranges), "on the LAN" can silently mean "on the internet"
 
 > ⚠️ On shared-office LANs, campus networks, or anything with a guest Wi-Fi, do not use ④ — use ①–③. Anyone on the LAN could run inference on your models.
