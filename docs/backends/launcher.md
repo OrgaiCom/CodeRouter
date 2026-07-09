@@ -191,6 +191,10 @@ llama.cpp の `llama-server` は Multi-Token Prediction (MTP) / speculative deco
 
 nextn 埋め込みモデル / speculative decoding 有効時に `--split-mode tensor` を組み合わせると llama.cpp がクラッシュする既知の問題があります([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309))。Launcher はこの組み合わせを検出しても起動はブロックせず、プロセスログに `--split-mode layer` を推奨する警告を記録します。
 
+### 自動検出 MTP が起動時にクラッシュした場合の自動フォールバック
+
+**自動検出**(`mtp_mode: auto`)で付与した speculative フラグが原因で backend が**起動直後(約 3 分以内)にクラッシュ**した場合、Launcher は speculative フラグを外して**自動的に 1 回だけ再起動**します。一部のアーキテクチャの `draft-mtp` サポートは llama.cpp 側でまだ成熟しておらず、検出は正しくても MTP コンテキストの初期化に失敗してプロセスが落ちることがあるためです(例: `failed to measure MTP context memory` / `requires ctx_other to be set`)。プロセスログには `[launcher] MTP startup failure detected (exit code ...); retrying without speculative decoding` と、フラグを外した再起動コマンドが記録されます。再起動は**必ず 1 回まで**で、それでも落ちる場合は `error` になります。**明示的な MTP/draft gguf**(`draft_model_path`)を指定した場合や、`--spec-type` を自分で渡した場合は自動再起動の対象外です(ユーザー指定を尊重します)。
+
 ### API
 
 Web版の `POST /api/launcher/start` は以下のフィールドを追加で受け付けます(llama.cpp バックエンドのみ有効。他バックエンドで指定すると 400):

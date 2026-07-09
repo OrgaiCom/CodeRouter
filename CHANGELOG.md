@@ -51,6 +51,18 @@ with a silent no-op fallback, no config-schema changes, no new dependencies.
 - **UI**: Web LAUNCH form gets "MTP/draft gguf (空欄で自動検出)" text field
   + "MTP" `auto`/`off` select. Desktop GUI (`launcher_gui.py`) gets the
   matching Entry + a "MTP自動検出" checkbox (default on).
+- **Automatic MTP startup-crash fallback**: when speculative flags were added
+  by AUTO detection (`mtp_mode="auto"`, no explicit `draft_model_path`) and the
+  backend dies during startup (non-zero exit within ~3 min), the launcher
+  relaunches it ONCE without the speculative flags and logs
+  `[launcher] MTP startup failure detected (exit code ...); retrying without
+  speculative decoding` plus the flag-free command. This covers architectures
+  whose `draft-mtp` support in llama.cpp is still immature (detection is right
+  but the MTP context fails to initialize, e.g. `failed to measure MTP context
+  memory`). Explicit `draft_model_path` / operator-supplied `--spec-type` are
+  never auto-retried, and the retry can never loop (single-shot, guarded).
+  Implemented in both the Web launcher (`launcher_routes.py`) and the desktop
+  GUI (`launcher_gui.py`).
 
 ### Docs
 
