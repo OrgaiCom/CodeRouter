@@ -191,6 +191,10 @@ Just like `-m` / `--model`, the draft model path can only be set via the **MTP/d
 
 Combining a nextn-embedded model / active speculative decoding with `--split-mode tensor` is known to crash llama.cpp ([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309)). The Launcher detects this combination but does not block the launch — it records a warning in the process log recommending `--split-mode layer` instead.
 
+### Automatic fallback when auto-detected MTP crashes at startup
+
+If the speculative flags were added by **auto-detection** (`mtp_mode: auto`) and the backend **crashes during startup (within ~3 minutes)**, the Launcher **automatically relaunches it once** without the speculative flags. Detection can be correct while some architectures' `draft-mtp` support in llama.cpp is still immature — the arch is detected but the MTP context fails to initialize and the process dies (e.g. `failed to measure MTP context memory` / `requires ctx_other to be set`). The process log records `[launcher] MTP startup failure detected (exit code ...); retrying without speculative decoding` followed by the flag-free relaunch command. The retry happens **at most once**; if it still crashes the process ends in `error`. An **explicit `draft_model_path`** (or an operator-supplied `--spec-type`) is **never** auto-retried — the explicit choice is respected.
+
 ### API
 
 `POST /api/launcher/start` (Web edition) accepts these additional fields (llama.cpp backend only; other backends get a 400):

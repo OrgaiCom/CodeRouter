@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import uuid
 from collections import deque
@@ -86,6 +87,11 @@ _CODEROUTER_PORT = 8088
 _MAX_LOG_LINES      = 5000   # mp.log_lines / _cr_log のメモリ上限(行数)
 _MAX_TEXT_LINES     = 2000   # _log_text ウィジェットの表示行上限
 _MAX_LINES_PER_TICK = 1500   # _poll 1回で処理する最大行数(残りは次回へ繰越)
+
+# 自動検出 MTP が起動時にクラッシュした場合、この秒数以内の非ゼロ終了だけを
+# 「起動時失敗」とみなし speculative フラグ無しで 1 回だけ再起動する。これより
+# 長く稼働してから落ちたものは通常のクラッシュ扱いで再起動しない。
+_MTP_FALLBACK_WINDOW_SECS = 180.0
 
 _CONFIG_SEARCH = [
     Path.cwd() / "providers.yaml",
@@ -1237,6 +1243,23 @@ class LauncherApp(tk.Tk):
             self._set_launch_err(str(e))
             return
 
+        # MTP auto-fallback: only auto-detected speculative flags (MTP自動検出
+        # ON, no explicit draft entry, detection emitted flags) qualify for the
+        # one-shot startup-crash retry. Rebuild the command without the spec
+        # tokens (exact — never spliced) so the retry is precise.
+        spec_auto = bool(
+            self._mtp_auto_var.get()
+            and not self._draft_path_var.get().strip()
+            and spec_tokens
+        )
+        fallback_cmd: list[str] | None = None
+        if spec_auto:
+            with contextlib.suppress(ValueError):
+                fallback_cmd = _build_cmd(backend, model_path, port,
+                                          profile_args, extra, binary, None)
+        if fallback_cmd is None:
+            spec_auto = False
+
         proc_id = uuid.uuid4().hex[:8]
         mp = ManagedProcess(
             id=proc_id,
@@ -1263,32 +1286,61 @@ class LauncherApp(tk.Tk):
             mp.log_lines.append(f"[launcher] cmd: {' '.join(cmd)}")
             for note in spec_notes:
                 mp.log_lines.append(f"[launcher] {note}")
-            try:
-                p = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    bufsize=0,
-                )
-            except Exception as exc:
-                mp.status = "error"
-                self._log_queue.put((proc_id, f"_ERR_:{exc}"))
+            run_cmd = cmd
+            fallback_done = False
+            first = True
+            while True:
+                try:
+                    p = subprocess.Popen(
+                        run_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        bufsize=0,
+                    )
+                except Exception as exc:
+                    mp.status = "error"
+                    self._log_queue.put((proc_id, f"_ERR_:{exc}"))
+                    return
+
+                started_at = time.monotonic()
+                mp.proc  = p
+                mp.pid   = p.pid
+                mp.status = "running"
+                if first:
+                    self._log_queue.put((proc_id, f"_OK_:{name}:{port}"))
+                    first = False
+
+                assert p.stdout
+                stdout = p.stdout
+                for raw in iter(lambda s=stdout: s.read(4096), b""):
+                    for line in raw.decode("utf-8", errors="replace").splitlines():
+                        self._log_queue.put((proc_id, line))
+                p.wait()
+                mp.returncode = p.returncode
+                mp.status = "stopped" if p.returncode == 0 else "error"
+                self._log_queue.put(
+                    (proc_id, f"[launcher] exited (code {p.returncode})"))
+
+                # MTP startup crash → relaunch ONCE without speculative flags.
+                if (
+                    not fallback_done
+                    and spec_auto
+                    and p.returncode not in (0, None)
+                    and (time.monotonic() - started_at)
+                    <= _MTP_FALLBACK_WINDOW_SECS
+                ):
+                    fallback_done = True
+                    self._log_queue.put((
+                        proc_id,
+                        f"[launcher] MTP startup failure detected "
+                        f"(exit code {p.returncode}); retrying without "
+                        "speculative decoding",
+                    ))
+                    self._log_queue.put(
+                        (proc_id, f"[launcher] cmd: {' '.join(fallback_cmd)}"))
+                    run_cmd = fallback_cmd
+                    continue
                 return
-
-            mp.proc  = p
-            mp.pid   = p.pid
-            mp.status = "running"
-            self._log_queue.put((proc_id, f"_OK_:{name}:{port}"))
-
-            assert p.stdout
-            for raw in iter(lambda: p.stdout.read(4096), b""):
-                for line in raw.decode("utf-8", errors="replace").splitlines():
-                    self._log_queue.put((proc_id, line))
-            p.wait()
-            mp.returncode = p.returncode
-            mp.status = "stopped" if p.returncode == 0 else "error"
-            self._log_queue.put(
-                (proc_id, f"[launcher] exited (code {p.returncode})"))
 
         threading.Thread(target=_run, daemon=True).start()
 

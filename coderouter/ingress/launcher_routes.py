@@ -30,6 +30,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -123,6 +124,16 @@ class ManagedProcess:
     pid: int | None = None
     returncode: int | None = None
     log_tail: deque = field(default_factory=lambda: deque(maxlen=200))
+    # MTP auto-fallback state. When the speculative flags were added by AUTO
+    # detection and the child dies during startup, the process is relaunched
+    # ONCE without them (some archs' draft-mtp support in llama.cpp is
+    # immature and crashes the context init). These fields make that possible
+    # and impossible to loop.
+    spec_tokens: list = field(default_factory=list)
+    spec_auto: bool = False
+    mtp_fallback_done: bool = False
+    fallback_cmd: list | None = None
+    started_at: float = 0.0
     # asyncio subprocess handle — not serialised
     _proc: Any = field(default=None, repr=False, compare=False)
 
@@ -509,12 +520,37 @@ def _build_cmd(
 # recover by reading the buffered chunk and continuing so log tailing survives.
 _LOG_STREAM_LIMIT = 256 * 1024  # 256 KB
 
+# Window (seconds) after spawn in which a non-zero exit is treated as a
+# startup crash eligible for the MTP auto-fallback. A backend that ran fine
+# for longer and then died is a normal crash, not a load-time failure, so it
+# is never retried.
+_MTP_FALLBACK_WINDOW_SECS = 180.0
+
+
+def _should_mtp_fallback(proc: ManagedProcess) -> bool:
+    """True when a just-crashed process qualifies for the one-shot MTP retry.
+
+    Only auto-detected speculative launches that die within the startup
+    window are eligible, and only once (guarded by ``mtp_fallback_done``).
+    """
+    p = proc._proc
+    rc = p.returncode if p is not None else proc.returncode
+    return (
+        proc.spec_auto
+        and not proc.mtp_fallback_done
+        and bool(proc.fallback_cmd)
+        and rc not in (0, None)
+        and (time.monotonic() - proc.started_at) <= _MTP_FALLBACK_WINDOW_SECS
+    )
+
 
 async def _tail_logs(proc: ManagedProcess) -> None:
-    """Read stdout+stderr into proc.log_tail until the process exits."""
-    p = proc._proc
-    if p is None:
-        return
+    """Read stdout+stderr into proc.log_tail until the process exits.
+
+    Loops so that a one-shot MTP fallback (relaunch without the auto-detected
+    speculative flags) can be tailed by the same task. The loop exits as soon
+    as no fallback applies.
+    """
 
     async def _drain(stream: asyncio.StreamReader | None) -> None:
         if stream is None:
@@ -540,14 +576,53 @@ async def _tail_logs(proc: ManagedProcess) -> None:
                 break
             proc.log_tail.append(line.decode(errors="replace").rstrip())
 
-    await asyncio.gather(_drain(p.stdout), _drain(p.stderr))
-    await p.wait()
-    proc.returncode = p.returncode
-    proc.pid = None
-    proc.status = "stopped" if (p.returncode or 0) == 0 else "error"
-    proc.log_tail.append(
-        f"[launcher] process exited with code {p.returncode}"
-    )
+    while True:
+        p = proc._proc
+        if p is None:
+            return
+
+        await asyncio.gather(_drain(p.stdout), _drain(p.stderr))
+        await p.wait()
+        proc.returncode = p.returncode
+        proc.pid = None
+        proc.status = "stopped" if (p.returncode or 0) == 0 else "error"
+        proc.log_tail.append(
+            f"[launcher] process exited with code {p.returncode}"
+        )
+
+        if not _should_mtp_fallback(proc):
+            return
+
+        # Auto-detected MTP crashed during startup — retry ONCE without the
+        # speculative flags. The port is unchanged, so the existing provider
+        # registration still stands (do not re-register).
+        rc = proc.returncode
+        proc.mtp_fallback_done = True
+        proc.log_tail.append(
+            f"[launcher] MTP startup failure detected (exit code {rc}); "
+            "retrying without speculative decoding"
+        )
+        proc.log_tail.append(
+            f"[launcher] cmd: {' '.join(proc.fallback_cmd)}"
+        )
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *proc.fallback_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                limit=_LOG_STREAM_LIMIT,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            proc.log_tail.append(f"[launcher] fallback relaunch failed: {exc}")
+            proc.status = "error"
+            return
+        proc._proc = p
+        proc.pid = p.pid
+        proc.status = "running"
+        proc.returncode = None
+        proc.started_at = time.monotonic()
+        proc.log_tail.append(f"[launcher] started PID {p.pid}")
+        # Loop to tail the relaunched process.
 
 
 async def shutdown_launcher(app: Any) -> None:
@@ -769,6 +844,30 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # Speculative flags qualify for the one-shot startup-crash fallback only
+    # when they came from AUTO detection (mtp_mode="auto", no explicit draft
+    # model, and detection actually emitted flags). Explicit draft paths and
+    # operator-supplied --spec-type are never auto-retried. The fallback cmd
+    # is rebuilt from scratch with spec_tokens=None (exact — never spliced).
+    spec_auto = (
+        req.mtp_mode == "auto"
+        and req.draft_model_path is None
+        and bool(spec_tokens)
+    )
+    fallback_cmd: list[str] | None = None
+    if spec_auto:
+        try:
+            fallback_cmd = _build_cmd(
+                req.backend, req.model_path, req.port,
+                req.options, req.extra_args,
+                binary=configured_binary,
+                spec_tokens=None,
+            )
+        except ValueError:
+            # A failure to rebuild the non-spec command simply disables the
+            # fallback; it must never block the primary start.
+            fallback_cmd = None
+
     proc_id = uuid.uuid4().hex[:8]
     proc = ManagedProcess(
         id=proc_id,
@@ -781,6 +880,9 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
         draft_model_path=req.draft_model_path,
         mtp_mode=req.mtp_mode,
         status="starting",
+        spec_tokens=spec_tokens,
+        spec_auto=spec_auto and fallback_cmd is not None,
+        fallback_cmd=fallback_cmd,
     )
     proc.log_tail.append(f"[launcher] cmd: {' '.join(cmd)}")
     for note in spec_notes:
@@ -806,6 +908,7 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     proc._proc = p
     proc.pid = p.pid
     proc.status = "running"
+    proc.started_at = time.monotonic()
     proc.log_tail.append(f"[launcher] started PID {p.pid}")
 
     _registry(request).add(proc)
