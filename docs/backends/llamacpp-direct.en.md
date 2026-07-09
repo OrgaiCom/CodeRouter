@@ -235,3 +235,29 @@ In the CodeRouter logs you should see `dropped=["reasoning", "reasoning_content"
 - … and so on.
 
 Naming the provider `llamacpp-<model>` keeps things consistent with the conventions in `examples/providers.yaml`.
+
+---
+
+## Using MTP / speculative decoding manually
+
+`llama-server` accepts Multi-Token Prediction (MTP) / speculative-decoding flags directly. If you have a draft/MTP gguf available, enable it by adding the `--spec-type`-family flags:
+
+```bash
+~/llama.cpp/build/bin/llama-server \
+  --model ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
+  --model-draft ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-mtp.gguf \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 3 \
+  --port 8080 \
+  --ctx-size 32768 \
+  -ngl 999 \
+  --host 127.0.0.1
+```
+
+- `--model-draft <path>`: the companion draft/MTP gguf (must share the main model's tokenizer/vocabulary).
+- `--spec-type draft-mtp`: speculative decoding driven by an MTP head (a nextn-embedded gguf needs only this flag, no `--model-draft`). Use `draft-simple` for a generic draft model instead.
+- `--spec-draft-n-max 3`: cap on how many tokens are speculated ahead per round (tune per model/hardware).
+
+Known issue: combining a nextn-embedded model (or active speculative decoding) with `--split-mode tensor` can crash llama.cpp ([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309)). Use `--split-mode layer` if this applies to you.
+
+**The [CodeRouter Launcher](./launcher.en.md#mtp--speculative-decoding-llamacpp) automates this whole dance** — if the main gguf embeds nextn, or a companion draft/MTP gguf sits in the same folder, the Launcher auto-detects it and adds `--spec-type` / `--model-draft` to the launch command for you (set the **MTP** field to `off` to disable).

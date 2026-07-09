@@ -110,6 +110,8 @@ Open `http://localhost:8088/launcher` in a browser, pick a model, and press "▶
 
 A backend started via the Web edition is automatically registered as a provider without editing `providers.yaml` (v2.7.4). Specifying `X-CodeRouter-Profile: launcher` makes it immediately eligible for routing. See the [Launcher Guide](./launcher.en.md) for details.
 
+> **Using llama.cpp with an MTP-capable gguf?** Leave the LAUNCH form's "MTP/draft gguf" field blank and "MTP" set to `auto` to get speculative decoding auto-detected. See [MTP / speculative decoding](./launcher.en.md#mtp--speculative-decoding-llamacpp) for details.
+
 ---
 
 ## 5. Use it from Claude Code

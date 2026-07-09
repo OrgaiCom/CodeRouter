@@ -288,3 +288,29 @@ llama.cpp の `llama-server` は基本どの GGUF でも上の手順で動きま
 - など
 
 provider name は `llamacpp-<モデル>` の命名で揃えると `examples/providers.yaml` のパターンと整合します。
+
+---
+
+## MTP / speculative decoding を手動で使う
+
+`llama-server` は Multi-Token Prediction (MTP) / speculative decoding フラグを直接受け付けます。draft/MTP 用の gguf を用意できる場合、`--spec-type` 系フラグを追加するだけで有効化できます:
+
+```bash
+~/llama.cpp/build/bin/llama-server \
+  --model ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
+  --model-draft ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-mtp.gguf \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 3 \
+  --port 8080 \
+  --ctx-size 32768 \
+  -ngl 999 \
+  --host 127.0.0.1
+```
+
+- `--model-draft <path>`: companion の draft/MTP gguf(メインモデルとトークナイザ/語彙が一致している必要あり)
+- `--spec-type draft-mtp`: MTP head を使う speculative decoding(nextn 埋め込み gguf ならこのフラグのみで `--model-draft` 不要)。汎用の draft モデルには `draft-simple` を使う
+- `--spec-draft-n-max 3`: 1 回の speculation で先読みするトークン数の上限(モデル/ハードに応じて調整)
+
+既知の問題として、nextn 埋め込みモデル(または speculative decoding 有効時)と `--split-mode tensor` の組み合わせは llama.cpp がクラッシュすることがあります([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309))。該当する場合は `--split-mode layer` を使ってください。
+
+**この一連の手組みは [CodeRouter Launcher](./launcher.md#mtp--speculative-decoding-llamacpp) が自動化しています** — メインの gguf に nextn が埋め込まれているか、同じフォルダに companion の draft/MTP gguf があれば、Launcher が `--spec-type` / `--model-draft` を自動検出して起動コマンドに付与します(`MTP` 欄で `off` にすれば無効化も可能)。

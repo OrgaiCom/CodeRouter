@@ -136,6 +136,17 @@ class GGUFInfo:
     n_kv_heads: int | None
     file_type: int | None
     file_size_bytes: int
+    n_nextn: int | None = None
+
+    @property
+    def supports_mtp(self) -> bool:
+        """True when the GGUF embeds Multi-Token-Prediction (nextn) layers.
+
+        Derived from ``{arch}.nextn_predict_layers`` — a positive count means
+        the main model carries MTP/nextn tensors and can drive llama.cpp's
+        ``--spec-type draft-mtp`` without a separate draft gguf.
+        """
+        return bool(self.n_nextn and self.n_nextn > 0)
 
     @property
     def quant_name(self) -> str | None:
@@ -224,6 +235,10 @@ _KEY_BLOCK_COUNT = ".block_count"
 _KEY_EMBED_LEN = ".embedding_length"
 _KEY_HEAD_COUNT = ".attention.head_count"
 _KEY_HEAD_COUNT_KV = ".attention.head_count_kv"
+# Number of Multi-Token-Prediction (nextn) layers embedded in the main model
+# (e.g. ``glm4moe.nextn_predict_layers``). A positive value means the GGUF can
+# drive llama.cpp speculative decoding via ``--spec-type draft-mtp`` alone.
+_KEY_NEXTN = ".nextn_predict_layers"
 
 
 def read_gguf_metadata(path: str | Path) -> GGUFInfo:
@@ -245,6 +260,7 @@ def read_gguf_metadata(path: str | Path) -> GGUFInfo:
     n_heads: int | None = None
     n_kv_heads: int | None = None
     file_type: int | None = None
+    n_nextn: int | None = None
 
     with p.open("rb") as fh:
         magic = fh.read(4)
@@ -275,6 +291,8 @@ def read_gguf_metadata(path: str | Path) -> GGUFInfo:
                 n_kv_heads = value
             elif key.endswith(_KEY_HEAD_COUNT) and isinstance(value, int):
                 n_heads = value
+            elif key.endswith(_KEY_NEXTN) and isinstance(value, int):
+                n_nextn = value
 
     return GGUFInfo(
         architecture=arch,
@@ -284,6 +302,7 @@ def read_gguf_metadata(path: str | Path) -> GGUFInfo:
         n_kv_heads=n_kv_heads,
         file_type=file_type,
         file_size_bytes=file_size,
+        n_nextn=n_nextn,
     )
 
 

@@ -108,6 +108,8 @@ Launcher の画面は「MODELS パネル」「LAUNCH フォーム」「PROCESSES
 | **バックエンド** | `llama.cpp` / `vllm` / `mlx` から選択。解決されたバイナリパスと利用可否が下に表示される |
 | **モデルパス** | MODELS パネルから選択するか直接入力 |
 | **オプションプロファイル** | `providers.yaml` で定義したプリセットを選択 |
+| **MTP/draft gguf** | 明示的な companion draft/MTP gguf のパス(llama.cpp のみ)。空欄なら自動検出 → [MTP / speculative decoding](#mtp--speculative-decoding-llamacpp) |
+| **MTP** | `auto`(既定、自動検出)/ `off`(speculative decoding を無効化) |
 | **追加オプション** | プロファイルにないフラグをその場で入力。`shlex` でパースされコマンド末尾に追加される |
 
 `▶ 起動` でプロセスが起動し、PROCESSES テーブルに表示されます。バイナリが見つからない場合は**起動ボタンが自動的に無効化**され、理由が表示されます。「追加オプション」欄の横の **⚙ 推奨値** ボタンについては [メモリ推奨](#メモリ推奨) を参照してください。
@@ -151,6 +153,54 @@ curl http://localhost:8088/v1/chat/completions \
 2. **backend を起動** — オプションプロファイルを選び起動ボタンを押す。PROCESSES に `running` で表示される
 3. **CodeRouter を起動** — 上部バーの「▶ CodeRouter 起動」
 4. **Claude Code を繋ぐ** — 接続文字列をコピーしてターミナルで実行
+
+---
+
+## MTP / speculative decoding (llama.cpp)
+
+llama.cpp の `llama-server` は Multi-Token Prediction (MTP) / speculative decoding を `--spec-type` 系フラグでサポートします。Launcher は LAUNCH フォームの **MTP/draft gguf** 欄と **MTP** 欄(`auto` / `off`)から、これらのフラグを自動的に組み立てます。**llama.cpp バックエンドのみ対応** — vllm / mlx で `draft_model_path` や `mtp_mode` を指定すると起動リクエストは 400 で拒否されます。
+
+### 自動検出の順序(`mtp_mode: auto`、既定)
+
+1. **内蔵 nextn** — 選択したメインの gguf のメタデータに `{arch}.nextn_predict_layers > 0` があれば、追加の draft モデルなしで `--spec-type draft-mtp` を付与します
+2. **同フォルダの companion gguf** — 内蔵 nextn が無ければ、メインの gguf と**同じフォルダ**を走査し、以下をすべて満たす gguf を companion として採用します
+   - ファイル名に `mtp` または `draft` を含む、またはメインファイルの名前プレフィックス(shard / 量子化サフィックスを除いた部分)を共有する
+   - ファイルサイズがメインの gguf の 50% 未満
+   - gguf の architecture が読み取れる場合、メインと一致する(不一致は却下 — トークナイザ/語彙の不一致を避けるため)
+
+   採用されると、ファイル名に `mtp` を含む候補は `--spec-type draft-mtp`、それ以外は `--spec-type draft-simple` として `--model-draft <path>` と共に付与されます。
+3. **見つからない場合** — speculative decoding なしで通常起動します。プロセスログに `[launcher] MTP/draft gguf not found next to <main>.gguf; starting without speculative decoding` と記録されます。
+
+### 明示的な draft/MTP gguf を指定する
+
+**MTP/draft gguf** 欄に companion の gguf を直接指定できます。指定したパスが存在しない場合は起動リクエストが 400 で拒否されます。ファイル名に `mtp` を含む場合は `--spec-type draft-mtp`、それ以外は `--spec-type draft-simple` になります。
+
+### `mtp_mode: off`
+
+**MTP** 欄で `off` を選ぶと speculative decoding のフラグを一切付与しません(従来どおりの起動コマンド)。`off` と **MTP/draft gguf** の同時指定は矛盾するため 400 で拒否されます。
+
+### 追加オプションで `--spec-type` を指定済みの場合
+
+「追加オプション」またはオプションプロファイルに既に `--spec-type` が含まれている場合、Launcher の自動検出は完全にスキップされます(フラグは追加されません)。ユーザー指定が常に優先されます。
+
+### `-md` / `--model-draft` は追加オプションで使えない
+
+`-m` / `--model` と同様、draft モデルのパスは **MTP/draft gguf** 欄でのみ指定できます。`-md` / `--model-draft` / `--spec-draft-model` を「追加オプション」やオプションプロファイルに書くと起動リクエストは 400 で拒否されます。残りの speculative 系フラグ(`--spec-type` / `--spec-draft-n-max` / `--spec-draft-n-min` / `--spec-draft-p-min` / `-ngld` / `-devd`)は引き続き自由入力できます。
+
+### 既知の問題: `--split-mode tensor` との組み合わせ(llama.cpp issue #24309)
+
+nextn 埋め込みモデル / speculative decoding 有効時に `--split-mode tensor` を組み合わせると llama.cpp がクラッシュする既知の問題があります([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309))。Launcher はこの組み合わせを検出しても起動はブロックせず、プロセスログに `--split-mode layer` を推奨する警告を記録します。
+
+### API
+
+Web版の `POST /api/launcher/start` は以下のフィールドを追加で受け付けます(llama.cpp バックエンドのみ有効。他バックエンドで指定すると 400):
+
+| フィールド | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `draft_model_path` | `string \| null` | `null` | 明示的な companion draft/MTP gguf のパス |
+| `mtp_mode` | `"auto" \| "off"` | `"auto"` | `auto` = 自動検出、`off` = speculative decoding を無効化 |
+
+起動成功時のレスポンス JSON には、解決された speculative フラグが `"speculative"` キー(トークン配列、例: `["--spec-type", "draft-mtp"]`。何も付与されなければ空配列)として含まれます。
 
 ---
 
@@ -250,7 +300,7 @@ UI の「追加オプション」欄の文字列は `shlex.split()` でパース
 -ngl 40 --rope-scale 2.0 --rope-freq-base 10000
 ```
 
-> **注意**: `-m` / `--model` (および `--model=...` 形式) によるモデルの再指定は、追加オプション・オプションプロファイルのどちらでも受け付けません — 指定すると起動リクエストは 400 で拒否されます。モデルは「モデルパス」欄でのみ指定してください。
+> **注意**: `-m` / `--model` (および `--model=...` 形式) によるモデルの再指定は、追加オプション・オプションプロファイルのどちらでも受け付けません — 指定すると起動リクエストは 400 で拒否されます。モデルは「モデルパス」欄でのみ指定してください。同様に `-md` / `--model-draft` / `--spec-draft-model` による draft モデルの再指定も追加オプション・オプションプロファイルでは受け付けません(llama.cpp のみのフラグ)。draft モデルは「MTP/draft gguf」欄でのみ指定してください — 詳細は [MTP / speculative decoding](#mtp--speculative-decoding-llamacpp)。
 
 ---
 

@@ -40,6 +40,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from coderouter.launcher_speculative import resolve_speculative
 from coderouter.logging import get_logger
 
 logger = get_logger(__name__)
@@ -115,6 +116,10 @@ class ManagedProcess:
     options: dict[str, Any]
     extra_args: str
     status: str = "starting"   # "starting" | "running" | "stopped" | "error"
+    # MTP / speculative-decoding controls (defaults keep existing call sites
+    # working). Recorded for introspection; the resolved flags live in the cmd.
+    draft_model_path: str | None = None
+    mtp_mode: str = "auto"
     pid: int | None = None
     returncode: int | None = None
     log_tail: deque = field(default_factory=lambda: deque(maxlen=200))
@@ -208,8 +213,15 @@ _BACKEND_DEFAULTS: dict[str, str] = {
 #   - llama.cpp: ``-m`` / ``--model`` select the GGUF file.
 #   - vllm / mlx: ``--model`` selects the model; ``-m`` selects the python
 #     module that ``_build_cmd`` pins, so it must not be re-specified either.
+#   - llama.cpp: the draft/MTP model is likewise set only via the dedicated
+#     ``draft_model_path`` field, so its aliases (``-md`` / ``--model-draft``
+#     / ``--spec-draft-model``) are rejected in options / extra_args too. The
+#     remaining spec knobs (``--spec-type``, ``--spec-draft-n-max`` …) stay
+#     free-form.
 _MODEL_FLAGS: dict[str, frozenset[str]] = {
-    "llama.cpp": frozenset({"-m", "--model"}),
+    "llama.cpp": frozenset(
+        {"-m", "--model", "-md", "--model-draft", "--spec-draft-model"}
+    ),
     "vllm": frozenset({"-m", "--model"}),
     "mlx": frozenset({"-m", "--model"}),
 }
@@ -407,6 +419,24 @@ def _resolve_within_model_dirs(model_path: str, model_dirs: list[str]) -> Path:
     raise ValueError("model_path is not under any configured model_dirs.")
 
 
+def _option_tokens(options: dict[str, Any]) -> list[str]:
+    """Flatten an ``options`` dict into CLI tokens (``{flag: val}`` semantics).
+
+    Boolean values become a bare flag when true and vanish when false;
+    everything else becomes ``[flag, str(val)]``. Shared by ``_build_cmd`` and
+    ``api_start`` so the tokens fed to ``resolve_speculative`` match exactly
+    what lands on the command line (no double-parsing drift).
+    """
+    tokens: list[str] = []
+    for flag, val in options.items():
+        if isinstance(val, bool):
+            if val:
+                tokens.append(flag)
+        else:
+            tokens.extend([flag, str(val)])
+    return tokens
+
+
 def _build_cmd(
     backend: str,
     model_path: str,
@@ -414,17 +444,27 @@ def _build_cmd(
     options: dict[str, Any],
     extra_args: str,
     binary: str | None = None,
+    spec_tokens: list[str] | None = None,
 ) -> list[str]:
     """Build the CLI command list for the given backend and options.
 
     ``binary`` overrides the default executable (``llama-server`` /
     ``python``).  When None, the default is used and PATH resolution
     is left to the OS.
+
+    ``spec_tokens`` are pre-resolved speculative-decoding / MTP flags
+    (from :func:`coderouter.launcher_speculative.resolve_speculative`).
+    For llama.cpp they are appended right after the port args and BEFORE
+    the profile / extra args. They are trusted (the launcher, not the
+    caller, produced them) so they bypass the model-override guard even
+    though they may contain ``--model-draft``.
     """
     exe = _resolve_binary(backend, binary)
 
     if backend == "llama.cpp":
         cmd: list[str] = [exe, "-m", model_path, "--port", str(port)]
+        if spec_tokens:
+            cmd.extend(spec_tokens)
     elif backend == "vllm":
         cmd = [
             exe, "-m", "vllm.entrypoints.openai.api_server",
@@ -446,12 +486,7 @@ def _build_cmd(
     # H8: reject model-path re-specification via options keys.
     _assert_no_model_override(backend, list(options.keys()))
 
-    for flag, val in options.items():
-        if isinstance(val, bool):
-            if val:
-                cmd.append(flag)
-        else:
-            cmd.extend([flag, str(val)])
+    cmd.extend(_option_tokens(options))
 
     if extra_args.strip():
         extra_tokens = shlex.split(extra_args)
@@ -555,6 +590,11 @@ class StartRequest(BaseModel):
     port: int
     options: dict[str, Any] = {}
     extra_args: str = ""
+    # MTP / speculative-decoding controls (llama.cpp only). ``draft_model_path``
+    # is an explicit companion draft/MTP gguf; ``mtp_mode`` is "auto" (detect)
+    # or "off" (never emit speculative flags).
+    draft_model_path: str | None = None
+    mtp_mode: str = "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -690,11 +730,41 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
         if bc and bc.binary:
             configured_binary = bc.binary
 
+    # Validate the MTP mode up front (only "auto" / "off" are accepted).
+    if req.mtp_mode not in ("auto", "off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"mtp_mode must be 'auto' or 'off', got {req.mtp_mode!r}.",
+        )
+
+    # Build the user token list once (options flags + extra_args) so
+    # resolve_speculative sees exactly what _build_cmd will emit. shlex.split
+    # can raise on unbalanced quotes → surface as 400 like other bad input.
+    try:
+        user_tokens = _option_tokens(req.options)
+        if req.extra_args.strip():
+            user_tokens += shlex.split(req.extra_args)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve MTP / speculative-decoding flags (llama.cpp only; no-op elsewhere).
+    try:
+        spec_tokens, spec_notes = resolve_speculative(
+            req.backend,
+            req.model_path,
+            req.draft_model_path,
+            req.mtp_mode,
+            user_tokens,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     try:
         cmd = _build_cmd(
             req.backend, req.model_path, req.port,
             req.options, req.extra_args,
             binary=configured_binary,
+            spec_tokens=spec_tokens,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -708,9 +778,13 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
         port=req.port,
         options=req.options,
         extra_args=req.extra_args,
+        draft_model_path=req.draft_model_path,
+        mtp_mode=req.mtp_mode,
         status="starting",
     )
     proc.log_tail.append(f"[launcher] cmd: {' '.join(cmd)}")
+    for note in spec_notes:
+        proc.log_tail.append(f"[launcher] {note}")
 
     try:
         p = await asyncio.create_subprocess_exec(
@@ -767,6 +841,7 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
         "pid": p.pid,
         "command": cmd,
         "provider_sync": provider_sync,
+        "speculative": spec_tokens,
     }
 
 
@@ -969,6 +1044,20 @@ _LAUNCHER_HTML = r"""<!doctype html>
           <option value="">-- なし --</option>
         </select>
         <div id="profile-args" class="mt-1 text-xs font-mono text-slate-400 bg-slate-800/50 rounded p-2 hidden"></div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">MTP/draft gguf (空欄で自動検出)</label>
+          <input id="f-draft" type="text" placeholder="companion .gguf (任意)" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">MTP</label>
+          <select id="f-mtp">
+            <option value="auto">auto</option>
+            <option value="off">off</option>
+          </select>
+        </div>
       </div>
 
       <div>
@@ -1292,6 +1381,8 @@ _LAUNCHER_HTML = r"""<!doctype html>
     const backend = document.getElementById("f-backend").value;
     const model = document.getElementById("f-model").value.trim();
     const extra = document.getElementById("f-extra").value.trim();
+    const draft = document.getElementById("f-draft").value.trim();
+    const mtp = document.getElementById("f-mtp").value;
 
     if (!name) { showLaunchErr("名前を入力してください"); return; }
     if (!model) { showLaunchErr("モデルパスを入力してください"); return; }
@@ -1306,7 +1397,8 @@ _LAUNCHER_HTML = r"""<!doctype html>
         method: "POST",
         headers: authHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify({name, backend, model_path: model, port,
-                              options: selectedProfileArgs(), extra_args: extra}),
+                              options: selectedProfileArgs(), extra_args: extra,
+                              draft_model_path: draft || null, mtp_mode: mtp}),
       });
       const d = await res.json();
       if (!res.ok) { showLaunchErr(d.detail || "起動失敗"); return; }

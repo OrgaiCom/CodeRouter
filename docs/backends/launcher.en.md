@@ -108,6 +108,8 @@ The Launcher screen is made up of a "MODELS panel," a "LAUNCH form," a "PROCESSE
 | **Backend** | Choose from `llama.cpp` / `vllm` / `mlx`. The resolved binary path and availability are shown below |
 | **Model path** | Selected from the MODELS panel or entered directly |
 | **Option profile** | Choose a preset defined in `providers.yaml` |
+| **MTP/draft gguf** | Explicit companion draft/MTP gguf path (llama.cpp only). Leave blank for auto-detection → [MTP / speculative decoding](#mtp--speculative-decoding-llamacpp) |
+| **MTP** | `auto` (default, auto-detect) / `off` (disable speculative decoding) |
 | **Extra options** | Enter flags not in the profile on the spot. Parsed with `shlex` and appended to the end of the command |
 
 `▶ Launch` starts the process and it appears in the PROCESSES table. If the binary isn't found, **the launch button is automatically disabled** and the reason is displayed. See [Memory recommendations](#memory-recommendations) for the **⚙ Recommended values** button next to the "Extra options" field.
@@ -151,6 +153,54 @@ Real-time display of the selected process's stdout/stderr. In the Web edition, t
 2. **Start the backend** — choose an option profile and press the launch button. It shows as `running` in PROCESSES
 3. **Start CodeRouter** — "▶ Start CodeRouter" in the top bar
 4. **Connect Claude Code** — copy the connection string and run it in a terminal
+
+---
+
+## MTP / speculative decoding (llama.cpp)
+
+llama.cpp's `llama-server` supports Multi-Token Prediction (MTP) / speculative decoding via `--spec-type`-family flags. The Launcher assembles these flags automatically from the LAUNCH form's **MTP/draft gguf** field and **MTP** field (`auto` / `off`). **llama.cpp only** — specifying `draft_model_path` or `mtp_mode` for vllm/mlx makes the launch request fail with a 400.
+
+### Auto-detection order (`mtp_mode: auto`, the default)
+
+1. **Embedded nextn** — if the selected main gguf's metadata has `{arch}.nextn_predict_layers > 0`, `--spec-type draft-mtp` is added with no separate draft model needed.
+2. **Same-folder companion gguf** — if there's no embedded nextn, the Launcher scans the **same directory** as the main gguf for a companion that satisfies all of:
+   - the filename contains `mtp` or `draft`, or shares the main file's name prefix (with shard/quant suffixes stripped), and
+   - its file size is under 50% of the main gguf, and
+   - if its gguf architecture is readable, it matches the main model's (a mismatch is rejected — to avoid a tokenizer/vocabulary mismatch).
+
+   When a candidate is selected, filenames containing `mtp` get `--spec-type draft-mtp`; otherwise `--spec-type draft-simple` — both paired with `--model-draft <path>`.
+3. **Nothing found** — the process starts normally without speculative decoding. The process log records `[launcher] MTP/draft gguf not found next to <main>.gguf; starting without speculative decoding`.
+
+### Specifying an explicit draft/MTP gguf
+
+You can point the **MTP/draft gguf** field directly at a companion gguf. If the given path doesn't exist, the launch request is rejected with a 400. Filenames containing `mtp` get `--spec-type draft-mtp`; otherwise `--spec-type draft-simple`.
+
+### `mtp_mode: off`
+
+Choosing `off` in the **MTP** field never emits speculative-decoding flags (reproduces the historical launch command exactly). Combining `off` with an explicit **MTP/draft gguf** is a conflict and is rejected with a 400.
+
+### When `--spec-type` is already supplied via extra options
+
+If "Extra options" or the option profile already contains `--spec-type`, the Launcher's auto-detection is skipped entirely (no flags are added) — an explicit operator choice always wins.
+
+### `-md` / `--model-draft` cannot be used in extra options
+
+Just like `-m` / `--model`, the draft model path can only be set via the **MTP/draft gguf** field. Writing `-md` / `--model-draft` / `--spec-draft-model` into "Extra options" or an option profile causes the launch request to be rejected with a 400. The remaining speculative knobs (`--spec-type` / `--spec-draft-n-max` / `--spec-draft-n-min` / `--spec-draft-p-min` / `-ngld` / `-devd`) stay free-form.
+
+### Known issue: `--split-mode tensor` combination (llama.cpp issue #24309)
+
+Combining a nextn-embedded model / active speculative decoding with `--split-mode tensor` is known to crash llama.cpp ([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309)). The Launcher detects this combination but does not block the launch — it records a warning in the process log recommending `--split-mode layer` instead.
+
+### API
+
+`POST /api/launcher/start` (Web edition) accepts these additional fields (llama.cpp backend only; other backends get a 400):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `draft_model_path` | `string \| null` | `null` | Explicit companion draft/MTP gguf path |
+| `mtp_mode` | `"auto" \| "off"` | `"auto"` | `auto` = auto-detect, `off` = disable speculative decoding |
+
+On a successful start, the response JSON includes the resolved speculative flags under the `"speculative"` key (a token array, e.g. `["--spec-type", "draft-mtp"]`; an empty array when nothing was added).
 
 ---
 
@@ -250,7 +300,7 @@ The string in the UI's "Extra options" field is parsed with `shlex.split()` and 
 -ngl 40 --rope-scale 2.0 --rope-freq-base 10000
 ```
 
-> **Note**: re-specifying the model via `-m` / `--model` (or the `--model=...` form) is not accepted in either extra options or option profiles — doing so causes the launch request to be rejected with a 400. Specify the model only via the "Model path" field.
+> **Note**: re-specifying the model via `-m` / `--model` (or the `--model=...` form) is not accepted in either extra options or option profiles — doing so causes the launch request to be rejected with a 400. Specify the model only via the "Model path" field. Likewise, re-specifying the draft model via `-md` / `--model-draft` / `--spec-draft-model` (llama.cpp-only flags) is not accepted in extra options or option profiles either. Specify the draft model only via the "MTP/draft gguf" field — see [MTP / speculative decoding](#mtp--speculative-decoding-llamacpp).
 
 ---
 

@@ -137,3 +137,28 @@ def test_missing_file_raises(tmp_path: Path) -> None:
 def test_try_variant_returns_none_on_bad_file(tmp_path: Path) -> None:
     p = _write(tmp_path, b"junk")
     assert try_read_gguf_metadata(p) is None
+
+
+def test_nextn_predict_layers_detected(tmp_path: Path) -> None:
+    """A ``{arch}.nextn_predict_layers`` KV surfaces as n_nextn / supports_mtp."""
+    kvs = [
+        _kv_string("general.architecture", "glm4moe"),
+        _kv_u32("glm4moe.block_count", 40),
+        _kv_u32("glm4moe.nextn_predict_layers", 1),
+    ]
+    p = _write(tmp_path, _build_gguf(kvs))
+    info = read_gguf_metadata(p)
+    assert info.n_nextn == 1
+    assert info.supports_mtp is True
+
+
+def test_nextn_absent_is_none_and_not_mtp(tmp_path: Path) -> None:
+    """Without the nextn KV, n_nextn is None and supports_mtp is False."""
+    kvs = [
+        _kv_string("general.architecture", "llama"),
+        _kv_u32("llama.block_count", 32),
+    ]
+    p = _write(tmp_path, _build_gguf(kvs))
+    info = read_gguf_metadata(p)
+    assert info.n_nextn is None
+    assert info.supports_mtp is False

@@ -9,6 +9,63 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.7.6] — 2026-07-09 (Launcher MTP / speculative-decoding support)
+
+Adds Multi-Token Prediction (MTP) / speculative-decoding support
+to the llama.cpp launcher (both the Web UI and the desktop GUI), closing the
+gap where operators had to hand-assemble `--spec-type` / `--model-draft`
+flags. Fully backward compatible: the new fields default to auto-detection
+with a silent no-op fallback, no config-schema changes, no new dependencies.
+
+### Added
+
+- **`resolve_speculative()` / `find_draft_companion()`**
+  (`coderouter/launcher_speculative.py`) — shared decision logic for both
+  launchers. `mtp_mode="auto"` (default) first checks the selected gguf's
+  own metadata for embedded nextn layers (`{arch}.nextn_predict_layers > 0`)
+  and, if present, emits `--spec-type draft-mtp` with no separate draft
+  model; otherwise it scans the *same folder* as the main gguf for a
+  companion draft/MTP file (name hint or shared prefix, size under 50% of
+  the main model, architecture-matched when readable) and wires up
+  `--spec-type draft-mtp|draft-simple --model-draft <path>`; otherwise it
+  starts normally and logs that no companion was found. An explicit
+  `draft_model_path` skips detection entirely (400 if the path doesn't
+  exist); `mtp_mode="off"` never emits speculative flags. When the operator
+  supplies `--spec-type` in extra args, auto-detection defers to it and
+  adds nothing.
+  Both knobs are llama.cpp-only — vllm/mlx reject them with a 400.
+- **`POST /api/launcher/start`**: new optional `draft_model_path` and
+  `mtp_mode` (`"auto"` / `"off"`) fields; the response now carries the
+  resolved flags as `"speculative"`. `-md` / `--model-draft` /
+  `--spec-draft-model` join the existing `-m`/`--model` denylist for
+  `options`/`extra_args` (llama.cpp) — the draft model can only be set via
+  `draft_model_path`. The remaining spec knobs (`--spec-type`,
+  `--spec-draft-n-max/-n-min/-p-min`, `-ngld`, `-devd`) stay free-form.
+- **GGUF introspection** (`coderouter/gguf_introspect.py`): `GGUFInfo` now
+  reports `n_nextn` and the derived `supports_mtp` property, read from
+  `{arch}.nextn_predict_layers`.
+- **`--split-mode tensor` crash warning**: known llama.cpp issue #24309 —
+  a nextn-embedded model combined with tensor split can crash. The launcher
+  detects the combination and logs a warning recommending `--split-mode
+  layer` without blocking the launch.
+- **UI**: Web LAUNCH form gets "MTP/draft gguf (空欄で自動検出)" text field
+  + "MTP" `auto`/`off` select. Desktop GUI (`launcher_gui.py`) gets the
+  matching Entry + a "MTP自動検出" checkbox (default on).
+
+### Docs
+
+- `docs/backends/launcher.md`/`.en.md`: new "MTP / speculative decoding"
+  section (auto-detection order, companion-file convention, `mtp_mode=off`,
+  extra-args deferral, `-md` denylist, issue #24309 caveat, API fields), plus
+  the LAUNCH form field table and denylist note updated.
+- `docs/backends/llamacpp-direct.md`/`.en.md`: manual `--spec-type
+  draft-mtp` / `--model-draft` / `--spec-draft-n-max` usage example, with a
+  pointer to the launcher's auto-detection.
+- `docs/backends/launcher-quickstart.md`/`.en.md`: one-line pointer to the
+  new MTP section.
+
+---
+
 ## [v2.7.5] — 2026-07-06 (External-bind startup warning + remote-access guide + docs i18n)
 
 Driven by the first field report against the v2.7.0 Host-validation
