@@ -1055,7 +1055,7 @@ class LauncherApp(tk.Tk):
             row=6, column=1, columnspan=3, sticky="ew",
             padx=(0, 10), pady=(0, 2))
 
-        lbl("MTP/draft gguf（空欄で自動検出）", 7, 0)
+        lbl("MTP/draft gguf (空欄で自動検出)", 7, 0)
         self._draft_path_var = tk.StringVar()
         ttk.Entry(card, textvariable=self._draft_path_var).grid(
             row=7, column=1, columnspan=2, sticky="ew",
