@@ -11,8 +11,8 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.7.6] — 2026-07-09 (Launcher MTP / speculative-decoding support)
 
-Adds Multi-Token Prediction (MTP) / speculative-decoding support
-to the llama.cpp launcher (both the Web UI and the desktop GUI), closing the
+**PR #59 / #60**. Adds Multi-Token Prediction (MTP) / speculative-decoding
+support to the llama.cpp launcher (both the Web UI and the desktop GUI), closing the
 gap where operators had to hand-assemble `--spec-type` / `--model-draft`
 flags. Fully backward compatible: the new fields default to auto-detection
 with a silent no-op fallback, no config-schema changes, no new dependencies.
