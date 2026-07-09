@@ -109,6 +109,8 @@ coderouter serve --port 8088
 
 Web版で起動した backend は `providers.yaml` を編集しなくても provider として自動登録されます(v2.7.4)。`X-CodeRouter-Profile: launcher` を指定すればすぐにルーティング対象になります。詳細は [Launcher ガイド](./launcher.md)。
 
+> **llama.cpp + MTP対応 gguf を使うなら**: LAUNCH フォームの「MTP/draft gguf」「MTP」欄を空欄・`auto` のままにしておけば speculative decoding を自動検出します。詳細は [MTP / speculative decoding](./launcher.md#mtp--speculative-decoding-llamacpp)。
+
 ---
 
 ## 5. Claude Code から使う

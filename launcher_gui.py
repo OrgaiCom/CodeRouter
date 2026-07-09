@@ -54,6 +54,18 @@ except ImportError:
         )
 
 # ---------------------------------------------------------------------------
+# MTP / speculative-decoding resolution (optional — shared with the web UI)
+# ---------------------------------------------------------------------------
+# The GUI can run standalone without the coderouter package on sys.path; when
+# the import fails we degrade gracefully and simply skip the MTP features.
+try:
+    from coderouter.launcher_speculative import resolve_speculative
+    _HAS_SPECULATIVE = True
+except ImportError:
+    resolve_speculative = None  # type: ignore
+    _HAS_SPECULATIVE = False
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -179,9 +191,19 @@ def _scan_models(model_dirs: list[str]) -> list[dict[str, Any]]:
 
 def _build_cmd(backend: str, model_path: str, port: int,
                profile_args: dict[str, Any], extra_args: str,
-               binary: str) -> list[str]:
+               binary: str,
+               spec_tokens: list[str] | None = None) -> list[str]:
+    """Assemble the backend launch command.
+
+    ``spec_tokens`` are pre-resolved MTP / speculative-decoding flags (from
+    :func:`coderouter.launcher_speculative.resolve_speculative`). For
+    llama.cpp they are inserted right after the port args, before the profile
+    / extra args.
+    """
     if backend == "llama.cpp":
         cmd = [binary, "-m", model_path, "--port", str(port)]
+        if spec_tokens:
+            cmd.extend(spec_tokens)
     elif backend == "vllm":
         cmd = [binary, "-m", "vllm.entrypoints.openai.api_server",
                "--model", model_path, "--port", str(port)]
@@ -1033,21 +1055,31 @@ class LauncherApp(tk.Tk):
             row=6, column=1, columnspan=3, sticky="ew",
             padx=(0, 10), pady=(0, 2))
 
-        lbl("追加オプション", 7, 0)
+        lbl("MTP/draft gguf (空欄で自動検出)", 7, 0)
+        self._draft_path_var = tk.StringVar()
+        ttk.Entry(card, textvariable=self._draft_path_var).grid(
+            row=7, column=1, columnspan=2, sticky="ew",
+            padx=(0, 6), pady=(6, 0))
+        self._mtp_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(card, text="MTP自動検出",
+                        variable=self._mtp_auto_var).grid(
+            row=7, column=3, sticky="w", padx=(0, 10), pady=(6, 0))
+
+        lbl("追加オプション", 8, 0)
         self._extra_var = tk.StringVar(value="-ngl 99")
         ttk.Entry(card, textvariable=self._extra_var).grid(
-            row=7, column=1, columnspan=2, sticky="ew",
+            row=8, column=1, columnspan=2, sticky="ew",
             padx=(0, 6), pady=(6, 0))
         tk.Button(card, text="⚙ 推奨値", fg=self.FG, bg=self.BG3,
                   activebackground=self.BG2, activeforeground=self.FG,
                   relief="flat", bd=0, padx=6, pady=3, cursor="hand2",
                   font=("sans-serif", 9),
                   command=self._suggest_options).grid(
-            row=7, column=3, sticky="ew", padx=(0, 10), pady=(6, 0))
+            row=8, column=3, sticky="ew", padx=(0, 10), pady=(6, 0))
 
         # 起動ボタン
         _btn_wrap = tk.Frame(card, bg=self.ACCENT, bd=0)
-        _btn_wrap.grid(row=8, column=0, columnspan=4, sticky="ew", padx=10, pady=8)
+        _btn_wrap.grid(row=9, column=0, columnspan=4, sticky="ew", padx=10, pady=8)
         self._launch_btn = tk.Button(
             _btn_wrap, text="▶ llama.cpp / vllm / mlx 起動",
             fg="white", bg=self.ACCENT,
@@ -1065,7 +1097,7 @@ class LauncherApp(tk.Tk):
         tk.Label(card, textvariable=self._launch_err_var,
                  fg=self.RED, bg=self.BG2,
                  font=("sans-serif", 9), anchor="w", justify="left",
-                 wraplength=400).grid(row=9, column=0, columnspan=4,
+                 wraplength=400).grid(row=10, column=0, columnspan=4,
                                       sticky="ew", padx=10, pady=(0, 6))
 
         # アニメーション用(Progressbar 非使用)
@@ -1173,8 +1205,34 @@ class LauncherApp(tk.Tk):
             if matched:
                 profile_args = matched.args
 
+        # MTP / speculative-decoding resolution (llama.cpp only; no-op for
+        # other backends). Skipped entirely if the coderouter package is not
+        # importable (standalone GUI use).
+        spec_tokens: list[str] = []
+        spec_notes: list[str] = []
+        if _HAS_SPECULATIVE and resolve_speculative is not None:
+            draft_path = self._draft_path_var.get().strip() or None
+            mtp_mode = "auto" if self._mtp_auto_var.get() else "off"
+            user_tokens: list[str] = []
+            for flag, val in profile_args.items():
+                if isinstance(val, bool):
+                    if val:
+                        user_tokens.append(str(flag))
+                else:
+                    user_tokens.extend([str(flag), str(val)])
+            if extra.strip():
+                with contextlib.suppress(ValueError):
+                    user_tokens += shlex.split(extra)
+            try:
+                spec_tokens, spec_notes = resolve_speculative(
+                    backend, model_path, draft_path, mtp_mode, user_tokens)
+            except ValueError as e:
+                self._set_launch_err(str(e))
+                return
+
         try:
-            cmd = _build_cmd(backend, model_path, port, profile_args, extra, binary)
+            cmd = _build_cmd(backend, model_path, port, profile_args, extra,
+                             binary, spec_tokens)
         except ValueError as e:
             self._set_launch_err(str(e))
             return
@@ -1203,6 +1261,8 @@ class LauncherApp(tk.Tk):
 
         def _run() -> None:
             mp.log_lines.append(f"[launcher] cmd: {' '.join(cmd)}")
+            for note in spec_notes:
+                mp.log_lines.append(f"[launcher] {note}")
             try:
                 p = subprocess.Popen(
                     cmd,
