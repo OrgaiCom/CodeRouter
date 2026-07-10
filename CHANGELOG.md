@@ -9,6 +9,94 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.7.8] — 2026-07-10 (agent_cli Phase 1d: grok)
+
+Adds the second target to the `agent_cli` adapter: `agent: grok` (the xAI
+Grok CLI) is now implemented alongside `claude` from Phase 1a. The
+implementation was verified against the real CLI (grok v0.2.93, [stable]
+channel, 2026-07-10), and several design-time assumptions from the 2026-07
+research did not survive contact with it: the CLI now supports OAuth
+subscription login (the design assumed grok was API-key-only with no
+subscription path), `--sandbox` takes a profile value
+(`off|workspace|read-only|strict`) rather than being a bare flag, a
+Claude-Code-compatible `--permission-mode` exists, and `-p`/`--single` only
+accepts the prompt as an argv value (stdin is not accepted as the prompt) —
+so the adapter delivers the prompt via a temp file instead. The grok CLI is
+still early beta: version pinning is recommended, and the JSON output is
+parsed defensively so schema churn degrades into retryable fallback rather
+than hard failure. `codex` / `gemini` remain schema-declared but rejected
+(Phase 1b/1c pending).
+
+### Added
+
+- **`agent: grok` builder/parser in `AgentCliAdapter`**
+  (`coderouter/adapters/agent_cli.py`) — invokes the Grok CLI one-shot as
+  `grok --prompt-file <workdir>/.coderouter-prompt-<uuid>.txt
+  --output-format json -m <model> --cwd <workdir> --max-turns <N>
+  --no-memory --sandbox read-only --permission-mode plan` (read_only
+  default). Auth is subscription-first, same as claude: the CLI's OAuth
+  login (`grok login`, SuperGrok / X Premium+) stores credentials at
+  `~/.grok/auth.json` (7-day expiry, auto-refresh; `GROK_HOME` overrides),
+  which the adapter's `HOME` inheritance reaches with
+  `passthrough_env: []`. For CI/API-key use the CLI reads
+  `GROK_CODE_XAI_API_KEY` (not `XAI_API_KEY`) — list it in
+  `passthrough_env` only if needed; it takes precedence over OAuth.
+- **`sandbox_mode` → grok flag mapping** — `read_only` →
+  `--sandbox read-only --permission-mode plan`; `edit` →
+  `--sandbox workspace --permission-mode acceptEdits`; `full_auto` →
+  `--sandbox workspace --always-approve`. As with claude, the effective
+  mode is clamped to read-only whenever `allow_file_writes=false`,
+  regardless of `sandbox_mode` (defense in depth). Unlike claude,
+  `full_auto` maps distinctly from `edit`.
+- **Prompt delivery via `--prompt-file`** — grok's `-p`/`--single` requires
+  the prompt as an argv VALUE (verified on the real CLI: stdin is not
+  accepted as the prompt), and putting huge prompts on argv would hit
+  Linux's `MAX_ARG_STRLEN` (~128KiB) and expose the full prompt text to
+  `ps`. The adapter instead writes the prompt to a mode-`0600` temp file
+  inside the isolated workdir and passes `--prompt-file`; the file is
+  always deleted afterwards, including on the timeout and error paths.
+- **`--no-memory` always passed** — grok has a cross-session memory
+  feature; disabling it unconditionally preserves the
+  "one request = one stateless transformation" ethos (a previous call's
+  memory can never leak into the next response). Not configurable.
+- **grok JSON parsing + zero-usage reporting** — `--output-format json`
+  emits a single JSON object `{"text", "stopReason", "sessionId",
+  "requestId", "thought"?}` (verified on grok v0.2.93). `text` becomes the
+  final answer; `sessionId` surfaces as the `coderouter_session_id`
+  response metadata. There are NO token-usage or cost fields, so usage is
+  reported as zeros and `coderouter_cost_usd` stays 0 unless the operator
+  sets unit prices in `ProviderConfig.cost` (in contrast to claude's
+  direct `total_cost_usd`). Parsing is defensive: anything malformed
+  raises a retryable `AdapterError` and the fallback chain advances.
+  Runtime errors (exit 1 with the error text on stderr) surface a stderr
+  tail in the `AdapterError` message.
+
+### Changed
+
+- **Unsupported-agent error message** — constructing the adapter with a
+  not-yet-implemented agent now lists what IS implemented (e.g.
+  `agent 'codex' is not implemented yet (implemented: claude, grok)`)
+  instead of the Phase-1a-specific "claude only" wording. Still
+  `retryable=False` — a configuration error, not a fallback candidate.
+- **Schema docstrings** (`coderouter/config/schemas.py`) — `AgentCliConfig`
+  field descriptions updated for the two-agent reality; the design-time
+  "grok requires `XAI_API_KEY` in `passthrough_env`" validation note was
+  dropped as obsolete (grok now supports subscription OAuth).
+- **Docs & examples** — `docs/backends/external-agents.md`/`.en.md` gain a
+  full grok section (config example, adapter argv, sandbox mapping table,
+  prompt-file rationale, `--no-memory` rationale, JSON schema and
+  zero-usage note, OAuth setup steps, early-beta/version-pin caveat) and
+  updated implementation-status wording. The design doc
+  `docs/designs/external-agents-adapter.md` gets a new appendix §11.3
+  recording the verified deltas between the 2026-07 research and grok
+  v0.2.93 (body text left as the historical record).
+  `examples/providers-agent-cli.yaml` promotes grok out of the
+  not-implemented preview into a documented (still commented-out, so
+  copying the file doesn't require grok to be installed) block with the
+  corrected model (`grok-4.5` — `grok-code-fast-1` was retired
+  2026-05-15), `paid: false` for subscription OAuth, and
+  `passthrough_env: []`.
+
 ## [v2.7.7] — 2026-07-10 (External coding agents: agent_cli adapter, Phase 1a claude)
 
 **PR #62 / #63**. Adds a new adapter kind, `agent_cli`, that lets CodeRouter front an external
