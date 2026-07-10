@@ -40,13 +40,13 @@
 #          -H 'X-CodeRouter-Profile: claude-agent' \
 #          -d '{"model":"opus","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
 #
-# 注意: agent_cli は課金対象の外部 CLI 呼び出しになり得るため
-#   (claude はサブスクリプション消費、codex/gemini/grok も同様)、
-#   providers[].paid: true としており、これを有効にするには
-#   allow_paid: true が必要 (plan.md §2.3)。
+# 注意: この例は claude をサブスクリプション OAuth で使う前提のため
+#   paid: false としている (従量課金が発生しない経路。サブスクの
+#   5時間窓/週次クォータは消費する)。API キー従量課金で運用する
+#   場合は paid: true に変え、ALLOW_PAID=true で起動すること
+#   (環境変数 ALLOW_PAID は yaml の allow_paid を上書きする点に注意)。
 # ============================================================
 
-allow_paid: true                 # agent_cli (paid: true) を使うために必要
 default_profile: claude-agent
 
 providers:
@@ -54,7 +54,7 @@ providers:
   - name: agent-claude
     kind: agent_cli
     model: opus                  # CLI へ渡す --model 値 (opus|sonnet|haiku|fable)
-    paid: true
+    paid: false                  # サブスク OAuth 運用 = 従量課金ゼロ (上記ヘッダ参照)
     timeout_s: 30                # HTTP 層の既定値。agent_cli では使われない
                                   # (exec の強制タイムアウトは exec_timeout_s の方)
     capabilities:
@@ -108,7 +108,7 @@ profiles:
 #   - name: agent-codex
 #     kind: agent_cli
 #     model: gpt-5.5
-#     paid: true
+#     paid: false               # サブスク OAuth 運用なら false (grok のみ API 従量で true)
 #     capabilities:
 #       streaming: false
 #     agent_cli:
@@ -124,7 +124,7 @@ profiles:
 #   - name: agent-gemini
 #     kind: agent_cli
 #     model: gemini-2.5-pro
-#     paid: true
+#     paid: false               # サブスク OAuth 運用なら false (grok のみ API 従量で true)
 #     capabilities:
 #       streaming: false
 #     agent_cli:

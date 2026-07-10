@@ -215,6 +215,36 @@ def test_env_has_no_color_and_dumb_term() -> None:
     assert env["TERM"] == "dumb"
 
 
+def test_env_inherits_user_and_logname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS Keychain lookup needs USER — without it claude -p reports
+    'Not logged in' (field-verified on Claude Code 2.1.x)."""
+    monkeypatch.setenv("USER", "hyamamoto")
+    monkeypatch.setenv("LOGNAME", "hyamamoto")
+    adapter = _make_adapter()
+    env = adapter._build_child_env()
+    assert env["USER"] == "hyamamoto"
+    assert env["LOGNAME"] == "hyamamoto"
+
+
+def test_error_detail_prefers_is_error_stdout_json() -> None:
+    from coderouter.adapters.agent_cli import AgentCliAdapter
+
+    stdout = (
+        b'{"type":"result","is_error":true,'
+        b'"result":"Not logged in \xc2\xb7 Please run /login"}'
+    )
+    detail = AgentCliAdapter._error_detail(stdout, b"")
+    assert "Not logged in" in detail
+
+    # Non-JSON stdout with empty stderr falls back to the stdout tail.
+    detail = AgentCliAdapter._error_detail(b"boom", b"")
+    assert "boom" in detail
+
+    # stderr wins over non-error stdout.
+    detail = AgentCliAdapter._error_detail(b'{"is_error":false}', b"trace")
+    assert "trace" in detail
+
+
 def test_env_passthrough_allowlist_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-123")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-nope")
