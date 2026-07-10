@@ -9,9 +9,9 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
-## [v2.7.7] — 2026-07-09 (External coding agents: agent_cli adapter, Phase 1a claude)
+## [v2.7.7] — 2026-07-10 (External coding agents: agent_cli adapter, Phase 1a claude)
 
-Adds a new adapter kind, `agent_cli`, that lets CodeRouter front an external
+**PR #62 / #63**. Adds a new adapter kind, `agent_cli`, that lets CodeRouter front an external
 coding-agent CLI (Claude Code / Codex / Gemini / Grok) as a single one-shot
 `prompt in → text out` transformation, keeping the "one request = one
 stateless transformation" ethos intact even though the underlying CLI is a
@@ -84,6 +84,19 @@ clear error until their phase lands (Phase 1b-1d).
   adapter is constructed.
 
 ---
+
+### Fixed
+
+- **Paid gate blocked the example config** (PR #63): the `ALLOW_PAID` env var
+  overrides the yaml `allow_paid`, so the example's `allow_paid: true` was
+  silently defeated. Subscription-OAuth claude has zero incremental cost —
+  the example now marks the provider `paid: false` (grok stays `paid: true`,
+  API-metered).
+- **`Not logged in` under the minimal child env** (PR #63): on macOS the
+  Claude Code CLI resolves its Keychain credential via `USER`; the child env
+  now inherits `USER`/`LOGNAME` alongside `HOME`. Failures reported as an
+  `is_error` result JSON on stdout (exit 1, empty stderr) now surface the
+  actual `result` text in provider-failed logs instead of an empty tail.
 
 ## [v2.7.6] — 2026-07-09 (Launcher MTP / speculative-decoding support)
 
