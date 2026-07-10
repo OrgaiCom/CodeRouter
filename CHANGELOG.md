@@ -11,7 +11,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.7.8] — 2026-07-10 (agent_cli Phase 1d: grok)
 
-Adds the second target to the `agent_cli` adapter: `agent: grok` (the xAI
+**PR #68**. Adds the second target to the `agent_cli` adapter: `agent: grok` (the xAI
 Grok CLI) is now implemented alongside `claude` from Phase 1a. The
 implementation was verified against the real CLI (grok v0.2.93, [stable]
 channel, 2026-07-10), and several design-time assumptions from the 2026-07
