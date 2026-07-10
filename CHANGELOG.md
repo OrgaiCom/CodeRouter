@@ -9,6 +9,82 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.7.7] — 2026-07-09 (External coding agents: agent_cli adapter, Phase 1a claude)
+
+Adds a new adapter kind, `agent_cli`, that lets CodeRouter front an external
+coding-agent CLI (Claude Code / Codex / Gemini / Grok) as a single one-shot
+`prompt in → text out` transformation, keeping the "one request = one
+stateless transformation" ethos intact even though the underlying CLI is a
+stateful, multi-turn, filesystem-editing control loop. Phase 1a implements
+only the `claude` target (Claude Code CLI) — the most stable of the four and
+the only one that emits `total_cost_usd` directly, making it the reference
+implementation for the parser and cost path. `codex` / `gemini` / `grok` are
+declared in the config schema for forward compatibility but rejected with a
+clear error until their phase lands (Phase 1b-1d).
+
+### Added
+
+- **`kind: "agent_cli"` + `AgentCliAdapter`** (`coderouter/adapters/agent_cli.py`,
+  new) — invokes the Claude Code CLI one-shot via
+  `claude -p --output-format json` (prompt fed on stdin, never on argv, so
+  it is never subject to shell interpretation; `shell=True` is never used).
+  Key behaviors:
+  - Subscription-first OAuth: the child process does NOT inherit the parent
+    environment. A minimal env is built explicitly (fixed safe `PATH`,
+    `NO_COLOR=1`, `TERM=dumb`, inherited `HOME` for credential-dir
+    discovery); `ANTHROPIC_API_KEY` is never forwarded unless the operator
+    explicitly lists it in `passthrough_env` (prevents a stray key from
+    silently overriding subscription auth). `--bare` is deliberately never
+    added — it would skip OAuth/keychain reads.
+  - `CODEROUTER_AGENT_DEPTH` recursion guard: the depth is read from the
+    environment, incremented, and propagated into the child; `generate()`
+    refuses with a non-retryable error once the current depth reaches
+    `agent_depth_limit` (default 2).
+  - `exec_timeout_s` is enforced independently of `ProviderConfig.timeout_s`
+    via `asyncio.wait_for`; on expiry the whole child process *group* is
+    `SIGKILL`ed (`start_new_session=True` + `os.killpg`) so the CLI's real
+    LLM-call subprocess is never orphaned.
+  - Default `read_only` sandbox: `allow_file_writes=False` /
+    `sandbox_mode="read_only"` map to claude's `--permission-mode plan`.
+    The permission-mode mapping is clamped to read-only whenever
+    `allow_file_writes` is False, regardless of `sandbox_mode` (defense in
+    depth). `edit` / `full_auto` both map to `acceptEdits`.
+  - Pseudo-streaming: no CLI in Phase 1a exposes a stable token stream, so
+    `stream()` runs `generate()` once and chunks the final answer into
+    content `StreamChunk`s followed by a terminal `finish_reason="stop"`
+    chunk carrying usage.
+  - `total_cost_usd` (claude's JSON output) propagates to the response as
+    the `coderouter_cost_usd` metadata field, feeding the cost dashboard;
+    `session_id` similarly surfaces as `coderouter_session_id`.
+- **`AgentCliConfig` schema** (`coderouter/config/schemas.py`) — new
+  `ProviderConfig.agent_cli` sub-config (`agent`, `command`, `workdir`,
+  `exec_timeout_s`, `allow_file_writes`, `sandbox_mode`, `model`,
+  `max_turns`, `passthrough_env`, `agent_depth_limit`), `extra="forbid"`
+  like the rest of the module. `ProviderConfig.base_url` is relaxed to
+  optional so `agent_cli` providers (which shell out to a local CLI rather
+  than calling a URL) can omit it; a `model_validator` restores the
+  required-ness of `base_url` for `openai_compat` / `anthropic` and
+  requires the `agent_cli` sub-config whenever `kind == "agent_cli"`.
+- **30 new tests** (`tests/test_agent_cli.py`) covering argv construction
+  (model/max-turns/permission-mode mapping and the write-clamp), claude JSON
+  parsing (success / `is_error` / malformed / missing-field paths), a
+  stubbed-subprocess `generate()` path, timeout → process-group kill,
+  child-env isolation (no `ANTHROPIC_API_KEY` leak, `passthrough_env`
+  allowlist, depth increment), the recursion depth limit, and a TestClient
+  end-to-end run through `POST /v1/chat/completions`.
+- New example config: `examples/providers-agent-cli.yaml` — a runnable
+  single-provider `agent_cli` setup for `claude`, plus a commented-out
+  preview of the future `codex` / `gemini` / `grok` provider blocks.
+- Design doc: `docs/designs/external-agents-adapter.md` — the full Phase 1
+  design (architecture, security requirements, per-CLI argv/JSON tables,
+  auth policy, test plan). `codex` / `gemini` / `grok` remain Phase
+  1b-1d — configuring `agent_cli.agent` to any of them is accepted at
+  config-load time but rejected with a clear, non-retryable error
+  (`"agent 'codex' is not implemented in Phase 1a (claude only)"`) when the
+  adapter is constructed.
+
+---
+
 ## [v2.7.6] — 2026-07-09 (Launcher MTP / speculative-decoding support)
 
 **PR #59 / #60**. Adds Multi-Token Prediction (MTP) / speculative-decoding

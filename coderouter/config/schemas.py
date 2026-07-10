@@ -163,6 +163,125 @@ class CostConfig(BaseModel):
     )
 
 
+class AgentCliConfig(BaseModel):
+    """External coding-agent CLI settings for ``kind="agent_cli"`` providers.
+
+    Introduced by the external-agents-adapter design (Phase 1). One
+    ``agent_cli`` sub-config drives the :class:`AgentCliAdapter`, which
+    invokes an external coding-agent CLI (codex / gemini / grok / claude)
+    in a single one-shot ``exec`` and returns the final answer as one
+    ``prompt in → text out`` transformation. Phase 1a implements the
+    ``claude`` (Claude Code CLI) target only; the other agents are declared
+    at the schema level so configs are forward-compatible, but the adapter
+    rejects them until their phase lands.
+
+    Follows the ``extra="forbid"`` convention used across this module so a
+    typo'd key fails at config-load rather than being silently ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: Literal["codex", "gemini", "grok", "claude"] = Field(
+        ...,
+        description="External coding-agent CLI to invoke. Phase 1a: 'claude' only.",
+    )
+    command: str | None = Field(
+        default=None,
+        description=(
+            "CLI executable name or absolute path (resolved via PATH). "
+            "When unset, defaults to the ``agent`` name."
+        ),
+    )
+    workdir: str | None = Field(
+        default=None,
+        description=(
+            "Working directory for the one-shot exec. ``~`` / env-var "
+            "expansion is applied. When unset, a dedicated isolated "
+            "directory (``~/.coderouter/agents/<name>``) is used."
+        ),
+    )
+    exec_timeout_s: float = Field(
+        default=600.0,
+        ge=1.0,
+        le=1800.0,
+        description=(
+            "Forced timeout (seconds) for the one-shot exec. Independent "
+            "of ``ProviderConfig.timeout_s`` — the CLI has no built-in "
+            "wall clock so this is enforced with an asyncio watchdog + "
+            "process-group SIGKILL."
+        ),
+    )
+    allow_file_writes: bool = Field(
+        default=False,
+        description=(
+            "Allow the agent to write to the filesystem. Default False "
+            "(read-only). When False the sandbox mapping is clamped to "
+            "read-only regardless of ``sandbox_mode`` (defense in depth)."
+        ),
+    )
+    sandbox_mode: Literal["read_only", "edit", "full_auto"] = Field(
+        default="read_only",
+        description=(
+            "Source mode mapped onto each CLI's sandbox / approval flags. "
+            "Default read_only maps to claude ``--permission-mode plan``."
+        ),
+    )
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Model name passed to the CLI's ``--model``. When unset, "
+            "``ProviderConfig.model`` is used."
+        ),
+    )
+    max_turns: int | None = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description=(
+            "Turn cap. Passed to the CLI's ``--max-turns`` where supported "
+            "(codex ignores it — the CLI has no such flag)."
+        ),
+    )
+    passthrough_env: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Allowlist of environment variable NAMES forwarded from the "
+            "parent process into the child. The child otherwise inherits "
+            "no parent environment (subscription-first auth policy). "
+            "``ANTHROPIC_API_KEY`` is NOT forwarded unless listed here."
+        ),
+    )
+    agent_depth_limit: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        description=(
+            "Recursion nesting cap. ``CODEROUTER_AGENT_DEPTH`` is "
+            "propagated (incremented) into the child; ``generate()`` "
+            "refuses when the current depth is at or above this limit."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _resolve_and_check(self) -> AgentCliConfig:
+        """Default ``command`` to ``agent`` and reject contradictory sandbox.
+
+        Rule (design §5.2.1 #2): ``allow_file_writes=True`` together with
+        ``sandbox_mode="read_only"`` is contradictory — the operator asked
+        for writes while pinning a read-only sandbox. Fail fast at load,
+        matching the module's other cross-field validators.
+        """
+        if self.command is None:
+            self.command = self.agent
+        if self.allow_file_writes and self.sandbox_mode == "read_only":
+            raise ValueError(
+                "agent_cli: allow_file_writes=True conflicts with "
+                "sandbox_mode='read_only'. Set sandbox_mode to 'edit' or "
+                "'full_auto' to permit writes, or keep allow_file_writes=False."
+            )
+        return self
+
+
 class ProviderConfig(BaseModel):
     """A single provider entry from providers.yaml.
 
@@ -170,20 +289,26 @@ class ProviderConfig(BaseModel):
         - Local llama.cpp server: kind=openai_compat, base_url=http://localhost:8080/v1
         - OpenRouter free: kind=openai_compat, base_url=https://openrouter.ai/api/v1
         - (future) Anthropic: kind=anthropic, base_url=https://api.anthropic.com
+        - External agent CLI: kind=agent_cli, agent_cli={agent: claude, ...}
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., description="Unique identifier used in profiles.yaml")
-    kind: Literal["openai_compat", "anthropic"] = Field(
+    kind: Literal["openai_compat", "anthropic", "agent_cli"] = Field(
         default="openai_compat",
         description=(
             "Adapter type. 'openai_compat' covers llama.cpp / Ollama / "
             "OpenRouter / LM Studio / Together / Groq. 'anthropic' is the "
-            "native Anthropic Messages API passthrough (v0.3.x)."
+            "native Anthropic Messages API passthrough (v0.3.x). 'agent_cli' "
+            "invokes an external coding-agent CLI one-shot (see AgentCliConfig)."
         ),
     )
-    base_url: HttpUrl
+    # base_url is required for HTTP-backed adapters (openai_compat / anthropic)
+    # but meaningless for agent_cli (which shells out to a local CLI rather
+    # than calling a URL). It is optional at the field level and enforced per
+    # kind by ``_check_kind_requirements`` below.
+    base_url: HttpUrl | None = None
     model: str = Field(..., description="Upstream model id sent in the request body")
     api_key_env: str | None = Field(
         default=None,
@@ -243,6 +368,14 @@ class ProviderConfig(BaseModel):
 
     capabilities: Capabilities = Field(default_factory=Capabilities)
 
+    # kind="agent_cli": required external coding-agent CLI settings. Opt-in
+    # (default None) exactly like ``restart_command`` — only meaningful when
+    # ``kind == "agent_cli"``, and enforced by ``_check_kind_requirements``.
+    agent_cli: AgentCliConfig | None = Field(
+        default=None,
+        description="Required when kind='agent_cli': external agent CLI settings.",
+    )
+
     cost: CostConfig | None = Field(
         default=None,
         description=(
@@ -296,6 +429,32 @@ class ProviderConfig(BaseModel):
         from coderouter.output_filters import validate_output_filters
 
         validate_output_filters(self.output_filters)
+        return self
+
+    @model_validator(mode="after")
+    def _check_kind_requirements(self) -> ProviderConfig:
+        """Enforce per-``kind`` field requirements (external-agents design §5.2.2).
+
+        - HTTP-backed adapters (``openai_compat`` / ``anthropic``) require a
+          ``base_url`` — they have nowhere to send the request otherwise.
+          ``base_url`` was relaxed to Optional so ``agent_cli`` providers can
+          omit it; this validator restores the required-ness for the HTTP kinds.
+        - ``agent_cli`` requires the ``agent_cli`` sub-config (the adapter has
+          no CLI to invoke without it).
+
+        Same fast-fail philosophy as ``_check_output_filters_known`` — a
+        misconfigured provider surfaces at config-load, not at first request.
+        """
+        if self.kind in ("openai_compat", "anthropic") and self.base_url is None:
+            raise ValueError(
+                f"provider {self.name!r}: base_url is required for "
+                f"kind={self.kind!r}."
+            )
+        if self.kind == "agent_cli" and self.agent_cli is None:
+            raise ValueError(
+                f"provider {self.name!r}: agent_cli sub-config is required "
+                f"for kind='agent_cli'."
+            )
         return self
 
 
