@@ -248,9 +248,9 @@ class AgentCliAdapter(BaseAdapter):
             ) from exc
 
         if proc.returncode != 0:
-            tail = (stderr[-_MAX_STDERR_TAIL:].decode("utf-8", "replace") if stderr else "")
+            detail = self._error_detail(stdout, stderr)
             raise AdapterError(
-                f"{self.acfg.agent} exited {proc.returncode}: {tail!r}",
+                f"{self.acfg.agent} exited {proc.returncode}: {detail}",
                 provider=self.name,
                 status_code=None,
                 retryable=self._is_retryable_exit(proc.returncode),
@@ -487,8 +487,10 @@ class AgentCliAdapter(BaseAdapter):
         """Build the minimal child environment (design §5.3).
 
         The child does NOT inherit the parent environment. Only a fixed base
-        (PATH / NO_COLOR / TERM), the inherited HOME (for credential-dir
-        discovery), the incremented recursion depth, and the operator's
+        (PATH / NO_COLOR / TERM), the inherited HOME / USER / LOGNAME (for
+        credential discovery — on macOS the Claude Code CLI resolves its
+        Keychain entry via ``USER``; without it headless runs fail with
+        "Not logged in"), the incremented recursion depth, and the operator's
         ``passthrough_env`` allowlist are injected. ``ANTHROPIC_API_KEY`` is
         therefore excluded unless explicitly allowlisted.
         """
@@ -499,14 +501,38 @@ class AgentCliAdapter(BaseAdapter):
             "TERM": "dumb",
             _DEPTH_ENV: str(self._current_depth() + 1),
         }
-        home = parent.get("HOME")
-        if home:
-            env["HOME"] = home
+        for name in ("HOME", "USER", "LOGNAME"):
+            value = parent.get(name)
+            if value:
+                env[name] = value
         for name in self.acfg.passthrough_env:
             value = parent.get(name)
             if value is not None:
                 env[name] = value
         return env
+
+    @staticmethod
+    def _error_detail(stdout: bytes, stderr: bytes) -> str:
+        """Extract the most useful error text from a failed CLI run.
+
+        The Claude Code CLI reports auth / API failures as an ``is_error:
+        true`` result JSON on **stdout** with exit code 1 (stderr stays
+        empty), so a stderr-only tail hides the actual cause (e.g. ``Not
+        logged in · Please run /login``). Preference order: the ``result``
+        field of an ``is_error`` stdout JSON → stderr tail → stdout tail.
+        """
+        if stdout:
+            with contextlib.suppress(ValueError, TypeError):
+                doc = json.loads(stdout)
+                if isinstance(doc, dict) and doc.get("is_error"):
+                    result = doc.get("result")
+                    if isinstance(result, str) and result.strip():
+                        return result.strip()[:_MAX_STDERR_TAIL]
+        if stderr:
+            return repr(stderr[-_MAX_STDERR_TAIL:].decode("utf-8", "replace"))
+        if stdout:
+            return repr(stdout[-_MAX_STDERR_TAIL:].decode("utf-8", "replace"))
+        return "''"
 
     def _resolve_workdir(self) -> str:
         """Resolve + create the working directory, rejecting ``..`` escapes.
