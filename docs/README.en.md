@@ -68,6 +68,7 @@ Installing, launching, and connecting local inference backends.
 - **install-backends** — Installing the three backends (llama.cpp / vLLM / MLX) · [日本語](backends/install-backends.md) · [English](backends/install-backends.en.md)
 - **launcher-quickstart** — Install a backend and launch, the shortest path · [日本語](backends/launcher-quickstart.md)
 - **launcher** — Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md)
+- **external-agents** — External coding-agent CLI (agent_cli, v2.7.7, claude only) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
 - **llamacpp-direct** — Connect llama.cpp directly · [日本語](backends/llamacpp-direct.md) · [English](backends/llamacpp-direct.en.md)
 - **lmstudio-direct** — Connect LM Studio directly · [日本語](backends/lmstudio-direct.md) · [English](backends/lmstudio-direct.en.md)
 - **hf-ollama-models** — Use HF models via Ollama · [日本語](backends/hf-ollama-models.md)
