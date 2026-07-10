@@ -105,6 +105,77 @@ def test_monitor_single_success_resets_to_healthy() -> None:
 
 
 # ----------------------------------------------------------------------
+# Group 1b: should_skip — v2.x ``skip`` action half-open circuit breaker
+# ----------------------------------------------------------------------
+
+
+def test_should_skip_false_when_not_unhealthy() -> None:
+    """A HEALTHY or DEGRADED provider is never skipped."""
+    mon = BackendHealthMonitor()
+    # Never observed → HEALTHY.
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False
+    # DEGRADED (threshold failures, below 2x) → still not skipped.
+    for _ in range(3):
+        mon.record_attempt("p", success=False, threshold=3)
+    assert mon.state_for("p") == "DEGRADED"
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False
+
+
+def test_should_skip_allows_one_trial_then_skips_within_interval() -> None:
+    """The first resolve after going UNHEALTHY is a half-open trial
+    (allowed); further resolves inside the interval are skipped."""
+    mon = BackendHealthMonitor()
+    for _ in range(4):
+        mon.record_attempt("p", success=False, threshold=2)
+    assert mon.is_unhealthy("p") is True
+
+    # Immediate half-open trial: let exactly one request through.
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False
+    # Every subsequent resolve inside the interval: skip.
+    assert mon.should_skip("p", half_open_interval_s=30.0) is True
+    assert mon.should_skip("p", half_open_interval_s=30.0) is True
+
+
+def test_should_skip_allows_trial_after_interval_elapses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the half-open interval elapses, one more trial is allowed."""
+    import coderouter.guards.backend_health as bh
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(bh.time, "monotonic", lambda: clock["t"])
+
+    mon = bh.BackendHealthMonitor()
+    for _ in range(4):
+        mon.record_attempt("p", success=False, threshold=2)
+
+    # Trial at t=1000, then skip within the 30s window.
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False
+    clock["t"] = 1020.0
+    assert mon.should_skip("p", half_open_interval_s=30.0) is True
+    # Interval elapsed → a fresh trial is allowed, then skips resume.
+    clock["t"] = 1031.0
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False
+    assert mon.should_skip("p", half_open_interval_s=30.0) is True
+
+
+def test_should_skip_success_resets_half_open_state() -> None:
+    """A success snaps the provider back to HEALTHY and clears the
+    half-open bookkeeping, so it is never skipped afterwards."""
+    mon = BackendHealthMonitor()
+    for _ in range(4):
+        mon.record_attempt("p", success=False, threshold=2)
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False  # trial
+    assert mon.should_skip("p", half_open_interval_s=30.0) is True  # skip
+
+    # A successful attempt (e.g. a half-open trial that got through and
+    # succeeded) resets everything.
+    mon.record_attempt("p", success=True, threshold=2)
+    assert mon.state_for("p") == "HEALTHY"
+    assert mon.should_skip("p", half_open_interval_s=30.0) is False
+
+
+# ----------------------------------------------------------------------
 # Group 2: Engine integration — action dispatch
 # ----------------------------------------------------------------------
 
@@ -411,3 +482,114 @@ async def test_demote_no_op_when_chain_uniformly_unhealthy(
     attempted = [r.provider for r in try_records]  # type: ignore[attr-defined]
     assert "primary" in attempted
     assert "fallback" in attempted
+
+
+# ----------------------------------------------------------------------
+# Group 4: v2.x ``skip`` action — half-open circuit breaker at chain resolve
+#
+# These exercise ``_resolve_chain`` directly (no adapter call is attempted):
+# an UNHEALTHY provider is filtered out of the resolved chain, a half-open
+# trial re-admits it once per interval, and a uniformly-UNHEALTHY chain falls
+# back to the unfiltered list as a last resort.
+# ----------------------------------------------------------------------
+
+
+def _drive_unhealthy(engine: FallbackEngine, provider: str, *, threshold: int) -> None:
+    """Push ``provider`` to UNHEALTHY via the monitor (no adapter call)."""
+    for _ in range(2 * threshold):
+        engine._backend_health.record_attempt(  # type: ignore[attr-defined]
+            provider, success=False, threshold=threshold
+        )
+    assert engine._backend_health.is_unhealthy(provider) is True  # type: ignore[attr-defined]
+
+
+def test_skip_filters_unhealthy_provider_from_resolved_chain(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``action=skip``: after the immediate half-open trial is consumed, an
+    UNHEALTHY provider is removed from the resolved chain entirely."""
+    config = _config(["primary", "fallback"], action="skip", threshold=2)
+    primary = _AlwaysFailAdapter(config.provider_by_name("primary"))
+    fallback = _HealthyAdapter(config.provider_by_name("fallback"))
+    engine = _engine(config, {"primary": primary, "fallback": fallback})
+
+    _drive_unhealthy(engine, "primary", threshold=2)
+
+    # First resolve consumes the immediate half-open trial → primary present.
+    first = [a.name for a in engine._resolve_chain("default")]
+    assert first == ["primary", "fallback"]
+
+    # Second resolve inside the interval → primary skipped, log fires.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="coderouter"):
+        second = [a.name for a in engine._resolve_chain("default")]
+    assert second == ["fallback"]
+    skip_records = [
+        r for r in caplog.records if r.msg == "skip-unhealthy-provider"
+    ]
+    assert len(skip_records) == 1
+    assert skip_records[0].provider == "primary"  # type: ignore[attr-defined]
+
+
+def test_skip_half_open_trial_readmits_after_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the half-open interval elapses, ``skip`` re-admits the
+    UNHEALTHY provider for exactly one trial resolve."""
+    import coderouter.guards.backend_health as bh
+
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(bh.time, "monotonic", lambda: clock["t"])
+
+    config = _config(["primary", "fallback"], action="skip", threshold=2)
+    primary = _AlwaysFailAdapter(config.provider_by_name("primary"))
+    fallback = _HealthyAdapter(config.provider_by_name("fallback"))
+    engine = _engine(config, {"primary": primary, "fallback": fallback})
+
+    _drive_unhealthy(engine, "primary", threshold=2)
+
+    # Trial consumed on the first resolve.
+    assert [a.name for a in engine._resolve_chain("default")] == [
+        "primary",
+        "fallback",
+    ]
+    # Inside the interval: primary is filtered out.
+    clock["t"] = 5020.0
+    assert [a.name for a in engine._resolve_chain("default")] == ["fallback"]
+    # Interval elapsed (default half_open 30s): primary re-admitted for a trial.
+    clock["t"] = 5031.0
+    assert [a.name for a in engine._resolve_chain("default")] == [
+        "primary",
+        "fallback",
+    ]
+
+
+def test_skip_all_unhealthy_falls_back_to_full_chain(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When every provider is UNHEALTHY, ``skip`` does not empty the chain —
+    it falls back to the unfiltered list (last resort) and logs once."""
+    config = _config(["primary", "fallback"], action="skip", threshold=2)
+    primary = _AlwaysFailAdapter(config.provider_by_name("primary"))
+    fallback = _AlwaysFailAdapter(config.provider_by_name("fallback"))
+    engine = _engine(config, {"primary": primary, "fallback": fallback})
+
+    _drive_unhealthy(engine, "primary", threshold=2)
+    _drive_unhealthy(engine, "fallback", threshold=2)
+
+    # First resolve: both get their immediate half-open trial → full chain.
+    first = [a.name for a in engine._resolve_chain("default")]
+    assert first == ["primary", "fallback"]
+
+    # Second resolve inside the interval: both would be skipped → last resort
+    # returns the full unfiltered chain and logs once.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="coderouter"):
+        second = [a.name for a in engine._resolve_chain("default")]
+    assert second == ["primary", "fallback"]
+
+    last_resort = [
+        r for r in caplog.records if r.msg == "chain-all-unhealthy-last-resort"
+    ]
+    assert len(last_resort) == 1
+    assert last_resort[0].providers == ["primary", "fallback"]  # type: ignore[attr-defined]

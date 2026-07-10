@@ -228,6 +228,47 @@ def test_recovery_probe_initial_above_max_rejected() -> None:
 
 
 # ======================================================================
+# v2.x: ``skip`` backend-health action + half-open interval bounds
+# ======================================================================
+
+
+def test_backend_health_action_skip_accepted() -> None:
+    """``skip`` is a valid ``backend_health_action`` literal."""
+    chain = FallbackChain(
+        name="p",
+        providers=["local"],
+        backend_health_action="skip",
+    )
+    assert chain.backend_health_action == "skip"
+    # Default half-open interval loads cleanly.
+    assert chain.backend_health_half_open_s == 30.0
+
+
+def test_backend_health_half_open_below_floor_rejected() -> None:
+    """``backend_health_half_open_s`` below the 5.0s floor is rejected."""
+    with pytest.raises(ValidationError) as info:
+        FallbackChain(
+            name="p",
+            providers=["local"],
+            backend_health_action="skip",
+            backend_health_half_open_s=1.0,
+        )
+    assert "backend_health_half_open_s" in str(info.value)
+
+
+def test_backend_health_half_open_above_ceiling_rejected() -> None:
+    """``backend_health_half_open_s`` above the 600.0s ceiling is rejected."""
+    with pytest.raises(ValidationError) as info:
+        FallbackChain(
+            name="p",
+            providers=["local"],
+            backend_health_action="skip",
+            backend_health_half_open_s=601.0,
+        )
+    assert "backend_health_half_open_s" in str(info.value)
+
+
+# ======================================================================
 # M13.4: boolean matcher False is a dead rule → reject at load
 # ======================================================================
 

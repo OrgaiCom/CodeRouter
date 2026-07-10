@@ -622,6 +622,66 @@ def log_demote_unhealthy_provider(
 
 
 # ---------------------------------------------------------------------------
+# v2.x: ``skip`` backend-health action log shapes
+# ---------------------------------------------------------------------------
+
+
+class SkipUnhealthyProviderPayload(TypedDict):
+    """Structured shape of the ``skip-unhealthy-provider`` log record."""
+
+    provider: str
+    profile: str
+
+
+class ChainAllUnhealthyLastResortPayload(TypedDict):
+    """Structured shape of the ``chain-all-unhealthy-last-resort`` log record."""
+
+    profile: str
+    providers: list[str]
+
+
+def log_skip_unhealthy_provider(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+) -> None:
+    """Emit a ``skip-unhealthy-provider`` info line.
+
+    Fires per chain-resolve when the ``skip`` action filters an UNHEALTHY
+    provider out of the chain (and the half-open trial is not currently
+    allowed through). Quiet when a half-open trial lets the provider through
+    — that resolve looks identical to a healthy one.
+    """
+    payload: SkipUnhealthyProviderPayload = {
+        "provider": provider,
+        "profile": profile,
+    }
+    logger.info("skip-unhealthy-provider", extra=payload)
+
+
+def log_chain_all_unhealthy_last_resort(
+    logger: logging.Logger,
+    *,
+    profile: str,
+    providers: list[str],
+) -> None:
+    """Emit a ``chain-all-unhealthy-last-resort`` info line.
+
+    Fires once per chain-resolve when the ``skip`` action would have filtered
+    out every provider — rather than fail the request outright, the engine
+    falls back to the unfiltered chain and attempts everyone. ``providers`` is
+    the last-resort chain (original order) so the operator can see exactly what
+    is being tried despite all members being UNHEALTHY.
+    """
+    payload: ChainAllUnhealthyLastResortPayload = {
+        "profile": profile,
+        "providers": providers,
+    }
+    logger.info("chain-all-unhealthy-last-resort", extra=payload)
+
+
+# ---------------------------------------------------------------------------
 # v2.0-J: self-healing log shapes
 # ---------------------------------------------------------------------------
 

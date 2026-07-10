@@ -627,7 +627,7 @@ class FallbackChain(BaseModel):
     # Distinct from the v1.9-C ``adaptive`` gradient (continuous
     # latency / error-rate buffer with debounce) which handles the
     # "slow but alive" case; L5 handles the "hard crash" case.
-    backend_health_action: Literal["off", "warn", "demote", "exclude"] = Field(
+    backend_health_action: Literal["off", "warn", "demote", "exclude", "skip"] = Field(
         default="warn",
         description=(
             "v1.9-E (L5 phase 2): action when a provider transitions "
@@ -642,9 +642,33 @@ class FallbackChain(BaseModel):
             "self-healing (restart helper if configured, recovery "
             "probe with exponential backoff). On recovery, the "
             "provider is automatically restored to its original "
-            "chain position. ``off`` disables the monitor "
+            "chain position. ``skip`` (v2.x) filters UNHEALTHY providers "
+            "out of the chain like ``exclude`` but with a self-contained "
+            "half-open circuit breaker — no self-healing orchestrator "
+            "required: every ``backend_health_half_open_s`` window one "
+            "trial request is let through, and a single success snaps the "
+            "provider back into rotation. If skipping would empty the "
+            "chain, the unfiltered chain is used as a last resort so a "
+            "uniformly-UNHEALTHY chain still attempts every provider "
+            "rather than 502-ing outright. ``off`` disables the monitor "
             "entirely (zero observation overhead, identical to "
             "v1.9.x behavior)."
+        ),
+    )
+    backend_health_half_open_s: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=600.0,
+        description=(
+            "v2.x: half-open interval (seconds) for the ``skip`` "
+            "backend-health action. While a provider is UNHEALTHY, at most "
+            "one trial request is let through per interval — the built-in "
+            "circuit breaker's half-open probe. A successful trial resets "
+            "the provider to HEALTHY immediately; a failed trial keeps it "
+            "skipped until the next interval elapses. Ignored for every "
+            "other ``backend_health_action``. Default 30 s balances quick "
+            "recovery against hammering a still-down backend; capped at "
+            "600 s (10 min)."
         ),
     )
     backend_health_threshold: int = Field(
