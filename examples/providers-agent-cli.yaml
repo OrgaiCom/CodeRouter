@@ -1,24 +1,26 @@
 # ============================================================
 # CodeRouter providers.yaml — 外部コーディングエージェント CLI (agent_cli)
-# 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1a (claude のみ実装)
+# 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1a (claude)・Phase 1d (grok) 実装済み
 #
 # 出典: docs/designs/external-agents-adapter.md
-# 目的: Claude Code CLI (`claude -p --output-format json`) を CodeRouter の
-#       1プロバイダとして登録し、他のオーケストレータ (別の Claude Code /
-#       Cursor 等) から「1つのモデル」として透過的に呼び出せるようにする。
+# 目的: Claude Code CLI (`claude -p --output-format json`) や Grok CLI を
+#       CodeRouter の1プロバイダとして登録し、他のオーケストレータ
+#       (別の Claude Code / Cursor 等) から「1つのモデル」として透過的に
+#       呼び出せるようにする。
 #       CodeRouter はワンショット exec (プロンプト in → テキスト out) の
 #       1変換だけを担い、エージェントのマルチターン制御ループそのものは
 #       中で完結させる (future.md の「1リクエスト=1変換」思想を維持)。
 #
-# Phase 1a スコープ:
-#   - agent: claude のみ実装済み。サブスクリプション OAuth
-#     (`~/.claude/.credentials.json` または `claude setup-token`) を優先し、
-#     子プロセスには ANTHROPIC_API_KEY を含む親環境を継承させない
+# 実装スコープ (v2.7.8 時点):
+#   - agent: claude (Phase 1a) と grok (Phase 1d) が実装済み。いずれも
+#     サブスクリプション OAuth を優先し (claude: `~/.claude/.credentials.json`
+#     または `claude setup-token`、grok: `~/.grok/auth.json`)、子プロセスには
+#     ANTHROPIC_API_KEY 等を含む親環境を継承させない
 #     (env allowlist、下記 passthrough_env 参照)。
-#   - agent: codex / gemini / grok は config スキーマ上は宣言できるが、
-#     アダプタ構築時に AdapterError("not implemented in Phase 1a") で
-#     拒否される。末尾にコメントアウトした Phase 1b-1d のプレビュー
-#     ブロック (未実装) を参照。
+#   - agent: codex / gemini は config スキーマ上は宣言できるが、
+#     アダプタ構築時に AdapterError ("not implemented yet" — 実装済み
+#     エージェントの列挙付き) で拒否される。末尾にコメントアウトした
+#     Phase 1b-1c のプレビューブロック (未実装) を参照。
 #   - 既定は read_only (書き込み不可)。書き込みを許可するには
 #     allow_file_writes: true と sandbox_mode: edit|full_auto を両方
 #     明示する必要がある (片方だけだと config load 時に ValueError)。
@@ -39,6 +41,11 @@
 #          -H 'Content-Type: application/json' \
 #          -H 'X-CodeRouter-Profile: claude-agent' \
 #          -d '{"model":"opus","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
+#      下記の grok ブロックを有効化した場合の動作確認 (要 `grok login` 済み):
+#        curl http://localhost:8088/v1/chat/completions \
+#          -H 'Content-Type: application/json' \
+#          -H 'X-CodeRouter-Profile: grok' \
+#          -d '{"model":"grok-4.5","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
 #
 # 注意: この例は claude をサブスクリプション OAuth で使う前提のため
 #   paid: false としている (従量課金が発生しない経路。サブスクの
@@ -72,6 +79,49 @@ providers:
       passthrough_env: [CLAUDE_CODE_OAUTH_TOKEN]   # setup-token を使う場合のみ (任意)
       agent_depth_limit: 2         # ネスト再帰 (CODEROUTER_AGENT_DEPTH) の上限
 
+  # ---- xAI Grok CLI (Phase 1d・実装済み — v2.7.8) ----
+  # 実装済みだが既定ではコメントアウトしてある: このファイルをそのまま
+  # コピーしても grok CLI のインストールを要求しないようにするため。
+  # grok CLI (v0.2.93 [stable] で検証) を導入し `grok login` を済ませて
+  # から有効化すること (`grok models` が通れば認証 OK)。
+  # early beta のためバージョン pin 推奨 (command にフルパス指定可)。
+  #
+  # 認証: OAuth サブスクリプションログイン対応 (SuperGrok / X Premium+、
+  #   資格情報は ~/.grok/auth.json・7日失効・自動リフレッシュ)。かつての
+  #   「grok は API 課金必須 (サブスク非対応)」という前提は Grok Build
+  #   beta (2026-05) 以降 obsolete。
+  # usage/cost: grok の JSON 出力にはトークン usage / コストのフィールドが
+  #   無いため usage はゼロ報告、cost も ProviderConfig.cost に単価を
+  #   設定しない限り 0 のまま。
+  #
+  # - name: agent-grok
+  #   kind: agent_cli
+  #   model: grok-4.5              # 現行の既定モデル (`grok models` で一覧)
+  #   paid: false                  # サブスク OAuth 運用 = 従量課金ゼロ
+  #   capabilities:
+  #     streaming: false
+  #     tools: false
+  #   agent_cli:
+  #     agent: grok
+  #     command: grok
+  #     workdir: ~/.coderouter/agents/grok
+  #     exec_timeout_s: 600
+  #     allow_file_writes: false
+  #     sandbox_mode: read_only    # --sandbox read-only --permission-mode plan にマップ
+  #     max_turns: 8               # --max-turns
+  #     passthrough_env: []        # OAuth は ~/.grok/auth.json を HOME 継承で読むため空でよい。
+  #                                # CI で API キーを使う場合のみ GROK_CODE_XAI_API_KEY を
+  #                                # 列挙する (XAI_API_KEY ではない点に注意。転送時は
+  #                                # OAuth より優先される)
+  #
+  # 有効化する場合は profiles にも次を追加する:
+  #   - name: grok
+  #     providers: [agent-grok]
+  #
+  # 補足: Grok の公式 API は OpenAI 互換なので、CLI を経由しない
+  #   kind: openai_compat + base_url: https://api.x.ai/v1 という代替経路も
+  #   引き続き有効 (docs/designs/external-agents-adapter.md §9.2)。
+
 profiles:
   # claude-agent — Claude Code CLI 専用プロファイル。単独 (fallback なし)。
   # agent_cli は「プロンプト in → テキスト out」の不透明なテキスト
@@ -89,15 +139,14 @@ profiles:
 #       match: { model_pattern: "claude-agent.*" }
 
 # ============================================================
-# 以下はプレビュー (Phase 1b-1d・未実装) — コメントアウト
+# 以下はプレビュー (Phase 1b-1c・未実装) — コメントアウト
 #
-# 下記の agent: codex / gemini / grok は config スキーマとしては
-# 有効 (providers.yaml として読み込める) だが、AgentCliAdapter の
-# __init__ が Phase 1a では claude 以外を拒否するため、実際に
-# リクエストを投げると起動時に
-#   AdapterError: agent 'codex' is not implemented in Phase 1a
-#   (claude only). Configure agent='claude' or wait for the agent's
-#   phase.
+# 下記の agent: codex / gemini は config スキーマとしては
+# 有効 (providers.yaml として読み込める) だが、AgentCliAdapter が
+# claude / grok 以外を拒否するため、実際にリクエストを投げると
+# 起動時におおよそ次の形の AdapterError (正確な文言は変わりうる)
+#   AdapterError: agent 'codex' is not implemented yet
+#   (implemented: claude, grok). Wait for the agent's phase (1b/1c).
 # で失敗する (retryable=False)。将来のフェーズが実装されるまでの
 # forward-compatible なプレースホルダとして参照用に残してある。
 # 詳細: docs/designs/external-agents-adapter.md §3, §9
@@ -108,7 +157,7 @@ profiles:
 #   - name: agent-codex
 #     kind: agent_cli
 #     model: gpt-5.5
-#     paid: false               # サブスク OAuth 運用なら false (grok のみ API 従量で true)
+#     paid: false               # サブスク OAuth 運用なら false
 #     capabilities:
 #       streaming: false
 #     agent_cli:
@@ -124,7 +173,7 @@ profiles:
 #   - name: agent-gemini
 #     kind: agent_cli
 #     model: gemini-2.5-pro
-#     paid: false               # サブスク OAuth 運用なら false (grok のみ API 従量で true)
+#     paid: false               # サブスク OAuth 運用なら false
 #     capabilities:
 #       streaming: false
 #     agent_cli:
@@ -137,30 +186,8 @@ profiles:
 #       sandbox_mode: read_only
 #       passthrough_env: [GEMINI_API_KEY]   # OAuth キャッシュが無い場合の保険
 #
-#   # ---- xAI Grok (Phase 1d・未実装・CLI 経路) ----
-#   # 補足: Grok の公式 API は OpenAI 互換なので、CLI 経路より
-#   #   kind: openai_compat + base_url: https://api.x.ai/v1 の方が
-#   #   現状は安定 (§9.2)。以下は CLI 統一運用を望む場合の代替経路。
-#   - name: agent-grok
-#     kind: agent_cli
-#     model: grok-code-fast-1
-#     paid: true
-#     capabilities:
-#       streaming: false
-#     agent_cli:
-#       agent: grok
-#       command: grok
-#       workdir: ~/.coderouter/agents/grok
-#       exec_timeout_s: 600
-#       allow_file_writes: false
-#       max_turns: 8
-#       sandbox_mode: read_only
-#       passthrough_env: [XAI_API_KEY]      # grok は API 課金必須 (サブスク非対応)
-#
 # profiles:
 #   - name: codex
 #     providers: [agent-codex]
 #   - name: gemini
 #     providers: [agent-gemini]
-#   - name: grok
-#     providers: [agent-grok]

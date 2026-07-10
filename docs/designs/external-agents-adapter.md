@@ -2,7 +2,7 @@
 
 > 対象バージョン: CodeRouter v2.x 系 / Phase 1（in-core adapter）
 > 関連: [`docs/future.md`](../future.md) §1.2・§5、[`docs/backends/launcher.md`](../backends/launcher.md)
-> ステータス: 設計確定（実装前）
+> ステータス: 設計確定 / Phase 1a (claude)・Phase 1d (grok) 実装済み
 
 本設計書は、OpenAI Codex CLI・Google Gemini CLI・xAI Grok・Anthropic Claude Code CLI の4つの外部コーディングエージェントを、CodeRouter の新しいアダプタ種別 `kind="agent_cli"` として本体に組み込む方式を定義するものである。CLI のフラグ・認証仕様はすべて調査レポート（`RESEARCH-cli.md`、2026-07 時点）を、コード上の拡張点はすべてコード解析報告書（`ANALYSIS-code.md`）を典拠とする。ユーザー確定事項（`DECISIONS.md`）は拘束条件であり、本書はそれを厳密に実装する。
 
@@ -602,5 +602,22 @@ Grok の公式 API は OpenAI 互換であり、**既存 `kind="openai_compat"` 
 | 資格情報解決 | `config/loader.py` L95 |
 | テスト雛形 | `tests/test_launcher_mtp.py` L340, L368 |
 | 設計思想（透過性・ステートレス） | `docs/future.md` §1.2 L164, §5 L636-815（特に L647, L677） |
-</content>
-</invoke>
+
+### 11.3 Phase 1d 実CLI検証結果（grok v0.2.93, 2026-07-10）
+
+Phase 1d（grok）実装時に、設計時点の調査（`RESEARCH-cli.md`、2026-07 時点）と実 CLI（grok v0.2.93、[stable] チャネル）との差分を検証した。本設計書の本文（§3.1・§5.1.5・§5.2.1・§5.3.3・§5.4・§11.1）のうち grok に関する記述は以下の検証結果で読み替えること（歴史的記録として本文は改変しない）。
+
+| 項目 | 設計時の想定 | 実 CLI での検証結果（v0.2.93） |
+|---|---|---|
+| `--sandbox` | 値なしフラグ（書込拒否）と想定（§5.4） | **プロファイル値を取る**: `--sandbox off\|workspace\|read-only\|strict`。read_only は `--sandbox read-only` |
+| 承認モード | `--allow`（値未確定）/ `--always-approve` のみ把握 | **`--permission-mode` が存在**し、Claude Code 互換の値を取る。read_only=`--permission-mode plan`、edit=`--sandbox workspace --permission-mode acceptEdits`、full_auto=`--sandbox workspace --always-approve` |
+| プロンプト投入 | `-p "<prompt>"`（§5.1.5） | `-p` / `--single` は **argv 値必須で stdin をプロンプトとして受け付けない**。argv の肥大化（Linux MAX_ARG_STRLEN 約128KiB）と `ps` 露出を避けるため、**`--prompt-file`**（workdir 内 0600 一時ファイル、終了後必ず削除）を採用した |
+| 認証 | 「grok はサブスク非対応・`XAI_API_KEY` 必須」（§5.3.3・§11.1） | **廃止された前提**。OAuth サブスクリプションログインに対応（`grok login`、SuperGrok / X Premium+。資格情報は `~/.grok/auth.json`、7日失効・自動リフレッシュ、`GROK_HOME` で上書き可）。`HOME` 継承により `passthrough_env: []` で動作する |
+| API キー環境変数 | `XAI_API_KEY` | **`GROK_CODE_XAI_API_KEY`**（`XAI_API_KEY` ではない）。転送時は OAuth より優先される |
+| JSON 出力 | 「応答本文フィールド」「トークンフィールド」と仮置き（§5.1.6） | 単一 JSON `{"text", "stopReason", "sessionId", "requestId", "thought"?}`。**usage / cost フィールドは存在しない** → usage はゼロ報告、cost は `ProviderConfig.cost` 単価設定時のみ算出 |
+| モデル | `grok-code-fast-1`（§3.1） | **`grok-code-fast-1` は 2026-05-15 に廃止**。現行は `grok-4.5`（既定）/ `grok-composer-2.5-fast`（`grok models` で一覧） |
+| `--max-turns` | 存在（§11.1） | **確認済み**（そのまま採用） |
+| `--allow` / `--deny` | 値の形式未確認（§5.4 注記） | ToolPrefix（glob）形式のルールを取ることを確認。ただし **Phase 1d のアダプタでは使用しない** |
+| メモリ | （記載なし） | grok はクロスセッションメモリを持つ。ステートレス性維持のためアダプタは **`--no-memory` を常時付与** |
+
+あわせて、§5.2.1 の検証ルール #1（`agent=="grok"` かつ `passthrough_env` に `XAI_API_KEY` が無い場合の警告）は前提の消滅により**廃止**した（実装には含まれない）。§9.2 の「API 直（openai_compat）推奨」は引き続き有効な代替経路である。

@@ -170,10 +170,17 @@ class AgentCliConfig(BaseModel):
     ``agent_cli`` sub-config drives the :class:`AgentCliAdapter`, which
     invokes an external coding-agent CLI (codex / gemini / grok / claude)
     in a single one-shot ``exec`` and returns the final answer as one
-    ``prompt in → text out`` transformation. Phase 1a implements the
-    ``claude`` (Claude Code CLI) target only; the other agents are declared
-    at the schema level so configs are forward-compatible, but the adapter
-    rejects them until their phase lands.
+    ``prompt in → text out`` transformation. ``claude`` (Claude Code CLI,
+    Phase 1a) and ``grok`` (grok CLI, Phase 1d) are implemented;
+    codex / gemini are declared at the schema level so configs are
+    forward-compatible, but the adapter rejects them until their phase
+    lands.
+
+    Auth note (grok): the grok CLI uses OAuth credentials stored under
+    ``~/.grok`` (``grok login``), which the adapter's HOME inheritance
+    already covers — no extra config needed. For CI / API-key setups, list
+    ``GROK_CODE_XAI_API_KEY`` in ``passthrough_env`` (this is grok's key
+    env var — NOT ``XAI_API_KEY``).
 
     Follows the ``extra="forbid"`` convention used across this module so a
     typo'd key fails at config-load rather than being silently ignored.
@@ -183,7 +190,10 @@ class AgentCliConfig(BaseModel):
 
     agent: Literal["codex", "gemini", "grok", "claude"] = Field(
         ...,
-        description="External coding-agent CLI to invoke. Phase 1a: 'claude' only.",
+        description=(
+            "External coding-agent CLI to invoke. 'claude' (Phase 1a) and "
+            "'grok' (Phase 1d) are implemented; 'codex' / 'gemini' pending."
+        ),
     )
     command: str | None = Field(
         default=None,
@@ -248,7 +258,9 @@ class AgentCliConfig(BaseModel):
             "Allowlist of environment variable NAMES forwarded from the "
             "parent process into the child. The child otherwise inherits "
             "no parent environment (subscription-first auth policy). "
-            "``ANTHROPIC_API_KEY`` is NOT forwarded unless listed here."
+            "``ANTHROPIC_API_KEY`` is NOT forwarded unless listed here. "
+            "For grok in CI, list ``GROK_CODE_XAI_API_KEY`` here; OAuth "
+            "logins under ``~/.grok`` work without it (HOME is inherited)."
         ),
     )
     agent_depth_limit: int = Field(
