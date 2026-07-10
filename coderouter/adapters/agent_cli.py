@@ -18,24 +18,36 @@ CodeRouter merely performs the one conversion. Following the
 ``openai_compat`` precedent, a *single* adapter class fronts *multiple*
 target agents, dispatched on the ``agent`` field.
 
-Phase 1a scope
-==============
+Implemented agents (Phase 1a + 1d)
+==================================
 
-Only the ``claude`` (Claude Code CLI) target is implemented here — it is
-the most stable CLI, has the most fine-grained safety controls, and is the
-only one that emits ``total_cost_usd`` directly (making it the reference
-implementation for the parser / cost path). The other agents
-(codex / gemini / grok) are declared in the config schema so providers.yaml
-is forward-compatible, but constructing an adapter for them raises a clear
-``AdapterError`` until their phase lands.
+Two targets are implemented here:
+
+* ``claude`` (Claude Code CLI, Phase 1a) — the most stable CLI, the most
+  fine-grained safety controls, and the only one that emits
+  ``total_cost_usd`` directly (making it the reference implementation for
+  the parser / cost path).
+* ``grok`` (grok CLI, Phase 1d) — headless one-shot via ``--prompt-file`` +
+  ``--output-format json``. The CLI emits no token/cost figures, so usage
+  is reported as zeros (cost stays 0 unless the operator sets
+  ``ProviderConfig.cost``, design §5.1.6). ``--no-memory`` is always passed
+  so a user-level cross-session memory setting cannot leak state between
+  requests.
+
+The remaining agents (codex / gemini) are declared in the config schema so
+providers.yaml is forward-compatible, but constructing an adapter for them
+raises a clear ``AdapterError`` until their phase (1b / 1c) lands.
 
 Security (design §6, non-negotiable)
 ====================================
 
 * **allowlist argv only** — the child is launched with
   :func:`asyncio.create_subprocess_exec` and a list argv. ``shell=True`` is
-  never used; the prompt is fed on stdin, so it is never subject to shell
-  interpretation.
+  never used; the prompt is never subject to shell interpretation (claude
+  reads it from stdin; grok reads it from a private ``0600`` prompt file
+  inside the resolved workdir — its ``-p`` requires the prompt as an argv
+  value, and argv would both hit Linux's ~128KiB ``MAX_ARG_STRLEN`` on huge
+  prompts and leak the text into ``ps`` output).
 * **default read-only** — ``allow_file_writes=False`` /
   ``sandbox_mode="read_only"`` are the defaults, mapped to claude's
   ``--permission-mode plan``. Writes require explicit opt-in and the sandbox
@@ -104,6 +116,17 @@ _CLAUDE_PERMISSION_MODE = {
     "full_auto": "acceptEdits",
 }
 
+# sandbox_mode → grok sandbox/approval flags (design §5.4, grok CLI v0.2.93).
+# grok's ``--sandbox`` takes a built-in profile VALUE (off|workspace|
+# read-only|strict) and its ``--permission-mode`` shares Claude Code's value
+# set; ``full_auto`` swaps the permission mode for ``--always-approve``
+# (auto-approve all tool executions).
+_GROK_SANDBOX_ARGS = {
+    "read_only": ["--sandbox", "read-only", "--permission-mode", "plan"],
+    "edit": ["--sandbox", "workspace", "--permission-mode", "acceptEdits"],
+    "full_auto": ["--sandbox", "workspace", "--always-approve"],
+}
+
 
 def _chunk_text(text: str, size: int = _STREAM_CHUNK_CHARS) -> Iterator[str]:
     """Split ``text`` into ``size``-char pieces for the pseudo-stream."""
@@ -112,7 +135,7 @@ def _chunk_text(text: str, size: int = _STREAM_CHUNK_CHARS) -> Iterator[str]:
 
 
 class AgentCliAdapter(BaseAdapter):
-    """Invoke an external coding-agent CLI one-shot (Phase 1a: claude only).
+    """Invoke an external coding-agent CLI one-shot (claude + grok).
 
     The ``agent`` field selects the argv builder / output parser via the
     dispatch tables built in :meth:`__init__`, mirroring how
@@ -122,9 +145,10 @@ class AgentCliAdapter(BaseAdapter):
     def __init__(self, config: ProviderConfig) -> None:
         """Bind to a ``ProviderConfig`` and reject unsupported agents.
 
-        Constructing an adapter for an agent other than ``claude`` raises a
-        non-retryable :class:`AdapterError` — the other targets are declared
-        in the schema but not implemented until their phase (design §9).
+        Constructing an adapter for an agent other than ``claude`` / ``grok``
+        raises a non-retryable :class:`AdapterError` — the other targets are
+        declared in the schema but not implemented until their phase
+        (design §9).
         """
         super().__init__(config)
         if config.agent_cli is None:  # pragma: no cover - schema enforces this
@@ -134,21 +158,30 @@ class AgentCliAdapter(BaseAdapter):
                 retryable=False,
             )
         self.acfg: AgentCliConfig = config.agent_cli
-        if self.acfg.agent != "claude":
+        if self.acfg.agent not in ("claude", "grok"):
             raise AdapterError(
-                f"agent {self.acfg.agent!r} is not implemented in Phase 1a "
-                f"(claude only). Configure agent='claude' or wait for the "
-                f"agent's phase.",
+                f"agent {self.acfg.agent!r} is not implemented yet "
+                f"(implemented: claude, grok). Wait for Phase 1b/1c.",
                 provider=config.name,
                 retryable=False,
             )
-        # agent → argv builder / output parser dispatch tables. Phase 1a
-        # registers only claude; later phases add codex / gemini / grok.
-        self._builders = {"claude": self._build_claude_argv}
-        self._parsers = {"claude": self._parse_claude}
-        # claude reads its print-mode prompt from stdin (10MB cap), which
-        # keeps argv free of the (potentially huge) prompt text.
-        self._uses_stdin = True
+        # agent → argv builder / output parser dispatch tables. claude landed
+        # in Phase 1a, grok in Phase 1d; Phase 1b/1c add codex / gemini.
+        self._builders = {
+            "claude": self._build_claude_argv,
+            "grok": self._build_grok_argv,
+        }
+        self._parsers = {
+            "claude": self._parse_claude,
+            "grok": self._parse_grok,
+        }
+        # Prompt delivery is per-agent: claude reads its print-mode prompt
+        # from stdin (10MB cap), which keeps argv free of the (potentially
+        # huge) prompt text. grok's ``-p`` REQUIRES the prompt as its argv
+        # value (piped stdin is only appended as extra context, verified on
+        # v0.2.93), so grok gets the prompt via ``--prompt-file`` instead —
+        # see ``_write_prompt_file`` for the rationale.
+        self._uses_stdin = self.acfg.agent == "claude"
 
     # ------------------------------------------------------------------
     # BaseAdapter contract
@@ -177,8 +210,7 @@ class AgentCliAdapter(BaseAdapter):
         depth = self._current_depth()
         if depth >= self.acfg.agent_depth_limit:
             raise AdapterError(
-                f"agent recursion depth {depth} >= limit "
-                f"{self.acfg.agent_depth_limit}",
+                f"agent recursion depth {depth} >= limit {self.acfg.agent_depth_limit}",
                 provider=self.name,
                 retryable=False,
             )
@@ -195,68 +227,82 @@ class AgentCliAdapter(BaseAdapter):
 
         prompt = self._render_prompt(request, overrides)
         workdir = self._resolve_workdir()
-        argv = self._builders[self.acfg.agent](workdir)
-        # Resolve the executable to an absolute path so argv[0] is a concrete
-        # binary independent of the child's minimal PATH (design §6 allowlist).
-        resolved = shutil.which(argv[0])
-        if resolved is not None:
-            argv = [resolved, *argv[1:]]
-        env = self._build_child_env()
 
-        logger.info(
-            "agent-cli-exec",
-            extra={
-                "provider": self.name,
-                "agent": self.acfg.agent,
-                "argv0": argv[0],
-                "timeout_s": timeout,
-            },
-        )
-
+        # Agents that cannot take the prompt on stdin (grok) get it through a
+        # private temp file inside the workdir; it is ALWAYS removed in the
+        # ``finally`` below, including on timeout / exception paths.
+        prompt_file = None if self._uses_stdin else self._write_prompt_file(prompt, workdir)
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workdir,
-                env=env,
-                # New session/process group so a timeout can SIGKILL the whole
-                # group (the CLI hangs its real LLM call off a child).
-                start_new_session=True,
-            )
-        except (FileNotFoundError, OSError) as exc:
-            raise AdapterError(
-                f"failed to launch {self.acfg.command!r}: {exc}",
-                provider=self.name,
-                retryable=False,
-            ) from exc
+            argv = self._builders[self.acfg.agent](workdir, prompt_file)
+            # Resolve the executable to an absolute path so argv[0] is a
+            # concrete binary independent of the child's minimal PATH
+            # (design §6 allowlist).
+            resolved = shutil.which(argv[0])
+            if resolved is not None:
+                argv = [resolved, *argv[1:]]
+            env = self._build_child_env()
 
-        stdin_bytes = prompt.encode("utf-8") if self._uses_stdin else None
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=stdin_bytes), timeout=timeout
-            )
-        except TimeoutError as exc:
-            self._kill_process_group(proc)
-            with contextlib.suppress(Exception):
-                await proc.wait()
-            raise AdapterError(
-                f"{self.acfg.agent} exec timed out after {timeout}s",
-                provider=self.name,
-                retryable=True,
-            ) from exc
-
-        if proc.returncode != 0:
-            detail = self._error_detail(stdout, stderr)
-            raise AdapterError(
-                f"{self.acfg.agent} exited {proc.returncode}: {detail}",
-                provider=self.name,
-                status_code=None,
-                retryable=self._is_retryable_exit(proc.returncode),
+            logger.info(
+                "agent-cli-exec",
+                extra={
+                    "provider": self.name,
+                    "agent": self.acfg.agent,
+                    "argv0": argv[0],
+                    "timeout_s": timeout,
+                },
             )
 
-        final_text, usage, meta = self._parsers[self.acfg.agent](stdout, stderr)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=workdir,
+                    env=env,
+                    # New session/process group so a timeout can SIGKILL the
+                    # whole group (the CLI hangs its real LLM call off a
+                    # child).
+                    start_new_session=True,
+                )
+            except (FileNotFoundError, OSError) as exc:
+                raise AdapterError(
+                    f"failed to launch {self.acfg.command!r}: {exc}",
+                    provider=self.name,
+                    retryable=False,
+                ) from exc
+
+            stdin_bytes = prompt.encode("utf-8") if self._uses_stdin else None
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(input=stdin_bytes), timeout=timeout
+                )
+            except TimeoutError as exc:
+                self._kill_process_group(proc)
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                raise AdapterError(
+                    f"{self.acfg.agent} exec timed out after {timeout}s",
+                    provider=self.name,
+                    retryable=True,
+                ) from exc
+
+            if proc.returncode != 0:
+                detail = self._error_detail(stdout, stderr)
+                raise AdapterError(
+                    f"{self.acfg.agent} exited {proc.returncode}: {detail}",
+                    provider=self.name,
+                    status_code=None,
+                    retryable=self._is_retryable_exit(proc.returncode),
+                )
+
+            final_text, usage, meta = self._parsers[self.acfg.agent](stdout, stderr)
+        finally:
+            if prompt_file is not None:
+                # Best-effort cleanup — the child may already have exited and
+                # a vanished file is not an error worth surfacing.
+                with contextlib.suppress(OSError):
+                    os.unlink(prompt_file)
         return self._to_chat_response(final_text, usage, meta)
 
     async def stream(
@@ -281,9 +327,7 @@ class AgentCliAdapter(BaseAdapter):
                 id=resp.id,
                 created=resp.created,
                 model=resp.model,
-                choices=[
-                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
-                ],
+                choices=[{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
             )
         yield StreamChunk(
             id=resp.id,
@@ -297,7 +341,7 @@ class AgentCliAdapter(BaseAdapter):
     # claude argv builder + output parser
     # ------------------------------------------------------------------
 
-    def _build_claude_argv(self, workdir: str) -> list[str]:
+    def _build_claude_argv(self, workdir: str, prompt_file: str | None = None) -> list[str]:
         """Assemble the ``claude -p`` argv (design §5.1.5 / §5.4).
 
         Shape::
@@ -305,10 +349,13 @@ class AgentCliAdapter(BaseAdapter):
             claude -p --output-format json --model <m> --max-turns <n>
                    --permission-mode <plan|acceptEdits> --add-dir <workdir>
 
-        The prompt is fed on stdin (not argv), so it never appears here.
-        ``--bare`` is deliberately NOT added — it would skip OAuth/keychain
-        reads and break subscription auth (design §5.3.4).
+        The prompt is fed on stdin (not argv), so it never appears here and
+        ``prompt_file`` is ignored (it exists only to keep the builder
+        signature uniform across agents). ``--bare`` is deliberately NOT
+        added — it would skip OAuth/keychain reads and break subscription
+        auth (design §5.3.4).
         """
+        del prompt_file  # claude takes the prompt on stdin, not from a file.
         model = self.acfg.model or self.config.model
         argv = [self.acfg.command, "-p", "--output-format", "json", "--model", model]
         if self.acfg.max_turns is not None:
@@ -419,8 +466,152 @@ class AgentCliAdapter(BaseAdapter):
         return usage
 
     # ------------------------------------------------------------------
+    # grok argv builder + output parser (Phase 1d)
+    # ------------------------------------------------------------------
+
+    def _build_grok_argv(self, workdir: str, prompt_file: str | None = None) -> list[str]:
+        """Assemble the grok headless argv (design §5, grok CLI v0.2.93).
+
+        Shape::
+
+            grok --prompt-file <f> --output-format json -m <m> --cwd <w>
+                 --max-turns <n> --no-memory --sandbox <profile>
+                 [--permission-mode <mode> | --always-approve]
+
+        The prompt travels via ``--prompt-file`` (never argv / stdin): grok's
+        ``-p`` requires the prompt as its argv value, and putting it there
+        would hit Linux's ~128KiB ``MAX_ARG_STRLEN`` on large prompts and
+        leak the text into ``ps`` output. ``--no-memory`` is deliberate: it
+        enforces the one-request-one-transformation statelessness even if
+        the user's grok config enables cross-session memory.
+        """
+        if prompt_file is None:  # pragma: no cover - generate() always supplies it
+            raise AdapterError(
+                "grok argv requires a prompt file",
+                provider=self.name,
+                retryable=False,
+            )
+        model = self.acfg.model or self.config.model
+        argv = [
+            self.acfg.command,
+            "--prompt-file",
+            prompt_file,
+            "--output-format",
+            "json",
+            "-m",
+            model,
+            "--cwd",
+            workdir,
+        ]
+        if self.acfg.max_turns is not None:
+            argv += ["--max-turns", str(self.acfg.max_turns)]
+        argv += ["--no-memory"]
+        argv += self._grok_sandbox_args()
+        return argv
+
+    def _grok_sandbox_args(self) -> list[str]:
+        """Map ``sandbox_mode`` → grok sandbox/approval flags, clamped.
+
+        Same clamp as claude (design §5.4): when ``allow_file_writes`` is
+        False the effective mode is forced to ``read_only`` regardless of
+        ``sandbox_mode``, so writes always require the explicit opt-in.
+        """
+        mode = self.acfg.sandbox_mode if self.acfg.allow_file_writes else "read_only"
+        return list(_GROK_SANDBOX_ARGS[mode])
+
+    def _parse_grok(
+        self, stdout: bytes, stderr: bytes
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Parse grok ``--output-format json`` output (verified v0.2.93).
+
+        Real-run shape::
+
+            {"text": "...", "stopReason": "EndTurn", "sessionId": "<uuid>",
+             "requestId": "<uuid>", "thought": "..."}
+
+        The CLI is early beta, so parsing is deliberately defensive: empty /
+        non-JSON / non-object stdout and a missing ``text`` field all raise
+        a retryable :class:`AdapterError` so the chain can fall through.
+        ``thought`` is ignored — only the final ``text`` is the answer.
+        """
+        text = stdout.decode("utf-8", "replace").strip()
+        if not text:
+            raise AdapterError(
+                "grok produced no stdout to parse",
+                provider=self.name,
+                retryable=True,
+            )
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise AdapterError(
+                f"grok emitted non-JSON output: {exc}",
+                provider=self.name,
+                retryable=True,
+            ) from exc
+        if not isinstance(data, dict):
+            raise AdapterError(
+                "grok JSON output was not an object",
+                provider=self.name,
+                retryable=True,
+            )
+        result = data.get("text")
+        if not isinstance(result, str):
+            raise AdapterError(
+                "grok JSON output missing string 'text' field",
+                provider=self.name,
+                retryable=True,
+            )
+
+        # grok emits NO token usage / cost fields (verified), so usage is
+        # all-zeros; the cost dashboard shows 0 for this provider unless the
+        # operator sets ``ProviderConfig.cost`` rates (design §5.1.6).
+        usage: dict[str, Any] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        meta: dict[str, Any] = {}
+        session_id = data.get("sessionId")
+        if isinstance(session_id, str):
+            meta["coderouter_session_id"] = session_id
+        return result, usage, meta
+
+    # ------------------------------------------------------------------
     # helpers: prompt rendering, response shaping, env, workdir, kill
     # ------------------------------------------------------------------
+
+    def _write_prompt_file(self, prompt: str, workdir: str) -> str:
+        """Write the prompt to a private ``0600`` temp file in ``workdir``.
+
+        Rationale: grok's ``-p`` requires the prompt as an argv value, but a
+        huge prompt would hit Linux's ~128KiB ``MAX_ARG_STRLEN`` and argv
+        leaks into ``ps`` output; file delivery keeps argv small and private,
+        and ``0600`` + the isolated workdir bounds exposure. ``O_EXCL`` with
+        a uuid4 name makes creation race-free; the caller (``generate``)
+        deletes the file in a ``finally`` block on every path.
+        """
+        path = os.path.join(workdir, f".coderouter-prompt-{uuid.uuid4().hex}.txt")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except OSError as exc:
+            raise AdapterError(
+                f"failed to create prompt file in {workdir}: {exc}",
+                provider=self.name,
+                retryable=False,
+            ) from exc
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(prompt)
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+            raise AdapterError(
+                f"failed to write prompt file {path}: {exc}",
+                provider=self.name,
+                retryable=False,
+            ) from exc
+        return path
 
     def _to_chat_response(
         self, final_text: str, usage: dict[str, Any], meta: dict[str, Any]
@@ -442,9 +633,7 @@ class AgentCliAdapter(BaseAdapter):
             **meta,
         )
 
-    def _render_prompt(
-        self, request: ChatRequest, overrides: ProviderCallOverrides | None
-    ) -> str:
+    def _render_prompt(self, request: ChatRequest, overrides: ProviderCallOverrides | None) -> str:
         """Flatten the chat messages into a single role-tagged prompt string.
 
         The profile-level ``append_system_prompt`` (if any) is prepended as a

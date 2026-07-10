@@ -2,7 +2,7 @@
 
 > English: [`external-agents.en.md`](./external-agents.en.md)
 
-`kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加された(Phase 1a)。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
+`kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加され(Phase 1a: claude)、v2.7.8 で grok が追加された(Phase 1d)。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
 
 ---
 
@@ -11,16 +11,16 @@
 コーディングエージェント CLI は本来、ファイルを書き換えながら何ターンも自律的に動くステートフルな制御ループであり、CodeRouter の「1リクエスト = 1変換」という思想とは相性が悪い。`agent_cli` はこれを **ワンショット `exec`**(プロンプト in → 最終回答テキスト out)に押し込めることで両立させている。オーケストレーション(マルチターン制御・ツール実行)はエージェント CLI 内部で完結し、CodeRouter 側からは「1回の対話で答えを返すだけの1つのプロバイダ」として見える。
 
 - **対象 CLI**: `agent` フィールドで `claude` / `codex` / `gemini` / `grok` の4種を宣言できる。
-- **実装状況(v2.7.7 時点)**: **`claude`(Claude Code CLI)のみ実装済み**。`codex` / `gemini` / `grok` は `providers.yaml` のスキーマ上は書けるが、アダプタ構築時に必ず次のエラーで拒否される(Phase 1b〜1d は未実装)。
+- **実装状況(v2.7.8 時点)**: **`claude`(Claude Code CLI・Phase 1a)と `grok`(Grok CLI・Phase 1d)が実装済み**。`codex` / `gemini` は `providers.yaml` のスキーマ上は書けるが、アダプタ構築時に必ず AdapterError で拒否される(Phase 1b/1c は未実装)。エラーメッセージは概ね次の形である(正確な文言はバージョンにより変わりうる):
 
   ```
-  AdapterError: agent 'codex' is not implemented in Phase 1a (claude only).
-  Configure agent='claude' or wait for the agent's phase.
+  AdapterError: agent 'codex' is not implemented yet (implemented: claude, grok).
+  Wait for the agent's phase (1b/1c).
   ```
 
   この拒否は `retryable=False` — フォールバックチェーンに他プロバイダがあっても、設定ミスとして即座に停止する。
 
-- **新機能・claude のみ**という段階であり、本ドキュメントも claude ターゲットを前提に記述する。他ターゲットの設定例は `examples/providers-agent-cli.yaml` 末尾にコメントアウトされたプレビューとして置かれているが、動作しない。
+- 本ドキュメントの共通部分(認証設計・設定リファレンス・制限事項)は claude ターゲットを軸に記述し、grok 固有の挙動は [grok(Grok CLI)](#grokgrok-cli) セクションにまとめる。codex / gemini の設定例は `examples/providers-agent-cli.yaml` 末尾にコメントアウトされたプレビューとして置かれているが、動作しない。
 
 ---
 
@@ -96,30 +96,109 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 
 | フィールド | 型 | 既定値 | 説明 |
 |---|---|---|---|
-| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.7 では `claude` 以外はアダプタ構築時に拒否される** |
+| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.8 で実装済みなのは `claude` と `grok`。`codex` / `gemini` はアダプタ構築時に拒否される** |
 | `command` | `str \| null` | `null`(未設定時は `agent` と同名) | CLI 実行ファイル名 or 絶対パス。`PATH` から解決 |
 | `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
 | `exec_timeout_s` | `float` | `600.0`(範囲 `1.0`–`1800.0`) | exec 全体の強制タイムアウト(秒)。`ProviderConfig.timeout_s` とは**別系統**(後者は agent_cli では使われない) |
 | `allow_file_writes` | `bool` | `false` | ファイル書き込みを許可するか。`false` のときは `sandbox_mode` の値に関わらず read-only にクランプされる |
-| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | claude の `--permission-mode` へマッピングされる([下表](#sandbox_mode--permission-mode-マッピング)参照) |
-| `model` | `str \| null` | `null`(未設定時は `ProviderConfig.model` を使用) | CLI の `--model` に渡すモデル名(`opus` / `sonnet` / `haiku` / `fable` 等) |
+| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
+| `model` | `str \| null` | `null`(未設定時は `ProviderConfig.model` を使用) | CLI の `--model` / `-m` に渡すモデル名(claude: `opus` / `sonnet` / `haiku` / `fable` 等、grok: `grok-4.5` 等) |
 | `max_turns` | `int \| null` | `8`(範囲 `1`–`50`) | CLI 内部のターン上限。`--max-turns` として渡る |
 | `passthrough_env` | `list[str]` | `[]` | 親環境から子プロセスへ転送する環境変数名のallowlist。`ANTHROPIC_API_KEY` はここに書かない限り渡らない |
 | `agent_depth_limit` | `int` | `2`(範囲 `1`–`4`) | 再帰ネストの上限。`CODEROUTER_AGENT_DEPTH` が上限以上なら `AdapterError(retryable=False)` で即停止 |
 
 `command` が未設定の場合は `agent` と同名がデフォルトになる。また、`allow_file_writes: true` と `sandbox_mode: read_only` を同時に指定すると、矛盾した設定として**設定読み込み時に `ValueError`** で弾かれる(書き込みを許可したいなら `sandbox_mode` を `edit` か `full_auto` にすること)。
 
-### `sandbox_mode` → `--permission-mode` マッピング
+### `sandbox_mode` → `--permission-mode` マッピング(claude)
 
 | `sandbox_mode` | claude `--permission-mode` | 備考 |
 |---|---|---|
 | `read_only`(既定) | `plan` | ファイル変更なし。`allow_file_writes=false` のとき常にこのモードにクランプされる |
 | `edit` | `acceptEdits` | ファイル編集を自動承認 |
-| `full_auto` | `acceptEdits` | Phase 1a では `edit` と同じマッピング(claude 側に full_auto 相当の別モードは未使用) |
+| `full_auto` | `acceptEdits` | claude では `edit` と同じマッピング(claude 側に full_auto 相当の別モードは未使用)。grok は `--always-approve` で区別される([grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
 
 ### `paid: false` の理由
 
 サンプル設定 `examples/providers-agent-cli.yaml` の `agent-claude` プロバイダは `paid: false` になっている。これはサブスクリプション OAuth で運用する限り**従量課金が一切発生しない**(消費するのは後述の5時間窓/週次クォータのみ)ためである。API キー従量課金で運用したい場合は `paid: true` に変更し、CodeRouter 起動時に `ALLOW_PAID=true` を環境変数として渡す必要がある。`ALLOW_PAID` 環境変数は `providers.yaml` に書いた値(`allow_paid`)を**起動時に上書きする**ため、`paid: true` のプロバイダは `ALLOW_PAID` 未設定時にはルーティングから除外される点に注意する。
+
+---
+
+## grok(Grok CLI)
+
+v2.7.8(Phase 1d)で `agent: grok` が実装された。claude と同じワンショット exec 方式だが、プロンプトの渡し方・クロスセッションメモリの無効化・usage 報告の各点で grok 固有の挙動がある。以下は grok CLI **v0.2.93**([stable] チャネル、2026-07-10 実機検証)を基準とする。
+
+### 設定例
+
+```yaml
+providers:
+  - name: agent-grok
+    kind: agent_cli
+    model: grok-4.5              # 現行インストールの既定モデル。`grok models` で一覧確認
+    paid: false                  # サブスクリプション OAuth 運用 = 従量課金ゼロ
+    capabilities:
+      streaming: false
+      tools: false
+    agent_cli:
+      agent: grok
+      command: grok
+      workdir: ~/.coderouter/agents/grok
+      exec_timeout_s: 600
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8
+      passthrough_env: []        # OAuth は ~/.grok/auth.json を HOME 継承で読むため空でよい。
+                                 # CI で API キーを使う場合のみ GROK_CODE_XAI_API_KEY を列挙
+```
+
+### アダプタが構築する argv
+
+`sandbox_mode: read_only`(既定)の場合、アダプタは次の argv を構築する。
+
+```
+grok --prompt-file <workdir>/.coderouter-prompt-<uuid>.txt \
+     --output-format json -m <model> --cwd <workdir> \
+     --max-turns <N> --no-memory \
+     --sandbox read-only --permission-mode plan
+```
+
+### プロンプトはファイル経由で渡す(`--prompt-file`)
+
+grok の `-p` / `--single` はプロンプトを **argv の値としてしか受け取らない**(stdin をプロンプトとして受け付けないことを実 CLI で確認済み)。argv に巨大なプロンプトを載せると Linux の `MAX_ARG_STRLEN`(約 128KiB)の上限に当たるうえ、`ps` からプロンプト全文が見えてしまう。そのためアダプタは隔離 workdir 内にパーミッション `0600` の一時ファイル(`.coderouter-prompt-<uuid>.txt`)としてプロンプトを書き出し、`--prompt-file` で渡す。この一時ファイルは exec 終了後に**必ず削除される**(タイムアウト・エラー経路を含む)。
+
+### `sandbox_mode` → grok フラグのマッピング
+
+claude と同様、`allow_file_writes=false` のときは `sandbox_mode` の値に関わらず `read_only` にクランプされる。
+
+| `sandbox_mode` | grok フラグ | 備考 |
+|---|---|---|
+| `read_only`(既定) | `--sandbox read-only --permission-mode plan` | ファイル変更なし。`allow_file_writes=false` のとき常にこのモードにクランプされる |
+| `edit` | `--sandbox workspace --permission-mode acceptEdits` | workspace サンドボックス内でのファイル編集を自動承認 |
+| `full_auto` | `--sandbox workspace --always-approve` | claude と異なり grok では `edit` と区別されたマッピングになる |
+
+### `--no-memory` を常に付与する
+
+grok CLI はセッションをまたぐメモリ機能を持つ。前回呼び出しの記憶が次の応答へ漏れることは CodeRouter の「1リクエスト = 1ステートレス変換」思想と衝突するため、アダプタは**常に** `--no-memory` を付与してこれを無効化する(設定で外すことはできない)。
+
+### JSON 出力と usage / cost
+
+`--output-format json` の出力は単一 JSON オブジェクト `{"text", "stopReason", "sessionId", "requestId", "thought"?}` である(grok v0.2.93 で確認)。`text` が最終回答として、`sessionId` がレスポンスメタデータ `coderouter_session_id` として返る。**トークン usage・コストのフィールドは存在しない**ため、usage はすべてゼロで報告され、`coderouter_cost_usd` も運用者が `ProviderConfig.cost` に単価を設定しない限り 0 のままである(claude が `total_cost_usd` を直接出力するのとは対照的)。JSON は防御的にパースされ、想定外の形は `AdapterError(retryable=True)` としてフォールバックチェーンを次のプロバイダへ進める。
+
+### 認証(サブスクリプション OAuth / API キー)
+
+grok CLI は OAuth によるサブスクリプションログインに対応している(SuperGrok / X Premium+)。資格情報は `~/.grok/auth.json` に保存され(7日で失効・自動リフレッシュあり。`GROK_HOME` で保管場所を上書き可能)、アダプタの `HOME` 継承によって `passthrough_env: []` のままで OAuth が機能する。セットアップ手順:
+
+1. `grok login` を実行してサブスクリプションログインを済ませる。
+2. `grok models` でモデル一覧が返ることをスモーク確認する。現行インストールでは `grok-4.5`(既定)と `grok-composer-2.5-fast` が返る。
+
+CI などで API キー従量課金を使う場合のみ、`passthrough_env: [GROK_CODE_XAI_API_KEY]` を列挙する。環境変数名は **`GROK_CODE_XAI_API_KEY` であり `XAI_API_KEY` ではない**点に注意。API キーが渡っている場合は OAuth より優先される。
+
+### エラー報告
+
+grok CLI は成功時に終了コード 0、認証・ネットワーク・実行時エラーでは終了コード 1 でエラーテキストを **stderr** に出力する。アダプタは stderr の末尾を `AdapterError` メッセージに含めるため、表示されたメッセージをそのまま手がかりにできる。
+
+### early beta であることの注意
+
+grok CLI は early beta である(v0.2.93 [stable] チャネル、2026-07-10 時点)。JSON スキーマが今後変わる可能性があるため、**バージョンの pin を推奨する**(`command` に固定版バイナリのフルパスを指定できる)。スキーマ変化が起きた場合も防御的パースにより retryable な `AdapterError` となり、フォールバックチェーンの次のプロバイダへ降格する。
 
 ---
 
@@ -142,7 +221,8 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 | `Not logged in · Please run /login` で失敗する | claude CLI がその実行ユーザー/環境でログイン状態にない | まず `claude` を対話起動して `/login` の状態を確認する。macOS でヘッドレス実行している場合、v2.7.7 以前は `USER` 環境変数が子プロセスに渡らずこのエラーになっていたが、v2.7.7 で修正済み(`USER` / `LOGNAME` を継承するようになった) |
 | リクエストが `paid gate blocked` 相当で弾かれる/ルーティングされない | `agent_cli` プロバイダが `paid: true` なのに `ALLOW_PAID` が立っていない | サブスク運用なら `paid: false` にする。API キー従量課金で使うなら CodeRouter 起動時に `ALLOW_PAID=true` を設定する |
 | `claude exited 1: ...` のエラーメッセージに具体的な理由が出る | claude CLI は認証エラー等を **stdout** に `is_error: true` の JSON として出力し(stderr は空のまま)終了コード1で終わることがある | v2.7.7 の `_error_detail()` は stderr が空でも stdout の `is_error` JSON から `result` フィールド(実際のエラー文言、例: `Not logged in · Please run /login`)を優先的に拾ってエラーメッセージに含めるようになっている。表示されたメッセージをそのまま手がかりにできる |
-| CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名)が `PATH` 上に無い | `claude --version` が通ることを確認する。フルパスを `command` に指定してもよい |
+| `grok exited 1: ...` で失敗する | grok CLI は認証・ネットワーク・実行時エラーを終了コード1で終わり、エラーテキストを stderr に出す | アダプタが stderr の末尾を `AdapterError` に含めるので、そのメッセージを手がかりにする。認証エラーなら `grok login` を再実行し、`grok models` が通ることをスモーク確認する |
+| CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名)が `PATH` 上に無い | `claude --version` / `grok --version` が通ることを確認する。フルパスを `command` に指定してもよい |
 
 ---
 

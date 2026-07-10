@@ -1,15 +1,20 @@
-"""Tests for the agent_cli adapter (Phase 1a — claude only).
+"""Tests for the agent_cli adapter (Phase 1a claude + Phase 1d grok).
 
-Implements the design's §8 test plan for the Phase 1a scope:
+Implements the design's §8 test plan for the Phase 1a/1d scope:
 
 * T1  argv construction (model / max-turns / permission-mode mapping,
-      allow_file_writes clamp).
-* T2  claude JSON parsing (success / is_error / malformed / missing fields).
-* T3  stubbed subprocess via ``asyncio.create_subprocess_exec`` monkeypatch.
+      allow_file_writes clamp) — for both claude and grok (grok adds the
+      --prompt-file / --no-memory / --sandbox shape).
+* T2  claude / grok JSON parsing (success / is_error / malformed / missing
+      fields; grok's zero-usage + sessionId meta).
+* T3  stubbed subprocess via ``asyncio.create_subprocess_exec`` monkeypatch
+      (grok additionally checks the prompt-file lifecycle: 0600 file exists
+      and contains the prompt DURING the exec, deleted afterwards, also on
+      failure / timeout paths).
 * T4  TestClient E2E through ``POST /v1/chat/completions``.
 * T6  timeout → process-group kill + retryable AdapterError.
 * T7  child-env isolation (no ANTHROPIC_API_KEY leak, NO_COLOR present,
-      passthrough allowlist, depth +1).
+      passthrough allowlist incl. GROK_CODE_XAI_API_KEY, depth +1).
 * T8  recursion depth limit → non-retryable AdapterError.
 
 Plus config-schema validation (agent_cli required, base_url optionality,
@@ -24,7 +29,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import stat
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,6 +72,20 @@ CLAUDE_RESULT = {
 }
 CLAUDE_JSON = json.dumps(CLAUDE_RESULT).encode("utf-8")
 
+# ---------------------------------------------------------------------------
+# Canned grok `--output-format json` result (verified on grok CLI v0.2.93 —
+# NO token usage / cost fields exist; "thought" may or may not be present)
+# ---------------------------------------------------------------------------
+
+GROK_RESULT = {
+    "text": "Hello from grok",
+    "stopReason": "EndTurn",
+    "sessionId": "0f9b6a3c-1d2e-4f56-8a7b-9c0d1e2f3a4b",
+    "requestId": "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "thought": "The user greeted me; respond briefly.",
+}
+GROK_JSON = json.dumps(GROK_RESULT).encode("utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,6 +100,21 @@ def _make_adapter(**agent_cli_overrides: object) -> AgentCliAdapter:
         name="agent-claude",
         kind="agent_cli",
         model="opus",
+        paid=True,
+        capabilities=Capabilities(streaming=False),
+        agent_cli=AgentCliConfig(**acfg),  # type: ignore[arg-type]
+    )
+    return AgentCliAdapter(provider)
+
+
+def _make_grok_adapter(**agent_cli_overrides: object) -> AgentCliAdapter:
+    """Build an AgentCliAdapter with a grok sub-config + overrides."""
+    acfg: dict[str, object] = {"agent": "grok"}
+    acfg.update(agent_cli_overrides)
+    provider = ProviderConfig(
+        name="agent-grok",
+        kind="agent_cli",
+        model="grok-4.5",
         paid=True,
         capabilities=Capabilities(streaming=False),
         agent_cli=AgentCliConfig(**acfg),  # type: ignore[arg-type]
@@ -121,6 +158,28 @@ class _FakeProc:
 
     def kill(self) -> None:
         self.killed = True
+
+
+class _GrokFakeProc(_FakeProc):
+    """_FakeProc that snapshots the ``--prompt-file`` contents at
+    ``communicate()`` time — i.e. while the real CLI would be running — so
+    tests can prove the file existed, held the prompt, and was mode 0600
+    DURING the exec (it is deleted again before generate() returns)."""
+
+    def __init__(self, captured: list[list[str]], **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._captured = captured
+        self.prompt_file_path: str | None = None
+        self.prompt_file_content: str | None = None
+        self.prompt_file_mode: int | None = None
+
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+        argv = self._captured[0]
+        path = argv[argv.index("--prompt-file") + 1]
+        self.prompt_file_path = path
+        self.prompt_file_mode = stat.S_IMODE(os.stat(path).st_mode)
+        self.prompt_file_content = Path(path).read_text(encoding="utf-8")
+        return await super().communicate(input)
 
 
 def _patch_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> list[list[str]]:
@@ -197,6 +256,81 @@ def test_argv_never_includes_bare_flag() -> None:
 
 
 # ---------------------------------------------------------------------------
+# T1 (grok) — argv construction
+# ---------------------------------------------------------------------------
+
+
+def test_grok_argv_read_only_default_full_snapshot() -> None:
+    adapter = _make_grok_adapter(workdir="/tmp/wd")
+    argv = adapter._build_grok_argv("/tmp/wd", "/tmp/wd/.coderouter-prompt-x.txt")
+    assert argv == [
+        "grok",
+        "--prompt-file",
+        "/tmp/wd/.coderouter-prompt-x.txt",
+        "--output-format",
+        "json",
+        "-m",
+        "grok-4.5",
+        "--cwd",
+        "/tmp/wd",
+        "--max-turns",
+        "8",
+        "--no-memory",
+        "--sandbox",
+        "read-only",
+        "--permission-mode",
+        "plan",
+    ]
+
+
+def test_grok_argv_edit_maps_workspace_accept_edits() -> None:
+    adapter = _make_grok_adapter(sandbox_mode="edit", allow_file_writes=True)
+    argv = adapter._build_grok_argv("/w", "/w/p.txt")
+    assert argv[argv.index("--sandbox") + 1] == "workspace"
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+
+
+def test_grok_argv_full_auto_maps_always_approve() -> None:
+    adapter = _make_grok_adapter(sandbox_mode="full_auto", allow_file_writes=True)
+    argv = adapter._build_grok_argv("/w", "/w/p.txt")
+    assert argv[argv.index("--sandbox") + 1] == "workspace"
+    assert "--always-approve" in argv
+    # full_auto uses auto-approval INSTEAD of a permission mode.
+    assert "--permission-mode" not in argv
+
+
+def test_grok_argv_read_only_clamp_when_writes_disabled() -> None:
+    # sandbox_mode=edit but allow_file_writes=False → clamp to read-only/plan.
+    adapter = _make_grok_adapter(sandbox_mode="edit", allow_file_writes=False)
+    argv = adapter._build_grok_argv("/w", "/w/p.txt")
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
+    assert argv[argv.index("--permission-mode") + 1] == "plan"
+
+
+def test_grok_argv_omits_max_turns_when_none() -> None:
+    adapter = _make_grok_adapter(max_turns=None)
+    argv = adapter._build_grok_argv("/w", "/w/p.txt")
+    assert "--max-turns" not in argv
+
+
+def test_grok_argv_model_override() -> None:
+    adapter = _make_grok_adapter(model="grok-composer-2.5-fast")
+    argv = adapter._build_grok_argv("/w", "/w/p.txt")
+    assert argv[argv.index("-m") + 1] == "grok-composer-2.5-fast"
+
+
+def test_grok_argv_no_memory_and_no_prompt_in_argv() -> None:
+    adapter = _make_grok_adapter()
+    argv = adapter._build_grok_argv("/w", "/w/p.txt")
+    # --no-memory enforces one-request-one-transformation statelessness.
+    assert "--no-memory" in argv
+    # The builder only ever receives the prompt-FILE path — grok's -p/--single
+    # (prompt as argv value) is never used, so prompt text can't reach argv.
+    assert "-p" not in argv
+    assert "--single" not in argv
+
+
+# ---------------------------------------------------------------------------
 # T7 — child-env isolation
 # ---------------------------------------------------------------------------
 
@@ -230,8 +364,7 @@ def test_error_detail_prefers_is_error_stdout_json() -> None:
     from coderouter.adapters.agent_cli import AgentCliAdapter
 
     stdout = (
-        b'{"type":"result","is_error":true,'
-        b'"result":"Not logged in \xc2\xb7 Please run /login"}'
+        b'{"type":"result","is_error":true,"result":"Not logged in \xc2\xb7 Please run /login"}'
     )
     detail = AgentCliAdapter._error_detail(stdout, b"")
     assert "Not logged in" in detail
@@ -252,6 +385,17 @@ def test_env_passthrough_allowlist_only(monkeypatch: pytest.MonkeyPatch) -> None
     env = adapter._build_child_env()
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-123"
     assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_env_grok_api_key_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GROK_CODE_XAI_API_KEY (grok's CI key env — NOT XAI_API_KEY) is
+    forwarded only when allowlisted; OAuth under ~/.grok rides on HOME."""
+    monkeypatch.setenv("GROK_CODE_XAI_API_KEY", "xai-tok-123")
+    monkeypatch.setenv("XAI_API_KEY", "wrong-var-should-not-leak")
+    adapter = _make_grok_adapter(passthrough_env=["GROK_CODE_XAI_API_KEY"])
+    env = adapter._build_child_env()
+    assert env["GROK_CODE_XAI_API_KEY"] == "xai-tok-123"
+    assert "XAI_API_KEY" not in env
 
 
 def test_env_depth_incremented(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -318,13 +462,68 @@ def test_parse_empty_stdout_raises_retryable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# T2 (grok) — grok JSON parsing
+# ---------------------------------------------------------------------------
+
+
+def test_grok_parse_success() -> None:
+    adapter = _make_grok_adapter()
+    text, usage, meta = adapter._parse_grok(GROK_JSON, b"")
+    assert text == "Hello from grok"
+    # grok emits NO token counts — usage is all zeros (cost stays 0 unless
+    # the operator sets ProviderConfig.cost, design §5.1.6).
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    # sessionId is the only surfaced meta; thought / requestId / stopReason
+    # are deliberately ignored.
+    assert meta == {"coderouter_session_id": GROK_RESULT["sessionId"]}
+
+
+def test_grok_parse_missing_text_raises_retryable() -> None:
+    adapter = _make_grok_adapter()
+    payload = json.dumps({"stopReason": "EndTurn", "sessionId": "s"}).encode()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_grok(payload, b"")
+    assert info.value.retryable is True
+    assert "missing string 'text'" in str(info.value)
+
+
+def test_grok_parse_non_json_raises_retryable() -> None:
+    adapter = _make_grok_adapter()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_grok(b"grok exploded {", b"")
+    assert info.value.retryable is True
+
+
+def test_grok_parse_non_object_raises_retryable() -> None:
+    adapter = _make_grok_adapter()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_grok(b'["not", "an", "object"]', b"")
+    assert info.value.retryable is True
+
+
+def test_grok_parse_empty_stdout_raises_retryable() -> None:
+    adapter = _make_grok_adapter()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_grok(b"   \n", b"")
+    assert info.value.retryable is True
+
+
+def test_grok_parse_thought_field_ignored() -> None:
+    # "thought" may or may not be present (early beta) — absence is fine and
+    # presence never leaks into text/usage/meta.
+    adapter = _make_grok_adapter()
+    payload = json.dumps({"text": "ok", "sessionId": "s-1"}).encode()
+    text, _usage, meta = adapter._parse_grok(payload, b"")
+    assert text == "ok"
+    assert meta == {"coderouter_session_id": "s-1"}
+
+
+# ---------------------------------------------------------------------------
 # T3 — generate() with a stubbed subprocess
 # ---------------------------------------------------------------------------
 
 
-async def test_generate_success(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: object
-) -> None:
+async def test_generate_success(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     proc = _FakeProc(stdout=CLAUDE_JSON, returncode=0)
     captured = _patch_exec(monkeypatch, proc)
     adapter = _make_adapter(workdir=str(tmp_path))
@@ -354,6 +553,65 @@ async def test_generate_nonzero_exit_is_retryable(
 
 
 # ---------------------------------------------------------------------------
+# T3 (grok) — generate() with a stubbed subprocess + prompt-file lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_grok_generate_success_prompt_file_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: list[list[str]] = []
+    proc = _GrokFakeProc(captured, stdout=GROK_JSON, returncode=0)
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _GrokFakeProc:
+        captured.append(list(argv))
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    adapter = _make_grok_adapter(workdir=str(tmp_path))
+
+    resp = await adapter.generate(_request())
+
+    assert resp.choices[0]["message"]["content"] == "Hello from grok"
+    assert resp.coderouter_provider == "agent-grok"
+    assert resp.model == "grok-4.5"
+    assert resp.coderouter_session_id == GROK_RESULT["sessionId"]
+    # grok takes the prompt via --prompt-file — never stdin, never argv.
+    assert proc.stdin_received is None
+    argv = captured[0]
+    assert "--prompt-file" in argv
+    assert all("hi there" not in arg for arg in argv)
+    # DURING the exec the private prompt file existed in the workdir with
+    # mode 0600 and held the rendered prompt (_GrokFakeProc snapshots it
+    # inside communicate()).
+    assert proc.prompt_file_path is not None
+    assert proc.prompt_file_path.startswith(str(tmp_path))
+    assert Path(proc.prompt_file_path).name.startswith(".coderouter-prompt-")
+    assert proc.prompt_file_mode == 0o600
+    assert proc.prompt_file_content is not None
+    assert "hi there" in proc.prompt_file_content
+    # ...and it is deleted once generate() returns.
+    assert not os.path.exists(proc.prompt_file_path)
+    assert list(tmp_path.glob(".coderouter-prompt-*")) == []
+
+
+async def test_grok_generate_nonzero_exit_cleans_prompt_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    proc = _FakeProc(stdout=b"", stderr=b"auth failed", returncode=1)
+    captured = _patch_exec(monkeypatch, proc)
+    adapter = _make_grok_adapter(workdir=str(tmp_path))
+    with pytest.raises(AdapterError) as info:
+        await adapter.generate(_request())
+    assert info.value.retryable is True
+    # The prompt file is cleaned up on the failure path too.
+    argv = captured[0]
+    path = argv[argv.index("--prompt-file") + 1]
+    assert not os.path.exists(path)
+    assert list(tmp_path.glob(".coderouter-prompt-*")) == []
+
+
+# ---------------------------------------------------------------------------
 # T6 — timeout → process-group kill
 # ---------------------------------------------------------------------------
 
@@ -380,6 +638,32 @@ async def test_generate_timeout_kills_and_raises_retryable(
     assert "timed out" in str(info.value)
     # The fake pid can't be group-killed, so the fallback direct kill fired.
     assert proc.killed is True
+
+
+async def test_grok_generate_timeout_cleans_prompt_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    proc = _FakeProc(hang=True)
+    captured = _patch_exec(monkeypatch, proc)
+    adapter = _make_grok_adapter(workdir=str(tmp_path), exec_timeout_s=1.0)
+
+    # Force an immediate timeout regardless of wall-clock so the test is fast.
+    async def instant_timeout(coro: object, timeout: float) -> None:
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[attr-defined]
+        raise TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", instant_timeout)
+
+    with pytest.raises(AdapterError) as info:
+        await adapter.generate(_request())
+    assert info.value.retryable is True
+    assert "timed out" in str(info.value)
+    # Even on the timeout path the finally block removed the prompt file.
+    argv = captured[0]
+    path = argv[argv.index("--prompt-file") + 1]
+    assert not os.path.exists(path)
+    assert list(tmp_path.glob(".coderouter-prompt-*")) == []
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +697,7 @@ async def test_healthcheck_missing_binary(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 async def test_healthcheck_present_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "coderouter.adapters.agent_cli.shutil.which", lambda _c: "/usr/bin/claude"
-    )
+    monkeypatch.setattr("coderouter.adapters.agent_cli.shutil.which", lambda _c: "/usr/bin/claude")
     adapter = _make_adapter()
     assert await adapter.healthcheck() is True
 
@@ -431,7 +713,8 @@ def test_unsupported_agent_raises_non_retryable() -> None:
     with pytest.raises(AdapterError) as info:
         AgentCliAdapter(provider)
     assert info.value.retryable is False
-    assert "Phase 1a" in str(info.value)
+    assert "not implemented yet" in str(info.value)
+    assert "implemented: claude, grok" in str(info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -503,9 +786,7 @@ def e2e_client(
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(
-        "coderouter.ingress.app.load_config", lambda path=None: e2e_config
-    )
+    monkeypatch.setattr("coderouter.ingress.app.load_config", lambda path=None: e2e_config)
     uninstall_collector()
     app = create_app()
     try:
@@ -527,3 +808,61 @@ def test_e2e_chat_completions(e2e_client: TestClient) -> None:
     assert body["coderouter_provider"] == "agent-claude"
     # Cost from claude's total_cost_usd propagated to the client-visible body.
     assert body["coderouter_cost_usd"] == pytest.approx(0.0123)
+
+
+# ---------------------------------------------------------------------------
+# T4 (grok) — TestClient E2E through /v1/chat/completions
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def grok_e2e_config(tmp_path: Path) -> CodeRouterConfig:
+    return CodeRouterConfig(
+        allow_paid=True,
+        default_profile="grok-agent",
+        providers=[
+            ProviderConfig(
+                name="agent-grok",
+                kind="agent_cli",
+                model="grok-4.5",
+                paid=True,
+                capabilities=Capabilities(streaming=False),
+                agent_cli=AgentCliConfig(agent="grok", workdir=str(tmp_path)),
+            ),
+        ],
+        profiles=[FallbackChain(name="grok-agent", providers=["agent-grok"])],
+    )
+
+
+@pytest.fixture
+def grok_e2e_client(
+    grok_e2e_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    proc = _FakeProc(stdout=GROK_JSON, returncode=0)
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _FakeProc:
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("coderouter.ingress.app.load_config", lambda path=None: grok_e2e_config)
+    uninstall_collector()
+    app = create_app()
+    try:
+        with TestClient(app) as tc:
+            yield tc
+    finally:
+        uninstall_collector()
+
+
+def test_e2e_grok_chat_completions(grok_e2e_client: TestClient) -> None:
+    resp = grok_e2e_client.post(
+        "/v1/chat/completions",
+        json={"model": "grok-4.5", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"X-CodeRouter-Profile": "grok-agent"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["choices"][0]["message"]["content"] == "Hello from grok"
+    assert body["coderouter_provider"] == "agent-grok"
+    # grok emits no token counts — usage is reported as zeros end-to-end.
+    assert body["usage"]["total_tokens"] == 0
