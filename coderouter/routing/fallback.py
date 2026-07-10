@@ -72,6 +72,7 @@ from coderouter.logging import (
     get_logger,
     log_backend_health_changed,
     log_cache_observed,
+    log_chain_all_unhealthy_last_resort,
     log_chain_budget_exceeded,
     log_chain_memory_pressure_blocked,
     log_chain_paid_gate_blocked,
@@ -80,6 +81,7 @@ from coderouter.logging import (
     log_memory_pressure_detected,
     log_skip_budget_exceeded,
     log_skip_memory_pressure,
+    log_skip_unhealthy_provider,
     log_tool_loop_detected,
 )
 from coderouter.plugins.registry import PluginRegistry
@@ -2062,6 +2064,41 @@ class FallbackEngine:
             excluded = self.self_healing.excluded_providers()
             if excluded:
                 adapters = [a for a in adapters if a.name not in excluded]
+
+        # Pass 4c: v2.x ``skip`` action — self-contained half-open circuit
+        # breaker. Unlike ``exclude`` (which relies on the self-healing
+        # orchestrator's excluded set + background recovery probes), ``skip``
+        # asks the backend-health monitor directly: an UNHEALTHY provider is
+        # filtered out unless its half-open interval has elapsed, in which
+        # case ``should_skip`` lets exactly one trial request through (a
+        # success snaps it back to HEALTHY). If skipping would empty the
+        # chain, fall back to the unfiltered list as a last resort — a
+        # uniformly-UNHEALTHY chain still attempts everyone rather than
+        # failing with NoProvidersAvailableError before trying anything.
+        if chain.backend_health_action == "skip":
+            kept: list[BaseAdapter] = []
+            for adapter in adapters:
+                if self._backend_health.should_skip(
+                    adapter.name,
+                    half_open_interval_s=chain.backend_health_half_open_s,
+                ):
+                    log_skip_unhealthy_provider(
+                        logger,
+                        provider=adapter.name,
+                        profile=chosen,
+                    )
+                else:
+                    kept.append(adapter)
+            if kept:
+                adapters = kept
+            elif adapters:
+                # Everyone was skipped — last-resort: try the unfiltered
+                # chain rather than 502 without attempting a single provider.
+                log_chain_all_unhealthy_last_resort(
+                    logger,
+                    profile=chosen,
+                    providers=[a.name for a in adapters],
+                )
 
         return adapters
 

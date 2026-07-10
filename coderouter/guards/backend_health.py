@@ -46,6 +46,7 @@ record can't observe a torn state.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -84,6 +85,15 @@ class HealthTransition:
 class _ProviderHealth:
     state: HealthState = "HEALTHY"
     consecutive_failures: int = 0
+    # v2.x (``skip`` action): monotonic timestamps driving the built-in
+    # half-open trial. ``unhealthy_since`` is stamped when the provider
+    # crosses into UNHEALTHY (diagnostic — "how long has it been down");
+    # ``last_half_open_at`` records the last time :meth:`should_skip` let a
+    # single trial request through. Both are cleared on any success. These
+    # are ``time.monotonic`` values, so they are intentionally NOT persisted
+    # across restarts (see :meth:`save_state`).
+    unhealthy_since: float | None = None
+    last_half_open_at: float | None = None
 
 
 class BackendHealthMonitor:
@@ -140,6 +150,10 @@ class BackendHealthMonitor:
 
             if success:
                 entry.consecutive_failures = 0
+                # v2.x: a single success snaps back to HEALTHY and clears the
+                # half-open bookkeeping so a future crash starts a fresh cycle.
+                entry.unhealthy_since = None
+                entry.last_half_open_at = None
                 if old_state != "HEALTHY":
                     entry.state = "HEALTHY"
                     return HealthTransition(
@@ -168,6 +182,12 @@ class BackendHealthMonitor:
                 return None
 
             entry.state = new_state
+            if new_state == "UNHEALTHY":
+                # v2.x: record the moment we went down (diagnostic). The
+                # half-open trial itself is keyed off ``last_half_open_at``,
+                # which starts unset so the first resolve after this
+                # transition is allowed straight through as a trial.
+                entry.unhealthy_since = time.monotonic()
             return HealthTransition(
                 provider=provider,
                 old_state=old_state,
@@ -200,12 +220,54 @@ class BackendHealthMonitor:
         """True iff ``provider``'s current state is ``UNHEALTHY``."""
         return self.state_for(provider) == "UNHEALTHY"
 
+    def should_skip(self, provider: str, *, half_open_interval_s: float) -> bool:
+        """v2.x: decide whether to skip ``provider`` at chain-resolve time.
+
+        Drives the ``skip`` backend-health action's built-in half-open
+        circuit breaker. Semantics:
+
+        * Not UNHEALTHY → ``False`` (never skip a HEALTHY/DEGRADED provider).
+        * UNHEALTHY, but either never trialed (``last_half_open_at is None``)
+          or the half-open interval has elapsed since the last trial → stamp
+          ``last_half_open_at = now`` and return ``False`` — exactly one
+          request is let through as a probe. If it succeeds,
+          :meth:`record_attempt` snaps the provider back to HEALTHY; if it
+          fails, the counter stays UNHEALTHY and the freshly-stamped trial
+          time keeps the provider skipped until the interval elapses again.
+        * UNHEALTHY and inside the current interval → ``True`` (skip).
+
+        This is a mutating read: the ``last_half_open_at`` stamp is the
+        side effect that makes the half-open trial fire at most once per
+        ``half_open_interval_s`` window. Held under the lock so concurrent
+        resolves can't both slip a trial through the same window.
+        """
+        with self._lock:
+            entry = self._state.get(provider)
+            if entry is None or entry.state != "UNHEALTHY":
+                return False
+            now = time.monotonic()
+            last = entry.last_half_open_at
+            if last is None or (now - last) >= half_open_interval_s:
+                entry.last_half_open_at = now
+                return False
+            return True
+
     # ------------------------------------------------------------------
     # v2.0-K: Persistence
     # ------------------------------------------------------------------
 
     def save_state(self) -> dict[str, object]:
-        """Export the current per-provider health state for persistence."""
+        """Export the current per-provider health state for persistence.
+
+        v2.x: only ``state`` and ``consecutive_failures`` are persisted.
+        ``unhealthy_since`` / ``last_half_open_at`` are ``time.monotonic``
+        values whose zero point is per-process — persisting them across a
+        restart would be meaningless (and could compare against a future
+        process's clock). They are dropped here and default to ``None`` on
+        :meth:`load_state`, which simply means the first resolve after a
+        restart is treated as a fresh half-open trial — safe, since a
+        successful trial resets the provider anyway.
+        """
         with self._lock:
             return {
                 name: {
