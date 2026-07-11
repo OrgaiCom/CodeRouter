@@ -67,9 +67,7 @@ class _FakeAgentAdapter(BaseAdapter):
     async def healthcheck(self) -> bool:
         return True
 
-    async def generate(
-        self, request: ChatRequest, *, overrides: Any = None
-    ) -> ChatResponse:
+    async def generate(self, request: ChatRequest, *, overrides: Any = None) -> ChatResponse:
         return ChatResponse(
             id="fake-agent-1",
             created=int(time.time()),
@@ -121,9 +119,7 @@ class _ShadowOpenAICompatProvider:
         pass
 
     def build(self, config: ProviderConfig) -> BaseAdapter:
-        raise AssertionError(
-            "plugin factory must not be consulted for an in-core kind"
-        )
+        raise AssertionError("plugin factory must not be consulted for an in-core kind")
 
 
 def _fake_agent_provider_config(**overrides: object) -> ProviderConfig:
@@ -222,6 +218,57 @@ def test_in_core_agent_cli_kind_is_not_shadowed_by_plugin() -> None:
     assert isinstance(adapter, AgentCliAdapter)
 
 
+def test_in_core_agent_cli_deprecation_logged_once_per_process(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Phase 2b (docs/designs/agent-cli-plugin-extraction.md §5.1):
+
+    when the in-core ``agent_cli`` branch is taken *and* an adapter
+    plugin has also registered a ``kind="agent_cli"`` factory,
+    ``build_adapter`` must log ``agent-cli-in-core-deprecated`` exactly
+    once per process — not once per call — while still resolving to the
+    in-core :class:`AgentCliAdapter` (in-core keeps winning resolution
+    order, §3.2).
+    """
+    import coderouter.adapters.registry as registry_mod
+
+    # The module-level once-per-process flag may already be set by
+    # another test in this session (e.g.
+    # test_in_core_agent_cli_kind_is_not_shadowed_by_plugin above, which
+    # also exercises the agent_cli + plugin-present combination) — reset
+    # it so this test's assertions are deterministic regardless of
+    # ordering.
+    monkeypatch.setattr(registry_mod, "_agent_cli_deprecation_logged", False)
+
+    class _AgentCliLikeProvider:
+        name = "agents"
+        kind = "agent_cli"
+
+        def __init__(self, **_config: object) -> None:
+            pass
+
+        def build(self, config: ProviderConfig) -> BaseAdapter:  # pragma: no cover
+            raise AssertionError("in-core must win; plugin factory unused")
+
+    reg = PluginRegistry()
+    reg.add("adapter", _AgentCliLikeProvider())
+
+    provider = ProviderConfig(
+        name="agent",
+        kind="agent_cli",
+        model="opus",
+        agent_cli=AgentCliConfig(agent="claude"),
+    )
+
+    with caplog.at_level("WARNING"):
+        first = build_adapter(provider, reg)
+        second = build_adapter(provider, reg)
+
+    assert isinstance(first, AgentCliAdapter)
+    assert isinstance(second, AgentCliAdapter)
+    assert sum(1 for rec in caplog.records if rec.msg == "agent-cli-in-core-deprecated") == 1
+
+
 def test_unknown_kind_error_lists_in_core_and_plugin_kinds() -> None:
     reg = PluginRegistry()
     reg.add("adapter", _FakeAgentProvider())
@@ -291,9 +338,7 @@ def test_adapter_group_is_active_not_future(
 
     assert reg.count("adapter") == 1
     assert reg.adapters[0].kind == "fake_agent"
-    assert not any(
-        rec.msg == "plugin-group-not-yet-active" for rec in caplog.records
-    )
+    assert not any(rec.msg == "plugin-group-not-yet-active" for rec in caplog.records)
 
 
 def test_installed_but_not_enabled_adapter_is_unavailable(
