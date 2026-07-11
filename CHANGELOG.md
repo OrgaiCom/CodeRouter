@@ -9,6 +9,100 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.7.9] — 2026-07-11 (agent_cli Phase 1b: codex)
+
+Adds the third target to the `agent_cli` adapter: `agent: codex` (the OpenAI
+Codex CLI) is now implemented alongside `claude` (Phase 1a) and `grok`
+(Phase 1d). The implementation was verified against the real CLI (codex-cli
+0.144.1, 2026-07-11), and one design-time assumption from the 2026-07
+research did not survive contact with it: `codex exec` has no approval flag
+at all (`-a`/`--ask-for-approval` doesn't exist in `exec --help` on
+0.144.1, since non-interactive execution has no approval prompt to control
+in the first place), so the design's separate `edit`/`full_auto` mappings
+(`-a on-request` / `-a never`) collapse into a single `-s workspace-write`
+mapping — unlike claude/grok, codex does not distinguish `edit` from
+`full_auto`. The verified JSONL `turn.completed.usage` payload also carries
+a field the design didn't record, `reasoning_output_tokens`, which is now
+normalized defensively into `completion_tokens_details.reasoning_tokens`.
+Everything else (stdin prompt delivery, `--skip-git-repo-check`,
+`--ephemeral`, the absence of `--max-turns`/`--timeout`, the ~8-day OAuth
+staleness) matched the design closely. `gemini` remains schema-declared but
+rejected (Phase 1c pending).
+
+### Added
+
+- **`agent: codex` builder/parser in `AgentCliAdapter`**
+  (`coderouter/adapters/agent_cli.py`) — invokes the Codex CLI one-shot as
+  `codex exec --json --skip-git-repo-check --ephemeral -m <model>
+  -C <workdir> -s read-only -` (read_only default). The prompt is delivered
+  on stdin with an explicit trailing `-` sentinel — the same channel as
+  claude, unlike grok's `--prompt-file` delivery. Output is JSONL on
+  stdout (progress goes to stderr); the final answer is the `item.text` of
+  the **last** `item.completed` event whose `item.type=="agent_message"`.
+  Usage comes from `turn.completed.usage` and is normalized as
+  `prompt_tokens=input_tokens` / `completion_tokens=output_tokens`, with
+  `cached_input_tokens` kept as `prompt_tokens_details.cached_tokens` (a
+  subset of `input_tokens`, not added on top — verified 13810 ⊃ 9984) and
+  `reasoning_output_tokens` kept as
+  `completion_tokens_details.reasoning_tokens` when nonzero; multiple
+  `turn.completed` events, if seen, are summed. `thread_id` (from
+  `thread.started`) surfaces as `coderouter_session_id`. Parsing is
+  defensive line-by-line — a non-JSON line doesn't abort the rest of the
+  stream, but no valid `agent_message` (or empty stdout) raises a
+  retryable `AdapterError`, as does any `error` event or `turn.failed`.
+  The CLI is pre-1.0 and `--json`'s alias is still `--experimental-json`
+  (schema not frozen), so version pinning is recommended alongside the
+  defensive parsing.
+- **`sandbox_mode` → codex flag mapping** — `read_only` → `-s read-only`;
+  `edit` → `-s workspace-write`; `full_auto` → `-s workspace-write` (same
+  as `edit` — `exec` has no approval flag in 0.144.1, and
+  `--dangerously-bypass-approvals-and-sandbox` is never used). As with
+  claude/grok, the effective mode is clamped to read-only whenever
+  `allow_file_writes=false`, regardless of `sandbox_mode`.
+- **`--skip-git-repo-check` always passed** — CodeRouter's isolated workdir
+  is never a git repository, and codex's default "trusted directory" check
+  fails immediately outside one (exit 1, stderr `Not inside a trusted
+  directory and --skip-git-repo-check was not specified.` — field-verified).
+  The adapter always passes this flag, so that error should never surface
+  in normal operation.
+- **`--ephemeral` always passed** — prevents the session from persisting to
+  disk, for the same stateless-transformation rationale as grok's
+  `--no-memory`. Not configurable.
+- **`max_turns` ignored for codex** — `codex exec` has neither
+  `--max-turns` nor `--timeout`; `AgentCliConfig.max_turns` has no effect
+  when `agent: codex`, and `exec_timeout_s` + process-group `SIGKILL` is
+  the only time bound.
+- **`coderouter_session_id` via `thread_id`** — same response-metadata
+  treatment as claude's `session_id` and grok's `sessionId`.
+
+### Changed
+
+- **Unsupported-agent error message** — constructing the adapter with a
+  not-yet-implemented agent now lists all three implemented agents (e.g.
+  `agent 'gemini' is not implemented yet (implemented: claude, codex,
+  grok)`) instead of the two-agent wording from v2.7.8.
+- **Schema docstrings** (`coderouter/config/schemas.py`) — `AgentCliConfig`
+  field descriptions updated for the three-agent reality, including the
+  `max_turns` docstring noting codex ignores it.
+- **Docs & examples** — `docs/backends/external-agents.md`/`.en.md` gain a
+  full codex section (config example, adapter argv, stdin-vs-`--prompt-file`
+  contrast with grok, sandbox mapping table with the no-approval-flag-in-exec
+  note, JSONL schema and usage normalization including
+  `reasoning_output_tokens`, OAuth setup with the ~8-day staleness caveat
+  and `CODEX_API_KEY`/`OPENAI_API_KEY`/`CODEX_HOME`, and the pre-1.0
+  version-pin caveat) and updated implementation-status wording (claude +
+  codex + grok implemented; gemini-only rejected). The design doc
+  `docs/designs/external-agents-adapter.md` gets a new appendix §11.4
+  recording the verified deltas between the 2026-07 research and
+  codex-cli 0.144.1 (body text left as the historical record); its header
+  status line now lists Phase 1b alongside 1a/1d.
+  `examples/providers-agent-cli.yaml` promotes codex out of the
+  not-implemented preview into a documented (still commented-out, so
+  copying the file doesn't require codex to be installed) block with
+  `model: gpt-5.5`, `paid: false` for subscription OAuth, and
+  `passthrough_env: []`; the preview section at the bottom is retitled to
+  Phase 1c (gemini only), with codex removed from it.
+
 ## [v2.7.8] — 2026-07-10 (agent_cli Phase 1d: grok)
 
 **PR #68**. Adds the second target to the `agent_cli` adapter: `agent: grok` (the xAI

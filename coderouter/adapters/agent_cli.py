@@ -18,15 +18,24 @@ CodeRouter merely performs the one conversion. Following the
 ``openai_compat`` precedent, a *single* adapter class fronts *multiple*
 target agents, dispatched on the ``agent`` field.
 
-Implemented agents (Phase 1a + 1d)
-==================================
+Implemented agents (Phase 1a + 1b + 1d)
+========================================
 
-Two targets are implemented here:
+Three targets are implemented here:
 
 * ``claude`` (Claude Code CLI, Phase 1a) — the most stable CLI, the most
   fine-grained safety controls, and the only one that emits
   ``total_cost_usd`` directly (making it the reference implementation for
   the parser / cost path).
+* ``codex`` (codex CLI, Phase 1b) — headless one-shot via ``codex exec
+  --json``, prompt on stdin (like claude). The CLI is pre-1.0 and emits
+  defensively-parsed JSONL (one event per line); usage comes from
+  ``turn.completed`` events, normalized per design §5.1.6 with
+  ``cached_input_tokens`` kept as a *subset* of ``input_tokens`` (unlike
+  claude, which folds its cache buckets into ``prompt_tokens``).
+  ``--skip-git-repo-check`` and ``--ephemeral`` are always passed — the
+  isolated workdir is not a git repo, and the adapter never wants
+  session persistence.
 * ``grok`` (grok CLI, Phase 1d) — headless one-shot via ``--prompt-file`` +
   ``--output-format json``. The CLI emits no token/cost figures, so usage
   is reported as zeros (cost stays 0 unless the operator sets
@@ -34,9 +43,9 @@ Two targets are implemented here:
   so a user-level cross-session memory setting cannot leak state between
   requests.
 
-The remaining agents (codex / gemini) are declared in the config schema so
-providers.yaml is forward-compatible, but constructing an adapter for them
-raises a clear ``AdapterError`` until their phase (1b / 1c) lands.
+The remaining agent (gemini) is declared in the config schema so
+providers.yaml is forward-compatible, but constructing an adapter for it
+raises a clear ``AdapterError`` until its phase (1c) lands.
 
 Security (design §6, non-negotiable)
 ====================================
@@ -44,10 +53,11 @@ Security (design §6, non-negotiable)
 * **allowlist argv only** — the child is launched with
   :func:`asyncio.create_subprocess_exec` and a list argv. ``shell=True`` is
   never used; the prompt is never subject to shell interpretation (claude
-  reads it from stdin; grok reads it from a private ``0600`` prompt file
-  inside the resolved workdir — its ``-p`` requires the prompt as an argv
-  value, and argv would both hit Linux's ~128KiB ``MAX_ARG_STRLEN`` on huge
-  prompts and leak the text into ``ps`` output).
+  and codex read it from stdin — codex's argv carries a trailing ``-``
+  sentinel making that explicit; grok reads it from a private ``0600``
+  prompt file inside the resolved workdir — its ``-p`` requires the prompt
+  as an argv value, and argv would both hit Linux's ~128KiB
+  ``MAX_ARG_STRLEN`` on huge prompts and leak the text into ``ps`` output).
 * **default read-only** — ``allow_file_writes=False`` /
   ``sandbox_mode="read_only"`` are the defaults, mapped to claude's
   ``--permission-mode plan``. Writes require explicit opt-in and the sandbox
@@ -127,6 +137,17 @@ _GROK_SANDBOX_ARGS = {
     "full_auto": ["--sandbox", "workspace", "--always-approve"],
 }
 
+# sandbox_mode → codex ``-s/--sandbox`` value (design §5.4, codex-cli
+# 0.144.1, verified via facts-codex.md). ``codex exec`` has NO approval
+# flag at all (non-interactive, so there is no prompt to approve/skip), so
+# ``full_auto`` collapses onto the same ``workspace-write`` value as
+# ``edit`` — there is nothing further to "auto" beyond granting writes.
+_CODEX_SANDBOX_ARGS = {
+    "read_only": ["-s", "read-only"],
+    "edit": ["-s", "workspace-write"],
+    "full_auto": ["-s", "workspace-write"],
+}
+
 
 def _chunk_text(text: str, size: int = _STREAM_CHUNK_CHARS) -> Iterator[str]:
     """Split ``text`` into ``size``-char pieces for the pseudo-stream."""
@@ -135,7 +156,7 @@ def _chunk_text(text: str, size: int = _STREAM_CHUNK_CHARS) -> Iterator[str]:
 
 
 class AgentCliAdapter(BaseAdapter):
-    """Invoke an external coding-agent CLI one-shot (claude + grok).
+    """Invoke an external coding-agent CLI one-shot (claude + codex + grok).
 
     The ``agent`` field selects the argv builder / output parser via the
     dispatch tables built in :meth:`__init__`, mirroring how
@@ -145,10 +166,10 @@ class AgentCliAdapter(BaseAdapter):
     def __init__(self, config: ProviderConfig) -> None:
         """Bind to a ``ProviderConfig`` and reject unsupported agents.
 
-        Constructing an adapter for an agent other than ``claude`` / ``grok``
-        raises a non-retryable :class:`AdapterError` — the other targets are
-        declared in the schema but not implemented until their phase
-        (design §9).
+        Constructing an adapter for an agent other than ``claude`` /
+        ``codex`` / ``grok`` raises a non-retryable :class:`AdapterError` —
+        the remaining target (gemini) is declared in the schema but not
+        implemented until its phase (design §9).
         """
         super().__init__(config)
         if config.agent_cli is None:  # pragma: no cover - schema enforces this
@@ -158,30 +179,34 @@ class AgentCliAdapter(BaseAdapter):
                 retryable=False,
             )
         self.acfg: AgentCliConfig = config.agent_cli
-        if self.acfg.agent not in ("claude", "grok"):
+        if self.acfg.agent not in ("claude", "codex", "grok"):
             raise AdapterError(
                 f"agent {self.acfg.agent!r} is not implemented yet "
-                f"(implemented: claude, grok). Wait for Phase 1b/1c.",
+                f"(implemented: claude, codex, grok). Wait for Phase 1c.",
                 provider=config.name,
                 retryable=False,
             )
         # agent → argv builder / output parser dispatch tables. claude landed
-        # in Phase 1a, grok in Phase 1d; Phase 1b/1c add codex / gemini.
+        # in Phase 1a, codex in Phase 1b, grok in Phase 1d; Phase 1c adds
+        # gemini.
         self._builders = {
             "claude": self._build_claude_argv,
+            "codex": self._build_codex_argv,
             "grok": self._build_grok_argv,
         }
         self._parsers = {
             "claude": self._parse_claude,
+            "codex": self._parse_codex,
             "grok": self._parse_grok,
         }
-        # Prompt delivery is per-agent: claude reads its print-mode prompt
-        # from stdin (10MB cap), which keeps argv free of the (potentially
+        # Prompt delivery is per-agent: claude and codex read their prompt
+        # from stdin (10MB cap; codex's argv carries a trailing "-" sentinel
+        # making that explicit), which keeps argv free of the (potentially
         # huge) prompt text. grok's ``-p`` REQUIRES the prompt as its argv
         # value (piped stdin is only appended as extra context, verified on
         # v0.2.93), so grok gets the prompt via ``--prompt-file`` instead —
         # see ``_write_prompt_file`` for the rationale.
-        self._uses_stdin = self.acfg.agent == "claude"
+        self._uses_stdin = self.acfg.agent in ("claude", "codex")
 
     # ------------------------------------------------------------------
     # BaseAdapter contract
@@ -464,6 +489,178 @@ class AgentCliAdapter(BaseAdapter):
         if isinstance(data.get("duration_ms"), (int, float)):
             usage["duration_ms"] = data["duration_ms"]
         return usage
+
+    # ------------------------------------------------------------------
+    # codex argv builder + output parser (Phase 1b)
+    # ------------------------------------------------------------------
+
+    def _build_codex_argv(self, workdir: str, prompt_file: str | None = None) -> list[str]:
+        """Assemble the ``codex exec`` argv (design §5.1.5 / §5.4, verified
+        against codex-cli 0.144.1 — see ``_codex/facts-codex.md``).
+
+        Shape::
+
+            codex exec --json --skip-git-repo-check --ephemeral
+                       -m <model> -C <workdir> -s <read-only|workspace-write> -
+
+        The prompt is fed on stdin (not argv), so it never appears here and
+        ``prompt_file`` is ignored (it exists only to keep the builder
+        signature uniform across agents) — the trailing ``-`` makes the
+        stdin intent explicit to ``codex exec``, which otherwise treats a
+        bare invocation with no PROMPT arg the same way but reads more
+        ambiguously in a fixed argv list. ``--skip-git-repo-check`` is
+        ALWAYS passed because the isolated workdir is not a git repository
+        (without it the CLI exits 1). ``--ephemeral`` is ALWAYS passed so no
+        session state persists to disk, matching the adapter's stateless
+        one-shot ethos (the same rationale as grok's ``--no-memory``). codex
+        has no ``--max-turns`` equivalent, so ``AgentCliConfig.max_turns`` is
+        silently ignored here (documented in the schema).
+        """
+        del prompt_file  # codex takes the prompt on stdin, not from a file.
+        model = self.acfg.model or self.config.model
+        argv = [
+            self.acfg.command,
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "-m",
+            model,
+            "-C",
+            workdir,
+        ]
+        argv += self._codex_sandbox_args()
+        argv += ["-"]
+        return argv
+
+    def _codex_sandbox_args(self) -> list[str]:
+        """Map ``sandbox_mode`` → codex ``-s/--sandbox`` flags, clamped.
+
+        Same clamp as claude/grok (design §5.4): when ``allow_file_writes``
+        is False the effective mode is forced to ``read_only`` regardless of
+        ``sandbox_mode``, so writes always require the explicit opt-in.
+        ``codex exec`` has no approval flag in 0.144.1 (non-interactive, so
+        there is nothing to approve), so ``full_auto`` maps onto the same
+        ``workspace-write`` value as ``edit`` —
+        ``--dangerously-bypass-approvals-and-sandbox`` is never used.
+        """
+        mode = self.acfg.sandbox_mode if self.acfg.allow_file_writes else "read_only"
+        return list(_CODEX_SANDBOX_ARGS[mode])
+
+    def _parse_codex(
+        self, stdout: bytes, stderr: bytes
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Parse codex ``exec --json`` JSONL output (verified codex-cli
+        0.144.1, ``_codex/facts-codex.md``).
+
+        Real-run shape (one JSON object per line, newline-delimited)::
+
+            {"type":"thread.started","thread_id":"<uuid>"}
+            {"type":"turn.started"}
+            {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"2"}}
+            {"type":"turn.completed","usage":{"input_tokens":13810,"cached_input_tokens":9984,"output_tokens":5,"reasoning_output_tokens":0}}
+
+        The CLI is pre-1.0 and its JSON schema is not frozen, so parsing is
+        deliberately defensive at every level: individual lines that fail to
+        parse (or parse to something other than a JSON object) are SKIPPED
+        rather than aborting the whole parse — stray non-JSON noise on
+        stdout should not sink an otherwise-valid answer. The final answer
+        is the LAST ``item.completed`` event whose ``item`` is an
+        ``agent_message`` with a string ``text``. If a completed answer was
+        found, it is returned even when a later ``error`` / ``turn.failed``
+        event also appears (a completed answer beats a trailing error); if
+        no answer was found, an ``error`` / ``turn.failed`` event (or the
+        total absence of any agent_message) raises a retryable
+        :class:`AdapterError`.
+        """
+        text = stdout.decode("utf-8", "replace")
+        if not text.strip():
+            raise AdapterError(
+                "codex produced no stdout to parse",
+                provider=self.name,
+                retryable=True,
+            )
+
+        final_text: str | None = None
+        thread_id: str | None = None
+        failure_event: dict[str, Any] | None = None
+        prompt_tokens = 0
+        completion_tokens = 0
+        cached_tokens = 0
+        reasoning_tokens = 0
+
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                # Defensive against stray non-JSON noise (progress text that
+                # leaked onto stdout, partial writes, etc.) — skip the line.
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            etype = event.get("type")
+            if etype == "thread.started":
+                tid = event.get("thread_id")
+                if isinstance(tid, str):
+                    thread_id = tid
+            elif etype == "item.completed":
+                item = event.get("item")
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "agent_message"
+                    and isinstance(item.get("text"), str)
+                ):
+                    final_text = item["text"]
+            elif etype == "turn.completed":
+                usage = event.get("usage")
+                usage = usage if isinstance(usage, dict) else {}
+
+                def _int(key: str, _usage: dict[str, Any] = usage) -> int:
+                    value = _usage.get(key)
+                    return int(value) if isinstance(value, (int, float)) else 0
+
+                prompt_tokens += _int("input_tokens")
+                completion_tokens += _int("output_tokens")
+                cached_tokens += _int("cached_input_tokens")
+                reasoning_tokens += _int("reasoning_output_tokens")
+            elif etype in ("error", "turn.failed"):
+                failure_event = event
+
+        if final_text is None:
+            if failure_event is not None:
+                raise AdapterError(
+                    f"codex reported {failure_event.get('type')}: {failure_event!r}"[:500],
+                    provider=self.name,
+                    retryable=True,
+                )
+            raise AdapterError(
+                "codex JSONL output contained no agent_message",
+                provider=self.name,
+                retryable=True,
+            )
+
+        # cached_input_tokens is a SUBSET of input_tokens (not additive) —
+        # verified sample: input 13810 ⊇ cached 9984 — so it is preserved
+        # under prompt_tokens_details rather than folded into prompt_tokens
+        # (this differs from claude's normalization, design §5.1.6).
+        usage_out: dict[str, Any] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        if cached_tokens > 0:
+            usage_out["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+        if reasoning_tokens > 0:
+            usage_out["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+
+        meta: dict[str, Any] = {}
+        if thread_id is not None:
+            meta["coderouter_session_id"] = thread_id
+        return final_text, usage_out, meta
 
     # ------------------------------------------------------------------
     # grok argv builder + output parser (Phase 1d)

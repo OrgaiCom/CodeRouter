@@ -2,7 +2,7 @@
 
 > 日本語版: [`external-agents.md`](./external-agents.md)
 
-`kind: "agent_cli"` is an adapter that registers an external coding-agent CLI, such as the Claude Code CLI, as a single CodeRouter provider. It was newly added in v2.7.7 (Phase 1a: claude), and v2.7.8 added grok (Phase 1d). See [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) for the full design.
+`kind: "agent_cli"` is an adapter that registers an external coding-agent CLI, such as the Claude Code CLI, as a single CodeRouter provider. It was newly added in v2.7.7 (Phase 1a: claude), v2.7.8 added grok (Phase 1d), and v2.7.9 added codex (Phase 1b). See [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) for the full design.
 
 ---
 
@@ -11,16 +11,16 @@
 A coding-agent CLI is normally a stateful control loop that runs many turns autonomously while editing files — a poor fit for CodeRouter's "one request = one transformation" ethos. `agent_cli` reconciles the two by collapsing the CLI into a **one-shot `exec`** (prompt in → final answer text out). Orchestration (multi-turn control, tool execution) stays entirely inside the agent CLI process; from CodeRouter's side it looks like just another provider that answers a single exchange.
 
 - **Supported CLIs**: the `agent` field can declare `claude` / `codex` / `gemini` / `grok`.
-- **Implementation status (as of v2.7.8)**: **`claude` (Claude Code CLI, Phase 1a) and `grok` (Grok CLI, Phase 1d) are implemented**. `codex` / `gemini` can be written into `providers.yaml` at the schema level, but constructing the adapter always rejects them (Phase 1b/1c are not yet implemented). The error message looks roughly like the following (the exact wording may differ between versions):
+- **Implementation status (as of v2.7.9)**: **`claude` (Claude Code CLI, Phase 1a), `codex` (OpenAI Codex CLI, Phase 1b), and `grok` (Grok CLI, Phase 1d) are implemented**. Only `gemini` can be written into `providers.yaml` at the schema level, but constructing the adapter always rejects it (Phase 1c is not yet implemented). The error message looks roughly like the following (the exact wording may differ between versions):
 
   ```
-  AdapterError: agent 'codex' is not implemented yet (implemented: claude, grok).
-  Wait for the agent's phase (1b/1c).
+  AdapterError: agent 'gemini' is not implemented yet (implemented: claude, codex, grok).
+  Wait for the agent's phase (1c).
   ```
 
   This rejection is `retryable=False` — even if other providers exist in the fallback chain, it stops immediately as a configuration error.
 
-- The shared parts of this document (authentication design, configuration reference, limitations) are written against the `claude` target; grok-specific behavior is collected in the [grok (Grok CLI)](#grok-grok-cli) section. Example configs for `codex` / `gemini` exist only as a commented-out preview at the bottom of `examples/providers-agent-cli.yaml` and do not work.
+- The shared parts of this document (authentication design, configuration reference, limitations) are written against the `claude` target; codex- and grok-specific behavior are collected in the [codex (OpenAI Codex CLI)](#codex-openai-codex-cli) and [grok (Grok CLI)](#grok-grok-cli) sections, respectively. Example configs for `gemini` exist only as a commented-out preview at the bottom of `examples/providers-agent-cli.yaml` and do not work.
 
 ---
 
@@ -96,14 +96,14 @@ All fields of the `agent_cli:` sub-config (`AgentCliConfig`) in `providers.yaml`
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (required) | Which CLI to invoke. **As of v2.7.8, `claude` and `grok` are implemented; `codex` / `gemini` are rejected when the adapter is constructed** |
+| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (required) | Which CLI to invoke. **As of v2.7.9, `claude`, `codex`, and `grok` are implemented; `gemini` is rejected when the adapter is constructed** |
 | `command` | `str \| null` | `null` (defaults to the same name as `agent`) | CLI executable name or absolute path, resolved via `PATH` |
 | `workdir` | `str \| null` | `null` (defaults to `~/.coderouter/agents/<provider name>`) | Working directory for the one-shot exec. `~` / env-var expansion is applied; a path containing `..` is rejected |
 | `exec_timeout_s` | `float` | `600.0` (range `1.0`–`1800.0`) | Forced timeout (seconds) for the whole exec. **Separate** from `ProviderConfig.timeout_s` (the latter is not used by agent_cli) |
 | `allow_file_writes` | `bool` | `false` | Whether to allow file writes. When `false`, the effective mode is clamped to read-only regardless of `sandbox_mode` |
-| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | Maps to each CLI's sandbox/approval flags (claude: [table below](#sandbox_mode--permission-mode-mapping-claude); grok: [grok section](#sandbox_mode--grok-flag-mapping)) |
-| `model` | `str \| null` | `null` (defaults to `ProviderConfig.model`) | Model name passed to the CLI's `--model` / `-m` (claude: `opus` / `sonnet` / `haiku` / `fable` etc.; grok: `grok-4.5` etc.) |
-| `max_turns` | `int \| null` | `8` (range `1`–`50`) | Turn cap inside the CLI. Passed as `--max-turns` |
+| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | Maps to each CLI's sandbox/approval flags (claude: [table below](#sandbox_mode--permission-mode-mapping-claude); codex: [codex section](#sandbox_mode--codex-flag-mapping); grok: [grok section](#sandbox_mode--grok-flag-mapping)) |
+| `model` | `str \| null` | `null` (defaults to `ProviderConfig.model`) | Model name passed to the CLI's `--model` / `-m` (claude: `opus` / `sonnet` / `haiku` / `fable` etc.; codex: `gpt-5.5` etc.; grok: `grok-4.5` etc.) |
+| `max_turns` | `int \| null` | `8` (range `1`–`50`) | Turn cap inside the CLI. Passed as `--max-turns`. **codex has no corresponding CLI flag, so this is always ignored** (for codex, `exec_timeout_s` + process-group kill is the only time bound) |
 | `passthrough_env` | `list[str]` | `[]` | Allowlist of environment variable names forwarded from the parent process into the child. `ANTHROPIC_API_KEY` is not forwarded unless listed here |
 | `agent_depth_limit` | `int` | `2` (range `1`–`4`) | Recursion nesting cap. When `CODEROUTER_AGENT_DEPTH` reaches or exceeds this, the call stops immediately with `AdapterError(retryable=False)` |
 
@@ -120,6 +120,104 @@ When `command` is unset it defaults to the same name as `agent`. Also, specifyin
 ### Why `paid: false`
 
 The `agent-claude` provider in the example config `examples/providers-agent-cli.yaml` is set to `paid: false`. That's because running on subscription OAuth incurs **zero metered cost** (only the 5-hour window / weekly quota described below is consumed). If you want to run it on metered API-key billing instead, change it to `paid: true` and pass `ALLOW_PAID=true` as an environment variable when starting CodeRouter. Note that the `ALLOW_PAID` environment variable **overrides** whatever `allow_paid` value is written in `providers.yaml` at startup — a `paid: true` provider is excluded from routing whenever `ALLOW_PAID` is unset.
+
+---
+
+## codex (OpenAI Codex CLI)
+
+v2.7.9 (Phase 1b) implements `agent: codex`. Like claude, it delivers the prompt via **stdin** (unlike grok's file-based delivery). It has its own behavior around JSONL output, `--ephemeral`, and running outside a git repository. Everything below is based on codex CLI **0.144.1** (field-verified on the author's Mac, 2026-07-11).
+
+### Example configuration
+
+```yaml
+providers:
+  - name: agent-codex
+    kind: agent_cli
+    model: gpt-5.5                # a current frontier-model example; the default depends on the environment/plan, so set it explicitly
+    paid: false                   # ChatGPT-plan subscription OAuth = zero metered cost
+    capabilities:
+      streaming: false
+      tools: false
+    agent_cli:
+      agent: codex
+      command: codex
+      workdir: ~/.coderouter/agents/codex
+      exec_timeout_s: 600
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8                 # ignored by codex — no corresponding flag (see below)
+      passthrough_env: []          # OAuth reads ~/.codex/auth.json via the inherited HOME, so empty is fine.
+                                    # Only list CODEX_API_KEY (exec-only) or OPENAI_API_KEY
+                                    # when using an API key in CI
+```
+
+### The argv the adapter builds
+
+With `sandbox_mode: read_only` (the default), the adapter builds the following argv.
+
+```
+codex exec --json --skip-git-repo-check --ephemeral -m <model> -C <workdir> -s read-only -
+```
+
+### The prompt is delivered via stdin (same as claude, unlike grok)
+
+codex's `exec` subcommand reads the prompt from stdin when the PROMPT argument is omitted (or explicitly given as `-`). The adapter places an explicit trailing `-` on the argv to force this path. Unlike grok, there's no need for a temp file (`--prompt-file`) inside the isolated workdir — this is the same stdin scheme as claude.
+
+### Why `--skip-git-repo-check` is always passed
+
+CodeRouter's isolated workdir is not a git repository. By default, codex runs a "trusted directory" check and, outside a git repo in an unrecognized directory, fails immediately with exit 1 and stderr `Not inside a trusted directory and --skip-git-repo-check was not specified.` (field-verified). The adapter always passes this flag, so this error message should never appear in normal operation.
+
+### Why `--ephemeral` is always passed
+
+`--ephemeral` prevents the session from being persisted to disk. For the same reason as grok's `--no-memory` — keeping with CodeRouter's "one request = one stateless transformation" ethos — the adapter always passes this flag (it cannot be turned off in config).
+
+### `sandbox_mode` → codex flag mapping
+
+As with claude/grok, when `allow_file_writes=false` the effective mode is clamped to `read_only` regardless of `sandbox_mode`.
+
+| `sandbox_mode` | codex flags | Notes |
+|---|---|---|
+| `read_only` (default) | `-s read-only` | No file changes. Always clamped to this mode when `allow_file_writes=false` |
+| `edit` | `-s workspace-write` | Permits file edits inside the workspace-write sandbox |
+| `full_auto` | `-s workspace-write` | **`codex exec` has no approval flag (`-a` / `--ask-for-approval`)** — it's absent from `exec --help` in 0.144.1, since non-interactive execution has no approval prompt to control in the first place. So this maps identically to `edit`. `--dangerously-bypass-approvals-and-sandbox` is never used |
+
+### No `--max-turns` / `--timeout` exist
+
+codex exec has neither `--max-turns` nor `--timeout`. Consequently `AgentCliConfig.max_turns` is **ignored for codex**. The only time bound is the existing `exec_timeout_s` + process-group `SIGKILL`.
+
+### JSONL output and usage normalization
+
+`--json` output is JSONL (one event per line); progress goes to stderr, and the event stream (including the final answer) goes to stdout (confirmed by both the official docs and the real CLI). A verified one-shot run:
+
+```
+$ codex exec --json --skip-git-repo-check "What's 1+1? Answer with just the digit"
+{"type":"thread.started","thread_id":"019f4e74-08fd-77b2-9cc6-9afa744df130"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"2"}}
+{"type":"turn.completed","usage":{"input_tokens":13810,"cached_input_tokens":9984,"output_tokens":5,"reasoning_output_tokens":0}}
+```
+
+- Final answer: the **last** `item.completed` whose `item.type=="agent_message"`, taking `item.text`.
+- Usage normalization: `turn.completed.usage`'s `input_tokens` → `prompt_tokens`, `output_tokens` → `completion_tokens`, and their sum → `total_tokens`. `cached_input_tokens` is a **subset** of `input_tokens` (measured: input 13810 ⊃ cached 9984), so it is not added on top — it's kept as `prompt_tokens_details.cached_tokens`. When `reasoning_output_tokens` is greater than 0, it's kept as `completion_tokens_details.reasoning_tokens` (defensive). Multiple `turn.completed` events, if they occur, are summed.
+- `thread_id` (from `thread.started`) is surfaced as the `coderouter_session_id` response metadata.
+- If an `error` event or `turn.failed` is seen, or no agent_message is ever produced / stdout is empty / every line is non-JSON, this raises a retryable `AdapterError` and the fallback chain advances to the next provider. Individual non-JSON lines in the JSONL stream don't stop processing of the remaining lines (defense against stray stderr-like output mixed in).
+
+### Authentication (ChatGPT-plan subscription OAuth / API key)
+
+The codex CLI supports ChatGPT-plan OAuth login. Credentials are stored at `~/.codex/auth.json` (or the OS keyring), and the adapter's `HOME` inheritance makes it work with `passthrough_env: []`.
+
+1. Run `codex login` to complete login. `codex login status` exiting 0 confirms you're logged in.
+2. The OAuth token goes **stale after about 8 days**. It auto-refreshes on use, but a setup that doesn't call codex for a long stretch can fail while stale — running codex occasionally, or re-logging in, is recommended.
+
+For CI or metered API-key billing, list `CODEX_API_KEY` (**exec-only**) or `OPENAI_API_KEY` (general) in `passthrough_env`. `CODEX_HOME` can also override the config/credentials directory itself.
+
+### Error reporting
+
+The codex CLI exits 0 on success, and on failure exits non-zero with the error text on stderr (e.g. the git-repo-check message). JSONL may also carry an `error` event or `turn.failed`; both of those also become a retryable `AdapterError` and the fallback chain advances to the next provider.
+
+### Pre-1.0 caveat
+
+The codex CLI is pre-1.0 and releases nearly daily. `--json`'s alias is still `--experimental-json`, and the JSONL schema is not frozen. **Version pinning is recommended** (you can point `command` at a pinned binary's full path). If the schema does change, defensive parsing turns it into a retryable `AdapterError` and the fallback chain demotes to the next provider.
 
 ---
 
@@ -222,7 +320,9 @@ The grok CLI is early beta (v0.2.93 [stable] channel as of 2026-07-10). Its JSON
 | Requests are rejected / not routed, effectively "paid gate blocked" | The `agent_cli` provider has `paid: true` but `ALLOW_PAID` isn't set | For subscription usage, set `paid: false`. For metered API-key billing, set `ALLOW_PAID=true` when starting CodeRouter |
 | `claude exited 1: ...` shows a specific reason | The claude CLI sometimes reports auth/API errors as an `is_error: true` JSON document on **stdout** (with stderr left empty) and exits with code 1 | v2.7.7's `_error_detail()` now prefers the `result` field of that stdout `is_error` JSON (the actual error text, e.g. `Not logged in · Please run /login`) even when stderr is empty, and includes it in the raised error message — use the message shown as your lead |
 | Fails with `grok exited 1: ...` | The grok CLI exits with code 1 on auth/network/runtime errors, with the error text on stderr | The adapter includes a tail of stderr in the `AdapterError`, so use the message shown as your lead. For auth errors, re-run `grok login` and smoke-check that `grok models` works |
-| CLI fails to launch (`failed to launch ...`) | `command` (defaults to the same name as `agent`) isn't on `PATH` | Confirm `claude --version` / `grok --version` works. You can also point `command` at a full path |
+| Fails with `codex exited 1: ...` (suspect stale OAuth) | codex's OAuth token goes stale after about 8 days. It auto-refreshes on use, but a long gap between calls can leave it stale and failing | Check login state with `codex login status` and re-run `codex login` if needed. Running codex occasionally helps avoid staleness |
+| `Not inside a trusted directory and --skip-git-repo-check was not specified.` appears | This should never happen — the adapter always passes `--skip-git-repo-check` | If you see this, it likely indicates a bug in CodeRouter's argv construction. Check your version and file an issue if it reproduces |
+| CLI fails to launch (`failed to launch ...`) | `command` (defaults to the same name as `agent`) isn't on `PATH` | Confirm `claude --version` / `codex --version` / `grok --version` works. You can also point `command` at a full path |
 
 ---
 

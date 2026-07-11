@@ -2,7 +2,7 @@
 
 > English: [`external-agents.en.md`](./external-agents.en.md)
 
-`kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加され(Phase 1a: claude)、v2.7.8 で grok が追加された(Phase 1d)。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
+`kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加され(Phase 1a: claude)、v2.7.8 で grok が追加され(Phase 1d)、v2.7.9 で codex が追加された(Phase 1b)。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
 
 ---
 
@@ -11,16 +11,16 @@
 コーディングエージェント CLI は本来、ファイルを書き換えながら何ターンも自律的に動くステートフルな制御ループであり、CodeRouter の「1リクエスト = 1変換」という思想とは相性が悪い。`agent_cli` はこれを **ワンショット `exec`**(プロンプト in → 最終回答テキスト out)に押し込めることで両立させている。オーケストレーション(マルチターン制御・ツール実行)はエージェント CLI 内部で完結し、CodeRouter 側からは「1回の対話で答えを返すだけの1つのプロバイダ」として見える。
 
 - **対象 CLI**: `agent` フィールドで `claude` / `codex` / `gemini` / `grok` の4種を宣言できる。
-- **実装状況(v2.7.8 時点)**: **`claude`(Claude Code CLI・Phase 1a)と `grok`(Grok CLI・Phase 1d)が実装済み**。`codex` / `gemini` は `providers.yaml` のスキーマ上は書けるが、アダプタ構築時に必ず AdapterError で拒否される(Phase 1b/1c は未実装)。エラーメッセージは概ね次の形である(正確な文言はバージョンにより変わりうる):
+- **実装状況(v2.7.9 時点)**: **`claude`(Claude Code CLI・Phase 1a)・`codex`(OpenAI Codex CLI・Phase 1b)・`grok`(Grok CLI・Phase 1d)が実装済み**。`gemini` のみ `providers.yaml` のスキーマ上は書けるが、アダプタ構築時に必ず AdapterError で拒否される(Phase 1c は未実装)。エラーメッセージは概ね次の形である(正確な文言はバージョンにより変わりうる):
 
   ```
-  AdapterError: agent 'codex' is not implemented yet (implemented: claude, grok).
-  Wait for the agent's phase (1b/1c).
+  AdapterError: agent 'gemini' is not implemented yet (implemented: claude, codex, grok).
+  Wait for the agent's phase (1c).
   ```
 
   この拒否は `retryable=False` — フォールバックチェーンに他プロバイダがあっても、設定ミスとして即座に停止する。
 
-- 本ドキュメントの共通部分(認証設計・設定リファレンス・制限事項)は claude ターゲットを軸に記述し、grok 固有の挙動は [grok(Grok CLI)](#grokgrok-cli) セクションにまとめる。codex / gemini の設定例は `examples/providers-agent-cli.yaml` 末尾にコメントアウトされたプレビューとして置かれているが、動作しない。
+- 本ドキュメントの共通部分(認証設計・設定リファレンス・制限事項)は claude ターゲットを軸に記述し、codex / grok 固有の挙動はそれぞれ [codex(OpenAI Codex CLI)](#codexopenai-codex-cli) / [grok(Grok CLI)](#grokgrok-cli) セクションにまとめる。gemini の設定例は `examples/providers-agent-cli.yaml` 末尾にコメントアウトされたプレビューとして置かれているが、動作しない。
 
 ---
 
@@ -96,14 +96,14 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 
 | フィールド | 型 | 既定値 | 説明 |
 |---|---|---|---|
-| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.8 で実装済みなのは `claude` と `grok`。`codex` / `gemini` はアダプタ構築時に拒否される** |
+| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.9 で実装済みなのは `claude`・`codex`・`grok`。`gemini` はアダプタ構築時に拒否される** |
 | `command` | `str \| null` | `null`(未設定時は `agent` と同名) | CLI 実行ファイル名 or 絶対パス。`PATH` から解決 |
 | `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
 | `exec_timeout_s` | `float` | `600.0`(範囲 `1.0`–`1800.0`) | exec 全体の強制タイムアウト(秒)。`ProviderConfig.timeout_s` とは**別系統**(後者は agent_cli では使われない) |
 | `allow_file_writes` | `bool` | `false` | ファイル書き込みを許可するか。`false` のときは `sandbox_mode` の値に関わらず read-only にクランプされる |
-| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
-| `model` | `str \| null` | `null`(未設定時は `ProviderConfig.model` を使用) | CLI の `--model` / `-m` に渡すモデル名(claude: `opus` / `sonnet` / `haiku` / `fable` 等、grok: `grok-4.5` 等) |
-| `max_turns` | `int \| null` | `8`(範囲 `1`–`50`) | CLI 内部のターン上限。`--max-turns` として渡る |
+| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、codex は [codex セクション](#sandbox_mode--codex-フラグのマッピング)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
+| `model` | `str \| null` | `null`(未設定時は `ProviderConfig.model` を使用) | CLI の `--model` / `-m` に渡すモデル名(claude: `opus` / `sonnet` / `haiku` / `fable` 等、codex: `gpt-5.5` 等、grok: `grok-4.5` 等) |
+| `max_turns` | `int \| null` | `8`(範囲 `1`–`50`) | CLI 内部のターン上限。`--max-turns` として渡る。**codex には対応する CLI フラグが無いため常に無視される**(codex では `exec_timeout_s` + プロセスグループ kill のみが時間上限になる) |
 | `passthrough_env` | `list[str]` | `[]` | 親環境から子プロセスへ転送する環境変数名のallowlist。`ANTHROPIC_API_KEY` はここに書かない限り渡らない |
 | `agent_depth_limit` | `int` | `2`(範囲 `1`–`4`) | 再帰ネストの上限。`CODEROUTER_AGENT_DEPTH` が上限以上なら `AdapterError(retryable=False)` で即停止 |
 
@@ -120,6 +120,104 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 ### `paid: false` の理由
 
 サンプル設定 `examples/providers-agent-cli.yaml` の `agent-claude` プロバイダは `paid: false` になっている。これはサブスクリプション OAuth で運用する限り**従量課金が一切発生しない**(消費するのは後述の5時間窓/週次クォータのみ)ためである。API キー従量課金で運用したい場合は `paid: true` に変更し、CodeRouter 起動時に `ALLOW_PAID=true` を環境変数として渡す必要がある。`ALLOW_PAID` 環境変数は `providers.yaml` に書いた値(`allow_paid`)を**起動時に上書きする**ため、`paid: true` のプロバイダは `ALLOW_PAID` 未設定時にはルーティングから除外される点に注意する。
+
+---
+
+## codex(OpenAI Codex CLI)
+
+v2.7.9(Phase 1b)で `agent: codex` が実装された。claude と同じくプロンプトを **stdin 経由**で渡す方式である(grok のようなファイル経由ではない)。JSONL 出力・`--ephemeral`・git 外ディレクトリ対応など codex 固有の挙動がある。以下は codex CLI **0.144.1**(作者の Mac、2026-07-11 実機検証)を基準とする。
+
+### 設定例
+
+```yaml
+providers:
+  - name: agent-codex
+    kind: agent_cli
+    model: gpt-5.5                # 現行フロンティアモデルの例。既定モデルは環境/プラン依存なので明示推奨
+    paid: false                   # ChatGPT プランサブスクリプション OAuth 運用 = 従量課金ゼロ
+    capabilities:
+      streaming: false
+      tools: false
+    agent_cli:
+      agent: codex
+      command: codex
+      workdir: ~/.coderouter/agents/codex
+      exec_timeout_s: 600
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8                 # codex には対応フラグが無く無視される(下記参照)
+      passthrough_env: []          # OAuth は ~/.codex/auth.json を HOME 継承で読むため空でよい。
+                                    # CI で API キーを使う場合のみ CODEX_API_KEY(exec専用)
+                                    # または OPENAI_API_KEY を列挙する
+```
+
+### アダプタが構築する argv
+
+`sandbox_mode: read_only`(既定)の場合、アダプタは次の argv を構築する。
+
+```
+codex exec --json --skip-git-repo-check --ephemeral -m <model> -C <workdir> -s read-only -
+```
+
+### プロンプトは stdin 経由(claude と同じ、grok とは異なる)
+
+codex の `exec` サブコマンドは PROMPT 引数を省略する(または明示的に `-` を指定する)と stdin からプロンプトを読む。アダプタは argv 末尾に明示の `-` を置いてこの経路を強制する。grok のように隔離 workdir 内の一時ファイル(`--prompt-file`)を経由する必要はなく、claude と同じ stdin 方式である。
+
+### `--skip-git-repo-check` を常時付与する理由
+
+CodeRouter の隔離 workdir は git リポジトリではない。codex はデフォルトで「信頼済みディレクトリ」チェックを行い、git リポジトリ外かつ未確認のディレクトリでは exit 1 + stderr `Not inside a trusted directory and --skip-git-repo-check was not specified.` で即座に失敗する(実機確認済み)。アダプタはこのフラグを常時付与するため、実運用でこのエラーメッセージが表示されることはない。
+
+### `--ephemeral` を常時付与する理由
+
+`--ephemeral` はセッションをディスクに保存しない。grok の `--no-memory` と同じ理由 — CodeRouter の「1リクエスト = 1ステートレス変換」思想との整合 — で、アダプタは常にこのフラグを付与する(設定で外すことはできない)。
+
+### `sandbox_mode` → codex フラグのマッピング
+
+claude/grok と同様、`allow_file_writes=false` のときは `sandbox_mode` の値に関わらず `read_only` にクランプされる。
+
+| `sandbox_mode` | codex フラグ | 備考 |
+|---|---|---|
+| `read_only`(既定) | `-s read-only` | ファイル変更なし。`allow_file_writes=false` のとき常にこのモードにクランプされる |
+| `edit` | `-s workspace-write` | workspace-write サンドボックス内でのファイル編集を許可 |
+| `full_auto` | `-s workspace-write` | **`codex exec` に承認フラグ(`-a` / `--ask-for-approval`)は存在しない**(0.144.1 の `exec --help` に無し。非対話実行のため承認プロンプト自体が無い)。そのため `edit` と同一マッピングになる。`--dangerously-bypass-approvals-and-sandbox` は使わない |
+
+### `--max-turns` / `--timeout` は存在しない
+
+codex exec には `--max-turns` も `--timeout` も存在しない。したがって `AgentCliConfig.max_turns` は **codex では無視される**。時間上限は既存の `exec_timeout_s` + プロセスグループ SIGKILL のみが担う。
+
+### JSONL 出力と usage 正規化
+
+`--json` の出力は JSONL(1行1イベント)であり、進捗は stderr、イベント列(最終応答を含む)は stdout に出る(公式ドキュメント・実機とも確認済み)。実機での one-shot 実行例:
+
+```
+$ codex exec --json --skip-git-repo-check "1+1は?数字だけ答えて"
+{"type":"thread.started","thread_id":"019f4e74-08fd-77b2-9cc6-9afa744df130"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"2"}}
+{"type":"turn.completed","usage":{"input_tokens":13810,"cached_input_tokens":9984,"output_tokens":5,"reasoning_output_tokens":0}}
+```
+
+- 最終回答: **最後の** `item.completed` かつ `item.type=="agent_message"` の `item.text`。
+- usage 正規化: `turn.completed.usage` の `input_tokens` → `prompt_tokens`、`output_tokens` → `completion_tokens`、両者の和を `total_tokens` とする。`cached_input_tokens` は `input_tokens` の**部分集合**であり(実測: input 13810 ⊃ cached 9984)、加算せず `prompt_tokens_details.cached_tokens` として保持する。`reasoning_output_tokens` が 0 より大きい場合は `completion_tokens_details.reasoning_tokens` として保持する(防御的)。複数の `turn.completed` が出た場合は合算する。
+- `thread_id`(`thread.started`)はレスポンスメタデータ `coderouter_session_id` に写す。
+- `error` イベントまたは `turn.failed` を検出した場合、あるいは agent_message が1つも得られない/stdout が空/全行が非JSON の場合は retryable `AdapterError` としてフォールバックチェーンを次のプロバイダへ進める。JSONL の個々の行が非JSON でも他の行の処理は続行する(stderr 混入等への防御)。
+
+### 認証(ChatGPT プランサブスクリプション OAuth / API キー)
+
+codex CLI は ChatGPT プランの OAuth ログインに対応している。資格情報は `~/.codex/auth.json`(または OS キーチェーン)に保存され、アダプタの `HOME` 継承によって `passthrough_env: []` のままで動作する。
+
+1. `codex login` を実行してログインを済ませる。`codex login status` が exit 0 を返せばログイン済みと確認できる。
+2. OAuth トークンは**約8日で stale** になる。使用時に自動リフレッシュされるが、長期間 codex を呼び出さない構成では stale のまま失敗することがあるため、定期的に codex を実行するか再ログインしておくことを推奨する。
+
+CI などで API キー従量課金を使う場合は、`CODEX_API_KEY`(**exec 専用**)または `OPENAI_API_KEY`(一般)を `passthrough_env` に列挙する。`CODEX_HOME` で config/資格情報ディレクトリ自体を上書きすることも可能。
+
+### エラー報告
+
+codex CLI は成功時に終了コード 0、失敗時は非ゼロ終了コード + stderr にエラーテキストを出力する(例: git 外チェック失敗時のメッセージ)。JSONL 内に `error` イベントや `turn.failed` が含まれる場合もあり、これらも retryable な `AdapterError` としてフォールバックチェーンを次のプロバイダへ進める。
+
+### pre-1.0 であることの注意
+
+codex CLI は pre-1.0 でほぼ毎日リリースされている。`--json` の別名は依然として `--experimental-json` のままであり、JSONL スキーマは未凍結である。**バージョンの pin を推奨する**(`command` に固定版バイナリのフルパスを指定できる)。スキーマ変化が起きても防御的パースにより retryable な `AdapterError` となり、フォールバックチェーンの次のプロバイダへ降格する。
 
 ---
 
@@ -222,7 +320,9 @@ grok CLI は early beta である(v0.2.93 [stable] チャネル、2026-07-10 時
 | リクエストが `paid gate blocked` 相当で弾かれる/ルーティングされない | `agent_cli` プロバイダが `paid: true` なのに `ALLOW_PAID` が立っていない | サブスク運用なら `paid: false` にする。API キー従量課金で使うなら CodeRouter 起動時に `ALLOW_PAID=true` を設定する |
 | `claude exited 1: ...` のエラーメッセージに具体的な理由が出る | claude CLI は認証エラー等を **stdout** に `is_error: true` の JSON として出力し(stderr は空のまま)終了コード1で終わることがある | v2.7.7 の `_error_detail()` は stderr が空でも stdout の `is_error` JSON から `result` フィールド(実際のエラー文言、例: `Not logged in · Please run /login`)を優先的に拾ってエラーメッセージに含めるようになっている。表示されたメッセージをそのまま手がかりにできる |
 | `grok exited 1: ...` で失敗する | grok CLI は認証・ネットワーク・実行時エラーを終了コード1で終わり、エラーテキストを stderr に出す | アダプタが stderr の末尾を `AdapterError` に含めるので、そのメッセージを手がかりにする。認証エラーなら `grok login` を再実行し、`grok models` が通ることをスモーク確認する |
-| CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名)が `PATH` 上に無い | `claude --version` / `grok --version` が通ることを確認する。フルパスを `command` に指定してもよい |
+| `codex exited 1: ...` で失敗する(OAuth の stale を疑う場合) | codex の OAuth トークンは約8日で stale になる。使用時自動リフレッシュされるが、長期間呼び出しが無いと stale のまま失敗することがある | `codex login status` でログイン状態を確認し、必要なら `codex login` を再実行する。定期的に codex を実行しておくと stale 化を避けやすい |
+| `Not inside a trusted directory and --skip-git-repo-check was not specified.` が表示される | 通常は発生しない — アダプタは `--skip-git-repo-check` を常時付与するため | もし表示された場合は CodeRouter 側の argv 構築にバグがある可能性が高い。バージョンを確認し、再現するなら issue を報告する |
+| CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名)が `PATH` 上に無い | `claude --version` / `codex --version` / `grok --version` が通ることを確認する。フルパスを `command` に指定してもよい |
 
 ---
 
