@@ -54,9 +54,11 @@ from coderouter.config.capability_registry import (
     RegistryCapabilities,
 )
 from coderouter.config.schemas import (
+    AgentCliConfig,
     Capabilities,
     CodeRouterConfig,
     FallbackChain,
+    PluginsConfig,
     ProviderConfig,
 )
 from coderouter.doctor import (
@@ -64,6 +66,7 @@ from coderouter.doctor import (
     DoctorReport,
     ProbeResult,
     ProbeVerdict,
+    _check_agent_cli_plugin_migration,
     _patch_model_capabilities_yaml,
     _patch_providers_yaml_capability,
     _patch_providers_yaml_num_ctx,
@@ -2253,3 +2256,95 @@ def test_format_report_includes_provider_details_and_exit_line() -> None:
     assert text.rstrip().endswith("Exit: 2")
     # The suggested patch must appear verbatim so users can copy-paste.
     assert "tools: false" in text
+
+
+# ---------------------------------------------------------------------------
+# Phase 2c agent_cli plugin migration guard
+# (docs/designs/agent-cli-plugin-extraction.md §5.2, §7 "2c" row, §7.1)
+# ---------------------------------------------------------------------------
+
+
+def _agent_cli_provider(*, name: str = "agent") -> ProviderConfig:
+    return ProviderConfig(
+        name=name,
+        kind="agent_cli",
+        model="opus",
+        agent_cli=AgentCliConfig(agent="claude"),
+    )
+
+
+def _config_with_plugins(
+    providers: list[ProviderConfig], *, plugins_enabled: list[str] | None
+) -> CodeRouterConfig:
+    return CodeRouterConfig(
+        providers=providers,
+        profiles=[FallbackChain(name="default", providers=[providers[0].name])],
+        plugins=(PluginsConfig(enabled=plugins_enabled) if plugins_enabled is not None else None),
+    )
+
+
+def test_agent_cli_plugin_migration_check_warns_when_plugin_not_enabled() -> None:
+    """agent_cli provider + empty/missing plugins.enabled -> NEEDS_TUNING
+    finding with the install command + plugins.enabled snippet.
+    """
+    provider = _agent_cli_provider()
+    config = _config_with_plugins([provider], plugins_enabled=[])
+
+    result = _check_agent_cli_plugin_migration(config, provider)
+
+    assert result is not None
+    assert result.verdict == ProbeVerdict.NEEDS_TUNING
+    assert "coderouter-plugin-agents" in result.detail
+    assert result.suggested_patch is not None
+    assert "pip install" in result.suggested_patch
+    assert "coderouter-plugin-agents" in result.suggested_patch
+    assert "git+https://github.com/zephel01/coderouter-plugin-agents" in result.suggested_patch
+    assert "plugins:" in result.suggested_patch
+    assert "enabled:" in result.suggested_patch
+    assert "- agents" in result.suggested_patch
+
+
+def test_agent_cli_plugin_migration_check_no_warning_when_plugin_enabled() -> None:
+    """agent_cli provider + plugins.enabled=['agents'] -> no finding."""
+    provider = _agent_cli_provider()
+    config = _config_with_plugins([provider], plugins_enabled=["agents"])
+
+    assert _check_agent_cli_plugin_migration(config, provider) is None
+
+
+def test_agent_cli_plugin_migration_check_no_warning_for_other_kinds() -> None:
+    """Non-agent_cli providers are never flagged by this check."""
+    provider = _oa_provider()
+    config = _config_with_plugins([provider], plugins_enabled=[])
+
+    assert _check_agent_cli_plugin_migration(config, provider) is None
+
+
+@pytest.mark.asyncio
+async def test_check_model_reports_migration_finding_and_skips_http_probes() -> None:
+    """``check_model`` surfaces the migration finding as the sole result
+    and does not attempt HTTP probes against a kind that has no adapter.
+    """
+    provider = _agent_cli_provider()
+    config = _config_with_plugins([provider], plugins_enabled=[])
+
+    report = await check_model(config, provider.name, registry=_empty_registry())
+
+    assert len(report.results) == 1
+    assert report.results[0].name == "agent-cli-plugin-migration"
+    assert report.results[0].verdict == ProbeVerdict.NEEDS_TUNING
+    assert exit_code_for(report) == 2
+
+
+@pytest.mark.asyncio
+async def test_check_model_runs_normal_probes_when_agent_cli_plugin_enabled() -> None:
+    """With the plugin enabled, ``check_model`` does not short-circuit on
+    the migration check — normal probing proceeds (whatever it does for
+    kind='agent_cli', which is out of scope for this guard).
+    """
+    provider = _agent_cli_provider()
+    config = _config_with_plugins([provider], plugins_enabled=["agents"])
+
+    report = await check_model(config, provider.name, registry=_empty_registry())
+
+    assert not any(r.name == "agent-cli-plugin-migration" for r in report.results)

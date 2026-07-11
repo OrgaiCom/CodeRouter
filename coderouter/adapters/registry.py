@@ -18,12 +18,27 @@ logger = get_logger(__name__)
 # in-core kinds, in resolution order. Kept as a tuple (not derived from
 # the if-chain below) so the "Unknown adapter kind" error message and
 # the plugin-shadow guard have a single source of truth.
-_IN_CORE_KINDS: tuple[str, ...] = ("openai_compat", "anthropic", "agent_cli")
+#
+# Phase 2c (docs/designs/agent-cli-plugin-extraction.md §7 row "2c"):
+# "agent_cli" is no longer in this tuple. It is served exclusively by
+# the coderouter-plugin-agents adapter plugin now that the in-core
+# AgentCliAdapter and its build_adapter branch have been removed.
+_IN_CORE_KINDS: tuple[str, ...] = ("openai_compat", "anthropic")
 
-# Module-level flag so the Phase 2b in-core agent_cli deprecation warning
-# (docs/designs/agent-cli-plugin-extraction.md §5.1) fires at most once per
-# process, regardless of how many agent_cli providers are built.
-_agent_cli_deprecation_logged = False
+# Phase 2c migration hint (docs/designs/agent-cli-plugin-extraction.md
+# §5.2): shown ONLY for kind="agent_cli" when no plugin resolves it, so
+# operators upgrading from pre-2c configs get a targeted fix instead of
+# the generic unknown-kind message.
+_AGENT_CLI_MIGRATION_HINT = (
+    "kind='agent_cli' is served by the coderouter-plugin-agents plugin "
+    "(Core no longer ships an in-core agent_cli adapter as of Phase 2c). "
+    'Install it with: pip install "coderouter-plugin-agents @ '
+    'git+https://github.com/zephel01/coderouter-plugin-agents" and add '
+    "'agents' to plugins.enabled in providers.yaml, e.g.:\n"
+    "plugins:\n"
+    "  enabled:\n"
+    "    - agents"
+)
 
 
 def _plugin_kinds(plugin_registry: PluginRegistry | None) -> list[str]:
@@ -31,36 +46,6 @@ def _plugin_kinds(plugin_registry: PluginRegistry | None) -> list[str]:
     if plugin_registry is None:
         return []
     return [factory.kind for factory in plugin_registry.adapters]
-
-
-def _warn_agent_cli_in_core_deprecated_once() -> None:
-    """Log ``agent-cli-in-core-deprecated`` once per process (§5.1).
-
-    Only called when the in-core ``agent_cli`` branch is taken AND an
-    adapter plugin has also registered a ``kind="agent_cli"`` factory —
-    i.e. the operator already has ``coderouter-plugin-agents`` installed
-    and enabled, but Core's in-core copy still wins resolution order
-    (§3.2) during the Phase 2b migration window. Nudges them toward the
-    plugin path ahead of its Phase 2c removal from Core.
-    """
-    global _agent_cli_deprecation_logged
-    if _agent_cli_deprecation_logged:
-        return
-    _agent_cli_deprecation_logged = True
-    logger.warning(
-        "agent-cli-in-core-deprecated",
-        extra={
-            "hint": (
-                "an 'agent_cli' adapter plugin is installed and enabled, "
-                "but Core's in-core agent_cli implementation still served "
-                "this request (in-core wins resolution during the Phase 2b "
-                "migration window). The in-core copy will be removed in "
-                "Phase 2c — no action is required yet, but new setups "
-                "should already be relying on the plugin path "
-                "(coderouter-plugin-agents)."
-            ),
-        },
-    )
 
 
 def build_adapter(
@@ -72,27 +57,25 @@ def build_adapter(
     Resolution order (docs/designs/agent-cli-plugin-extraction.md §3.2):
     in-core kinds first, then plugin-provided kinds, then a fail-fast
     error. In-core kinds are checked first so a plugin can never shadow
-    a kind Core itself guarantees (``openai_compat`` / ``anthropic`` /,
-    during the Phase 2b migration window, ``agent_cli``).
+    a kind Core itself guarantees (``openai_compat`` / ``anthropic``).
+
+    As of Phase 2c, ``agent_cli`` is no longer an in-core kind — it
+    resolves ONLY via the plugin path (``coderouter-plugin-agents``).
     """
     if provider.kind == "openai_compat":
         return OpenAICompatAdapter(provider)
     if provider.kind == "anthropic":
         return AnthropicAdapter(provider)
-    if provider.kind == "agent_cli":
-        # Imported lazily so the external-agent adapter (and its subprocess /
-        # os plumbing) is only pulled in when a config actually uses it.
-        from coderouter.adapters.agent_cli import AgentCliAdapter
-
-        if plugin_registry is not None and any(
-            factory.kind == "agent_cli" for factory in plugin_registry.adapters
-        ):
-            _warn_agent_cli_in_core_deprecated_once()
-        return AgentCliAdapter(provider)
     if plugin_registry is not None:
         for factory in plugin_registry.adapters:
             if factory.kind == provider.kind:
                 return factory.build(provider)
+    if provider.kind == "agent_cli":
+        # Targeted migration hint (§5.2) instead of the generic message
+        # below — this is the single most common post-2c misconfiguration
+        # (an un-migrated providers.yaml that still relies on the removed
+        # in-core adapter).
+        raise ValueError(f"Unknown adapter kind {provider.kind!r}. {_AGENT_CLI_MIGRATION_HINT}")
     raise ValueError(
         f"Unknown adapter kind {provider.kind!r}. "
         f"in-core kinds: {', '.join(_IN_CORE_KINDS)}; "

@@ -1,4 +1,4 @@
-"""Tests for the Adapter plugin hook wiring (Phase 2a, v2.8.0).
+"""Tests for the Adapter plugin hook wiring (Phase 2a-2c, v2.8.0-v2.9.0).
 
 Covers docs/designs/agent-cli-plugin-extraction.md §7's Phase 2a test
 plan: a fake ``kind="fake_agent"`` adapter plugin is registered
@@ -20,6 +20,17 @@ use, and we verify:
   of §3.5's two ``build_adapter`` call sites) also passes the plugin
   registry, so a plugin kind registered after startup resolves too.
 
+Phase 2c (§7 "2c" row) removed the in-core ``AgentCliAdapter`` and its
+``build_adapter`` branch entirely, along with the Phase 2b
+"in-core wins, plugin shadowed" resolution order and its
+``agent-cli-in-core-deprecated`` once-per-process log — those tests
+were removed from this file with the in-core adapter itself.
+``kind="agent_cli"`` now resolves ONLY via the plugin path, and an
+un-migrated config (no plugin registered) gets a targeted migration
+hint instead of the generic unknown-kind message (§5.2) — see
+``test_agent_cli_kind_without_plugin_raises_targeted_migration_hint``
+below.
+
 The loader-level tests reuse the ``importlib.metadata.entry_points``
 monkeypatch pattern from ``tests/test_plugins_loader.py`` so they
 exercise the real discovery path rather than hand-building a registry.
@@ -35,7 +46,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from coderouter.adapters.agent_cli import AgentCliAdapter
 from coderouter.adapters.base import BaseAdapter, ChatRequest, ChatResponse, StreamChunk
 from coderouter.adapters.openai_compat import OpenAICompatAdapter
 from coderouter.adapters.registry import build_adapter
@@ -189,56 +199,12 @@ def test_in_core_kind_is_not_shadowed_by_plugin() -> None:
     assert isinstance(adapter, OpenAICompatAdapter)
 
 
-def test_in_core_agent_cli_kind_is_not_shadowed_by_plugin() -> None:
-    """Phase 2a/2b: in-core agent_cli still wins over a plugin of the
-    same kind (docs/designs/agent-cli-plugin-extraction.md §3.2/§5.1).
+def test_agent_cli_kind_resolves_via_plugin_when_registered() -> None:
+    """Phase 2c: agent_cli is a plugin kind like any other — a factory
+    that claims ``kind="agent_cli"`` in the plugin registry now serves
+    it directly (no more in-core branch to shadow it,
+    docs/designs/agent-cli-plugin-extraction.md §7 "2c" row).
     """
-
-    class _ShadowAgentCliProvider:
-        name = "shadow-agent-cli"
-        kind = "agent_cli"
-
-        def __init__(self, **_config: object) -> None:
-            pass
-
-        def build(self, config: ProviderConfig) -> BaseAdapter:
-            raise AssertionError("plugin must not shadow in-core agent_cli")
-
-    reg = PluginRegistry()
-    reg.add("adapter", _ShadowAgentCliProvider())
-
-    provider = ProviderConfig(
-        name="agent",
-        kind="agent_cli",
-        model="opus",
-        agent_cli=AgentCliConfig(agent="claude"),
-    )
-    adapter = build_adapter(provider, reg)
-
-    assert isinstance(adapter, AgentCliAdapter)
-
-
-def test_in_core_agent_cli_deprecation_logged_once_per_process(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Phase 2b (docs/designs/agent-cli-plugin-extraction.md §5.1):
-
-    when the in-core ``agent_cli`` branch is taken *and* an adapter
-    plugin has also registered a ``kind="agent_cli"`` factory,
-    ``build_adapter`` must log ``agent-cli-in-core-deprecated`` exactly
-    once per process — not once per call — while still resolving to the
-    in-core :class:`AgentCliAdapter` (in-core keeps winning resolution
-    order, §3.2).
-    """
-    import coderouter.adapters.registry as registry_mod
-
-    # The module-level once-per-process flag may already be set by
-    # another test in this session (e.g.
-    # test_in_core_agent_cli_kind_is_not_shadowed_by_plugin above, which
-    # also exercises the agent_cli + plugin-present combination) — reset
-    # it so this test's assertions are deterministic regardless of
-    # ordering.
-    monkeypatch.setattr(registry_mod, "_agent_cli_deprecation_logged", False)
 
     class _AgentCliLikeProvider:
         name = "agents"
@@ -247,8 +213,8 @@ def test_in_core_agent_cli_deprecation_logged_once_per_process(
         def __init__(self, **_config: object) -> None:
             pass
 
-        def build(self, config: ProviderConfig) -> BaseAdapter:  # pragma: no cover
-            raise AssertionError("in-core must win; plugin factory unused")
+        def build(self, config: ProviderConfig) -> BaseAdapter:
+            return _FakeAgentAdapter(config)
 
     reg = PluginRegistry()
     reg.add("adapter", _AgentCliLikeProvider())
@@ -259,14 +225,39 @@ def test_in_core_agent_cli_deprecation_logged_once_per_process(
         model="opus",
         agent_cli=AgentCliConfig(agent="claude"),
     )
+    adapter = build_adapter(provider, reg)
 
-    with caplog.at_level("WARNING"):
-        first = build_adapter(provider, reg)
-        second = build_adapter(provider, reg)
+    assert isinstance(adapter, _FakeAgentAdapter)
 
-    assert isinstance(first, AgentCliAdapter)
-    assert isinstance(second, AgentCliAdapter)
-    assert sum(1 for rec in caplog.records if rec.msg == "agent-cli-in-core-deprecated") == 1
+
+@pytest.mark.parametrize("registry", [None, PluginRegistry.empty()])
+def test_agent_cli_kind_without_plugin_raises_targeted_migration_hint(
+    registry: PluginRegistry | None,
+) -> None:
+    """Phase 2c (docs/designs/agent-cli-plugin-extraction.md §5.2, §7.1):
+
+    ``kind="agent_cli"`` with no adapter plugin registered (either no
+    registry at all, or an empty one without an ``agents`` factory)
+    must raise ``ValueError`` carrying the TARGETED migration hint —
+    the install command (git+https URL) and the ``plugins.enabled``
+    snippet — not just the generic unknown-kind message.
+    """
+    provider = ProviderConfig(
+        name="agent",
+        kind="agent_cli",
+        model="opus",
+        agent_cli=AgentCliConfig(agent="claude"),
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        build_adapter(provider, registry)
+
+    message = str(excinfo.value)
+    assert "agent_cli" in message
+    assert "coderouter-plugin-agents" in message
+    assert "git+https://github.com/zephel01/coderouter-plugin-agents" in message
+    assert "plugins.enabled" in message
+    assert "agents" in message
 
 
 def test_unknown_kind_error_lists_in_core_and_plugin_kinds() -> None:

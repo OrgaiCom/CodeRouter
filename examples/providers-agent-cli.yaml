@@ -2,8 +2,14 @@
 # CodeRouter providers.yaml — 外部コーディングエージェント CLI (agent_cli)
 # 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1 完了 — claude (1a)・codex (1b)・
 #              antigravity (1c)・grok (1d) の4バックエンドすべて実装済み
+#              / agent_cli plugin 切り出し Phase 2c 完了(v2.9.0) —
+#              in-core アダプタは削除済み。kind: agent_cli を使うには
+#              coderouter-plugin-agents のインストール +
+#              plugins.enabled: [agents] が必須 (破壊的変更。下記
+#              plugins: ブロックと「使い方」節を参照)。
 #
-# 出典: docs/designs/external-agents-adapter.md
+# 出典: docs/designs/external-agents-adapter.md,
+#       docs/designs/agent-cli-plugin-extraction.md
 # 目的: Claude Code CLI (`claude -p --output-format json`)、Codex CLI、
 #       Antigravity CLI (`agy`)、Grok CLI を CodeRouter の1プロバイダとして
 #       登録し、他のオーケストレータ (別の Claude Code / Cursor 等) から
@@ -34,14 +40,24 @@
 #     (既定 true のため上書き必須)。
 #
 # 使い方:
-#   1. claude CLI がインストール済み・`claude` が PATH 上にあること
+#   1. coderouter-plugin-agents をインストールする (v2.9.0 以降必須。
+#      未実施だと下記 provider 群がある状態で `coderouter serve` が
+#      起動時エラーで止まる):
+#        uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#        # または pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#        # uv tool install 構成の場合は同じツール環境に同居させる:
+#        #   uv tool install coderouter-cli \
+#        #     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#      このファイルには下記に `plugins: enabled: [agents]` を既に
+#      含めてある (二段ゲート — インストールしただけでは有効にならない)。
+#   2. claude CLI がインストール済み・`claude` が PATH 上にあること
 #      (`claude --version` で確認)。
-#   2. サブスクリプション認証を済ませておく (`claude` を対話起動して
+#   3. サブスクリプション認証を済ませておく (`claude` を対話起動して
 #      ログイン、または `claude setup-token` で1年トークンを発行し
 #      CLAUDE_CODE_OAUTH_TOKEN として環境変数に設定)。
-#   3. cp examples/providers-agent-cli.yaml ~/.coderouter/providers.yaml
-#   4. coderouter serve --port 8088
-#   5. 動作確認:
+#   4. cp examples/providers-agent-cli.yaml ~/.coderouter/providers.yaml
+#   5. coderouter serve --port 8088
+#   6. 動作確認:
 #        curl http://localhost:8088/v1/chat/completions \
 #          -H 'Content-Type: application/json' \
 #          -H 'X-CodeRouter-Profile: claude-agent' \
@@ -71,6 +87,19 @@
 # ============================================================
 
 default_profile: claude-agent
+
+# v2.9.0 以降必須: kind: agent_cli の provider を使うには
+# coderouter-plugin-agents をインストールした上で、ここに "agents" を
+# 列挙して有効化する必要がある (二段ゲート)。インストールコマンド:
+#   uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#   # または: pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#   # uv tool install 構成なら:
+#   #   uv tool install coderouter-cli \
+#   #     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+# 未インストール/未列挙のままだと coderouter serve は起動時エラーで
+# 停止する (docs/backends/external-agents.md のトラブルシューティング参照)。
+plugins:
+  enabled: [agents]
 
 providers:
   # ---- Claude Code CLI (Phase 1a・実装済み) ----

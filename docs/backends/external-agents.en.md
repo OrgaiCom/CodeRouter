@@ -4,6 +4,8 @@
 
 `kind: "agent_cli"` is an adapter that registers an external coding-agent CLI, such as the Claude Code CLI, as a single CodeRouter provider. It was newly added in v2.7.7 (Phase 1a: claude), v2.7.8 added grok (Phase 1d), v2.7.9 added codex (Phase 1b), and v2.7.10 added antigravity (Phase 1c). **Phase 1 (all four backends) is now complete.** See [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) for the full design.
 
+> **Breaking change in v2.9.0 (agent_cli plugin extraction, Phase 2c)** — the in-core `agent_cli` adapter was removed in v2.9.0. Using `kind: "agent_cli"` now **requires** installing the external plugin **`coderouter-plugin-agents`** and adding `plugins.enabled: [agents]` to `providers.yaml`. Through v2.8.x there was a transition period (Phase 2b) where the in-core implementation still won; that grace period ended with v2.9.0. See the [Quickstart](#quickstart) below for the exact steps. Without the plugin, a `kind: agent_cli` provider now makes `coderouter serve` fail at startup with an error that includes a targeted migration hint; `coderouter doctor` also detects and warns about the same misconfiguration. The `agent_cli:` sub-config schema (`AgentCliConfig`) itself and existing provider entries are unchanged — nothing there needs editing.
+
 ---
 
 ## Overview
@@ -12,6 +14,7 @@ A coding-agent CLI is normally a stateful control loop that runs many turns auto
 
 - **Supported CLIs**: the `agent` field can declare `claude` / `codex` / `antigravity` / `grok`. `gemini` also remains in the schema's `Literal`, but it is always rejected (see below).
 - **Implementation status (as of v2.7.10)**: **Phase 1 is complete — `claude` (Claude Code CLI, Phase 1a), `codex` (OpenAI Codex CLI, Phase 1b), `antigravity` (Google Antigravity CLI, Phase 1c), and `grok` (Grok CLI, Phase 1d) are all implemented**. `gemini` fell out of scope because Google discontinued the Gemini CLI for individual accounts in June 2026; constructing the adapter with it always raises a dedicated migration error:
+- **Prerequisite as of v2.9.0**: the adapter bodies for the four backends above moved to `coderouter-plugin-agents` in Phase 2b (v2.8.1), and the in-core copy was removed in Phase 2c (v2.9.0). As of v2.9.0, using `kind: agent_cli` therefore requires installing `coderouter-plugin-agents` and setting `plugins.enabled: [agents]`. The `agent_cli:` sub-config (`AgentCliConfig`), each CLI's argv/behavior, and how provider entries are written are all unchanged (see the per-CLI sections below).
 
   ```
   AdapterError: Google discontinued Gemini CLI for individual accounts (June 2026).
@@ -43,15 +46,36 @@ Google's stated successor is the **Antigravity CLI** (command name `agy`). It is
 
 ## Quickstart
 
-1. **Install the Claude Code CLI** (verify with `claude --version`).
-2. **Log in** — either run `claude` interactively and complete `/login`, or, on a headless machine, follow the [platform-specific authentication](#platform-specific-authentication) steps using `claude setup-token`.
-3. **Start with the example config**:
+1. **Install `coderouter-plugin-agents` and enable it** (required as of v2.9.0 — skipping this makes `coderouter serve` fail at startup whenever a `kind: agent_cli` provider is present):
+
+   ```bash
+   # with uv
+   uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+
+   # with pip
+   pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+
+   # if CodeRouter itself is installed via uv tool install, the plugin must live in the same tool environment
+   uv tool install coderouter-cli \
+     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+   ```
+
+   Add `plugins.enabled: [agents]` to `providers.yaml` (a two-stage gate — installing the package alone does not activate it):
+
+   ```yaml
+   plugins:
+     enabled: [agents]
+   ```
+
+2. **Install the Claude Code CLI** (verify with `claude --version`).
+3. **Log in** — either run `claude` interactively and complete `/login`, or, on a headless machine, follow the [platform-specific authentication](#platform-specific-authentication) steps using `claude setup-token`.
+4. **Start with the example config** (`examples/providers-agent-cli.yaml` already has `plugins.enabled: [agents]` set):
 
    ```bash
    uv run coderouter serve --config examples/providers-agent-cli.yaml --port 8088
    ```
 
-4. **Verify it works**:
+5. **Verify it works**:
 
    ```bash
    curl http://localhost:8088/v1/chat/completions \
@@ -108,6 +132,8 @@ Because the child process does not inherit the parent environment, exporting `AN
 ---
 
 ## Configuration reference
+
+> The `agent_cli:` sub-config schema (`AgentCliConfig`) is unchanged in v2.9.0. The only change is "install `coderouter-plugin-agents` and add `plugins.enabled: [agents]` to `providers.yaml`" — existing provider entries need no edits (see [Quickstart](#quickstart)).
 
 All fields of the `agent_cli:` sub-config (`AgentCliConfig`) in `providers.yaml`. `extra: forbid` applies, so an unknown key fails immediately at config load.
 
@@ -445,6 +471,8 @@ The grok CLI is early beta (v0.2.93 [stable] channel as of 2026-07-10). Its JSON
 | `agent: gemini` raises an `AdapterError` / you see `IneligibleTierError` | Google discontinued the Gemini CLI for individual accounts in June 2026 (field-verified: `IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals...`) | Switch to `agent: antigravity`. See the [antigravity (Google Antigravity CLI)](#antigravity-google-antigravity-cli) section for a working example |
 | `agy` hangs and never responds | Something is being piped into agy's stdin (e.g. `printf '...' \| agy -p "..."`) | Don't pipe stdin — write nothing and redirect from `</dev/null`. Calls made through CodeRouter already do this (the adapter closes stdin immediately) |
 | CLI fails to launch (`failed to launch ...`) | `command` (defaults to the same name as `agent`, except antigravity which defaults to `agy`) isn't on `PATH` | Confirm `claude --version` / `codex --version` / `agy --version` / `grok --version` works. You can also point `command` at a full path |
+| `coderouter serve` fails at startup even though a `kind: agent_cli` provider is configured | v2.9.0 (Phase 2c) removed the in-core `agent_cli` adapter; `coderouter-plugin-agents` plus `plugins.enabled: [agents]` are now required | Run `uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"` (or the pip / `uv tool install coderouter-cli --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"` variant), then add `plugins.enabled: [agents]` to `providers.yaml`. The startup error message itself includes the same migration steps (install + `plugins.enabled`) |
+| `coderouter doctor` reports an `agent_cli`-related config warning | A `kind: agent_cli` provider exists but `plugins.enabled` doesn't list `agents` (or the plugin isn't installed) | Same install command as above plus adding `plugins.enabled: [agents]`. `doctor`'s output also prints a fix snippet |
 
 ---
 

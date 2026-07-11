@@ -166,8 +166,21 @@ class CostConfig(BaseModel):
 class AgentCliConfig(BaseModel):
     """External coding-agent CLI settings for ``kind="agent_cli"`` providers.
 
-    Introduced by the external-agents-adapter design (Phase 1). One
-    ``agent_cli`` sub-config drives the :class:`AgentCliAdapter`, which
+    Introduced by the external-agents-adapter design (Phase 1). As of the
+    agent_cli plugin extraction's Phase 2c
+    (``docs/designs/agent-cli-plugin-extraction.md`` §4.4 case (b), §7),
+    the adapter that actually invokes the CLI (``AgentCliAdapter``,
+    argv construction / output parsing / sandbox flag tables) has moved
+    to the separately-distributed ``coderouter-plugin-agents`` plugin
+    (``pip install coderouter-plugin-agents`` + ``plugins.enabled:
+    [agents]``) — Core no longer ships it in-core. ``AgentCliConfig``
+    itself REMAINS in Core: it is a stable schema contract that has not
+    changed since Phase 1 (unlike the adapter body, which absorbs
+    per-CLI churn), so keeping it here preserves ``extra="forbid"``
+    fail-fast validation at config-load time regardless of whether the
+    plugin is installed.
+
+    One ``agent_cli`` sub-config drives the plugin's adapter, which
     invokes an external coding-agent CLI (codex / gemini / grok / claude /
     antigravity) in a single one-shot ``exec`` and returns the final answer
     as one ``prompt in → text out`` transformation. ``claude`` (Claude Code
@@ -355,10 +368,13 @@ class ProviderConfig(BaseModel):
         description=(
             "Adapter type. 'openai_compat' covers llama.cpp / Ollama / "
             "OpenRouter / LM Studio / Together / Groq. 'anthropic' is the "
-            "native Anthropic Messages API passthrough (v0.3.x). 'agent_cli' "
-            "invokes an external coding-agent CLI one-shot (see AgentCliConfig). "
-            "Other values must be served by an adapter plugin listed in "
-            "plugins.enabled."
+            "native Anthropic Messages API passthrough (v0.3.x). These two "
+            "are Core's only in-core kinds. 'agent_cli' invokes an external "
+            "coding-agent CLI one-shot (see AgentCliConfig) but, as of "
+            "Phase 2c, is served by the coderouter-plugin-agents adapter "
+            "plugin — install it and list 'agents' in plugins.enabled. "
+            "Any other value must likewise be served by an adapter plugin "
+            "listed in plugins.enabled."
         ),
     )
     # base_url is required for HTTP-backed adapters (openai_compat / anthropic)
@@ -428,9 +444,18 @@ class ProviderConfig(BaseModel):
     # kind="agent_cli": required external coding-agent CLI settings. Opt-in
     # (default None) exactly like ``restart_command`` — only meaningful when
     # ``kind == "agent_cli"``, and enforced by ``_check_kind_requirements``.
+    # The schema (this field + AgentCliConfig + the kind literal) stays in
+    # Core; the adapter that consumes it is the coderouter-plugin-agents
+    # plugin as of Phase 2c (docs/designs/agent-cli-plugin-extraction.md
+    # §4.4 case (b)).
     agent_cli: AgentCliConfig | None = Field(
         default=None,
-        description="Required when kind='agent_cli': external agent CLI settings.",
+        description=(
+            "Required when kind='agent_cli': external agent CLI settings. "
+            "Served by the coderouter-plugin-agents adapter plugin — "
+            "`pip install coderouter-plugin-agents` and add 'agents' to "
+            "plugins.enabled."
+        ),
     )
 
     cost: CostConfig | None = Field(
