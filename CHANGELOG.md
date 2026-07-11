@@ -9,9 +9,38 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.8.1] — 2026-07-11 (agent_cli moved to coderouter-plugin-agents — Phase 2b)
+
+Phase 2b of the agent_cli plugin extraction
+(`docs/designs/agent-cli-plugin-extraction.md` §4/§5/§7): the adapter body
+and its behavior tests now live in the new external package
+**`coderouter-plugin-agents`** (0.1.0, entry point `coderouter.adapter` →
+`agents`, pins `coderouter-cli>=2.8,<3.0`). Core still bundles the in-core
+`agent_cli` adapter unchanged during the transition — providers.yaml needs
+no edits yet — and the in-core copy keeps winning resolution until Phase 2c
+removes it.
+
+### Added
+
+- **`agent-cli-in-core-deprecated` warning** (`adapters/registry.py`) —
+  fires once per process when the in-core `agent_cli` branch serves a
+  request while the plugin is also installed and enabled, signalling that
+  the plugin path takes over at Phase 2c.
+
+### Changed
+
+- **`tests/test_agent_cli.py` slimmed 91 → 9** — the 82 adapter-behavior
+  tests (argv snapshots, parsers, env isolation, prompt-delivery
+  lifecycles, E2E, gemini rejection) moved verbatim to the plugin repo per
+  the design's §4.5 split map; the 9 retained tests cover the
+  `ProviderConfig`/`AgentCliConfig` pydantic validation that stays in Core
+  under §4.4 案(b) (AgentCliConfig remains a stable Core contract).
+- `tests/test_plugin_adapter.py` +1 (deprecation-log semantics: in-core
+  still serves by identity, warning fires exactly once).
+
 ## [v2.8.0] — 2026-07-11 (Plugin SDK: Adapter hook wired — Phase 2a of the agent_cli extraction)
 
-**PR #71**. Opens the Plugin SDK's Adapter surface: the previously dead-end `Adapter`
+Opens the Plugin SDK's Adapter surface: the previously dead-end `Adapter`
 Protocol (name-only) is now a real engine-integrated hook, so an external
 plugin package can provide new `kind` values for providers.yaml without
 touching Core. This is Phase 2a of the agent_cli plugin-extraction design
