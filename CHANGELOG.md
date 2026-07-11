@@ -11,7 +11,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.7.9] — 2026-07-11 (agent_cli Phase 1b: codex)
 
-Adds the third target to the `agent_cli` adapter: `agent: codex` (the OpenAI
+**PR #69**. Adds the third target to the `agent_cli` adapter: `agent: codex` (the OpenAI
 Codex CLI) is now implemented alongside `claude` (Phase 1a) and `grok`
 (Phase 1d). The implementation was verified against the real CLI (codex-cli
 0.144.1, 2026-07-11), and one design-time assumption from the 2026-07
