@@ -11,7 +11,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.8.1] — 2026-07-11 (agent_cli moved to coderouter-plugin-agents — Phase 2b)
 
-Phase 2b of the agent_cli plugin extraction
+**PR #72**. Phase 2b of the agent_cli plugin extraction
 (`docs/designs/agent-cli-plugin-extraction.md` §4/§5/§7): the adapter body
 and its behavior tests now live in the new external package
 **`coderouter-plugin-agents`** (0.1.0, entry point `coderouter.adapter` →
