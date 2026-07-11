@@ -6,18 +6,21 @@ moved the adapter-behavior tests (argv construction, output parsing,
 subprocess stubbing, env isolation, timeouts, recursion limits, and the
 TestClient E2E flows — ~82 of the original 91 tests) to the
 ``coderouter-plugin-agents`` plugin package, alongside the
-``AgentCliAdapter`` implementation itself
-(``coderouter/adapters/agent_cli.py``, kept in-core only as a
-backward-compatible copy through Phase 2c — see
-``coderouter/adapters/registry.py``'s ``agent-cli-in-core-deprecated``
-log).
+``AgentCliAdapter`` implementation itself. Phase 2c
+(``docs/designs/agent-cli-plugin-extraction.md`` §7 "2c" row) then
+removed the in-core copy of that adapter module and its
+``build_adapter`` branch entirely — ``kind="agent_cli"`` now resolves
+ONLY via the plugin path (``coderouter-plugin-agents``, see
+``coderouter.adapters.registry``).
 
 What stays in Core, and stays here, is the schema contract: ``kind:
 agent_cli`` and the ``agent_cli:`` sub-config (``AgentCliConfig``) are
 recognized by ``ProviderConfig`` regardless of whether the adapter
 plugin is installed, because Core owns config validation (fail-fast at
 config-load time, ``extra="forbid"``). These 9 tests are that contract's
-regression guard.
+regression guard and are unaffected by the Phase 2c adapter removal —
+they exercise pydantic validation only and do not import the (now
+deleted) in-core adapter module.
 """
 
 from __future__ import annotations

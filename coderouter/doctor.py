@@ -1835,6 +1835,56 @@ async def _probe_cache(
 
 
 # ---------------------------------------------------------------------------
+# Phase 2c migration guard (docs/designs/agent-cli-plugin-extraction.md §5.2,
+# §7 "2c" row): a config-level pre-check, not an HTTP probe. Core removed
+# its in-core agent_cli adapter in Phase 2c — kind="agent_cli" now resolves
+# ONLY via the coderouter-plugin-agents adapter plugin
+# (coderouter/adapters/registry.py's build_adapter). A provider that still
+# declares kind="agent_cli" without the plugin enabled will fail at engine
+# startup with a ValueError; surfacing it here lets `coderouter doctor`
+# catch it ahead of `coderouter serve`, with a copy-paste-able fix.
+# ---------------------------------------------------------------------------
+
+
+def _check_agent_cli_plugin_migration(
+    config: CodeRouterConfig, provider: ProviderConfig
+) -> ProbeResult | None:
+    """Warn when ``provider`` needs the agent_cli plugin but it isn't enabled.
+
+    Returns ``None`` (no finding) when ``provider.kind`` isn't
+    ``"agent_cli"``, or when ``"agents"`` is already listed in
+    ``plugins.enabled`` — i.e. nothing actionable to report.
+    """
+    if provider.kind != "agent_cli":
+        return None
+    enabled = config.plugins.enabled if config.plugins is not None else []
+    if "agents" in enabled:
+        return None
+    return ProbeResult(
+        name="agent-cli-plugin-migration",
+        verdict=ProbeVerdict.NEEDS_TUNING,
+        detail=(
+            f"provider {provider.name!r} declares kind='agent_cli', but the "
+            "coderouter-plugin-agents adapter plugin is not enabled. As of "
+            "v2.9.0 (Phase 2c), Core no longer ships an in-core agent_cli "
+            "adapter — this provider cannot serve requests until the "
+            "plugin is installed and listed in plugins.enabled."
+        ),
+        target_file="providers.yaml",
+        suggested_patch=(
+            "# install the plugin:\n"
+            'pip install "coderouter-plugin-agents @ '
+            'git+https://github.com/zephel01/coderouter-plugin-agents"\n'
+            "\n"
+            "# providers.yaml — enable it (merge into any existing list):\n"
+            "plugins:\n"
+            "  enabled:\n"
+            "    - agents\n"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -1871,6 +1921,14 @@ async def check_model(
         provider=provider,
         resolved_caps=resolved,
     )
+
+    migration = _check_agent_cli_plugin_migration(config, provider)
+    if migration is not None:
+        # Nothing to probe over HTTP — the provider has no adapter until
+        # the plugin is enabled. Report the finding and stop here rather
+        # than sending HTTP probes at a (kind-wise meaningless) base_url.
+        report.results.append(migration)
+        return report
 
     auth_result = await _probe_auth_and_basic_chat(provider)
     report.results.append(auth_result)

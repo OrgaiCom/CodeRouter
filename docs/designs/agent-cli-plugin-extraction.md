@@ -2,7 +2,7 @@
 
 > 対象バージョン: CodeRouter v2.8+ 系 / Phase 2（Adapter hook 配線 + 別リポ移設）
 > 関連: [`external-agents-adapter.md`](./external-agents-adapter.md) §9.3・§11.3〜§11.5、[`docs/inside/future.md`](../inside/future.md) §1.2・§2.5、[`plan.md`](../../plan.md)
-> ステータス: 設計中（レビュー前）
+> ステータス: Phase 2a/2b/2c すべて実装済み（設計完了）
 
 本設計書は、現在 CodeRouter 本体に in-core 実装されている外部コーディングエージェント CLI アダプタ（`kind="agent_cli"`、`coderouter/adapters/agent_cli.py`、1168 行）を、別配布の plugin パッケージ `coderouter-plugin-agents` へ前方互換で切り出す方式を定義するものである。切り出しの前提として、現状デッドエンド（`name: str` のみ）である Adapter Protocol（`coderouter/plugins/base.py` L156-168）を engine に配線する設計を併せて確定する。CLI 固有仕様はすべて `external-agents-adapter.md` §11.3〜§11.5 の実 CLI 検証結果を、拡張点のコード上の根拠はすべて本体実装の該当行を典拠とする。
 
@@ -408,3 +408,7 @@ Literal による静的保証は不要と判断した。
 - [`docs/inside/future.md`](../inside/future.md) — §1.2 三層モデル・Core 5 deps 不変条件（L187-253）、§2.5 方向性（L368+）、タスク #15（L112）
 - [`plan.md`](../../plan.md) — Core 5 deps 方針 / プラグイン制による外部委譲（L689）
 - 実装典拠: `coderouter/plugins/base.py` L156-168 / `coderouter/plugins/loader.py` L44-134 / `coderouter/plugins/registry.py` L43-66 / `coderouter/adapters/registry.py` L11-23 / `coderouter/adapters/agent_cli.py` L204-1168 / `coderouter/adapters/base.py` L162-263 / `coderouter/config/schemas.py` L166-329・L342-505・L1477-1519・L1674-1684 / `coderouter/routing/fallback.py` L1100-1110・L1178-1220 / `tests/test_agent_cli.py`（91 件）
+
+### 9.1 完了記録（2026-07-11）
+
+本設計の Phase 2a・2b・2c はすべて 2026-07-11 に実装完了した（v2.8.0 = Phase 2a、v2.8.1 = Phase 2b、v2.9.0 = Phase 2c、`coderouter-plugin-agents` 0.1.0）。§5.1・§7 が想定していた「2b の in-core 猶予期間」は、owner 判断により意図的にスキップされ、2b→2c を同日中に連続実施する形になった（当初想定していたような複数リリースにまたがる猶予期間は設けられていない）。この短縮に対する緩和策は次の3点である: (1) plugin 未導入のまま `kind: agent_cli` を使うと `serve` 起動時に移行手順込みのエラーで即座に停止する（§3.3 のエラーメッセージを 2c でさらに具体化)、(2) `coderouter doctor` が同じ設定ミスを config-level warning として検出し修正スニペットを提示する、(3) v2.9.0 の CHANGELOG エントリで本変更を **BREAKING** として先頭に明記し、影響範囲・対処コマンド・不変点・上記2つの安全網を明示している。
