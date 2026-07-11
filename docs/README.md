@@ -71,7 +71,7 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 - **install-backends** — llama.cpp / vLLM / MLX のインストール手順 / Installing the three backends · [日本語](backends/install-backends.md) · [English](backends/install-backends.en.md)
 - **launcher-quickstart** — バックエンド導入から起動までの最短手順 / Install a backend and launch · [日本語](backends/launcher-quickstart.md)
 - **launcher** — Launcher ガイド(Web版・デスクトップGUI版) / Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md)
-- **external-agents** — 外部コーディングエージェント CLI (agent_cli、v2.7.7・claude のみ) / External coding-agent CLI (agent_cli, v2.7.7, claude only) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
+- **external-agents** — 外部コーディングエージェント CLI (agent_cli、claude/codex/grok/antigravity の4種対応。v2.9.0 から `coderouter-plugin-agents` の導入が必須) / External coding-agent CLI (agent_cli, 4 CLIs: claude/codex/grok/antigravity; requires `coderouter-plugin-agents` since v2.9.0) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
 - **llamacpp-direct** — llama.cpp に直結する / Connect llama.cpp directly · [日本語](backends/llamacpp-direct.md) · [English](backends/llamacpp-direct.en.md)
 - **lmstudio-direct** — LM Studio に直結する / Connect LM Studio directly · [日本語](backends/lmstudio-direct.md) · [English](backends/lmstudio-direct.en.md)
 - **hf-ollama-models** — HuggingFace 配布モデルを Ollama で使う / Use HF models via Ollama · [日本語](backends/hf-ollama-models.md)
@@ -105,8 +105,9 @@ CodeRouter's **Plugin SDK** (since v2.3.0) loads out-of-tree plugins *opt-in*: a
 
 | プラグイン / Plugin | 何をするか / What it does | インストール / Install | リポジトリ / Repo |
 |---|---|---|---|
-| **compress** | ツール出力（JSON / ログ）を LLM に届く前に圧縮してトークンを削減。原文はローカル保持で可逆（CCR）。`cache-align` で Anthropic プロンプトキャッシュも整列。<br>Compresses tool output (JSON / logs) before it reaches the LLM to cut tokens; originals kept locally and reversible (CCR). `cache-align` also aligns Anthropic prompt caching. | `pip install coderouter-plugin-compress` | [coderouter-plugin-compress](https://github.com/zephel01/coderouter-plugin-compress) |
+| **compress** | ツール出力(JSON / ログ)を LLM に届く前に圧縮してトークンを削減。原文はローカル保持で可逆(CCR)。`cache-align` で Anthropic プロンプトキャッシュも整列。<br>Compresses tool output (JSON / logs) before it reaches the LLM to cut tokens; originals kept locally and reversible (CCR). `cache-align` also aligns Anthropic prompt caching. | PyPI 未公開。git+https で導入:<br>`uv pip install "coderouter-plugin-compress[accuracy] @ git+https://github.com/zephel01/coderouter-plugin-compress"`<br>Not yet on PyPI — install from git+https. | [coderouter-plugin-compress](https://github.com/zephel01/coderouter-plugin-compress) |
 | **memory** | 応答から key facts を抽出して `facts.jsonl` に蓄積し、次セッションの system prompt へ自動注入。「毎回同じ説明」を wire 層で解消。<br>Extracts key facts from responses into `facts.jsonl` and auto-injects them into the next session's system prompt — solving "explain it every time" at the wire layer. | `pip install coderouter-plugin-memory` | [coderouter-plugin-memory](https://github.com/zephel01/coderouter-plugin-memory) |
+| **agents** | 外部コーディングエージェント CLI(claude / codex / grok / antigravity)を `kind: agent_cli` の provider として登録する。v2.9.0 で in-core 実装が削除され、このプラグインが必須になった。詳細は [backends/external-agents](backends/external-agents.md)。<br>Registers external coding-agent CLIs (claude / codex / grok / antigravity) as `kind: agent_cli` providers. The in-core implementation was removed in v2.9.0, making this plugin required. See [backends/external-agents](backends/external-agents.en.md). | PyPI 未公開。git+https で導入:<br>`uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"`<br>Not yet on PyPI — install from git+https. | [coderouter-plugin-agents](https://github.com/zephel01/coderouter-plugin-agents) |
 
 有効化は `providers.yaml` に追記するだけ。起動ログに `plugin-loaded` が出れば有効です。
 Enable by adding to `providers.yaml`; a `plugin-loaded` line in the startup log confirms activation.
@@ -118,17 +119,21 @@ plugins:
     - compress-stats    # 圧縮率を coderouter stats に出力 / report compression ratio
     - cache-align       # プロンプトキャッシュのブレークポイント整列 / align prompt-cache breakpoints
     - memory            # セッション横断メモリ / cross-session memory
+    - agents            # 外部エージェント CLI (agent_cli) / external agent CLIs (agent_cli)
   config:
     compress:
       mode: safe        # off | safe | aggressive
-      ccr: true         # 圧縮の可逆復元（既定 on）/ reversible re-expansion (default on)
+      ccr: true         # 圧縮の可逆復元(既定 on)/ reversible re-expansion (default on)
     memory:
       consolidate_model: qwen3:1.7b
 ```
+
+`agent_cli` provider を使う場合、`agents` の有効化は opt-in ではなく**必須**です(未導入だと `coderouter serve` が起動時エラーになります)。詳細は [backends/external-agents](backends/external-agents.md) を参照してください。
+When using an `agent_cli` provider, enabling `agents` is not optional — it's **required** (without it, `coderouter serve` fails at startup). See [backends/external-agents](backends/external-agents.en.md) for details.
 
 各プラグインの詳細・設定は上記リポジトリの README を参照してください。
 See each plugin's repo README for full configuration.
 
 ---
 
-最終更新 / Last updated: 2026-06-24
+最終更新 / Last updated: 2026-07-11

@@ -21,7 +21,7 @@
 ## 何ができるか — 30 秒で
 
 ```
-あなたのエージェント (Claude Code / gemini-cli / codex)
+あなたのエージェント (Claude Code / codex / agy)
         │
         ▼
   ┌─ CodeRouter ─┐
@@ -96,7 +96,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | Claude Code + ローカル Ollama で tool calling が壊れる | **必須** — tool 修復 (+ 必要なら wire 変換) |
 | Claude Code + ローカルで長時間回すと止まる | **必須級** — 6 系統ガード + self-healing |
 | Ollama v0.14+ / LM Studio にネイティブ直結で動いてる | **便利** — 直結に無い fallback / ガード / 診断を追加 (passthrough で翻訳ゼロ) |
-| codex / gemini-cli + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら |
+| codex / agy + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら |
 | Claude API を直接叩いてて問題ない | 不要 |
 
 詳細は → [要否判定ガイド](./docs/start/when-do-i-need-coderouter.md)
@@ -266,6 +266,8 @@ English: [Quickstart](./docs/start/quickstart.en.md) · [Usage guide](./docs/gui
 - **テスト**: 1,500+ 本(ランタイム依存 5 個は v1 系から不変)
 - **対応 OS**: macOS (Apple Silicon 推奨) / Linux / Windows WSL2
 - **対応 backend**: Ollama / llama.cpp / LM Studio / vLLM / MLX-LM / OpenRouter / NVIDIA NIM / Anthropic API
+- **外部エージェント CLI**: `agent_cli` provider として Claude Code / codex / grok / antigravity の4種を束ねて呼び出せる(要 `coderouter-plugin-agents`。詳細 → [external-agents ガイド](./docs/backends/external-agents.md))
+- **プラグイン**: compress / memory / agents の3種を opt-in で追加可能(コアの依存は増えない。一覧・導入方法 → [docs/README.md](./docs/README.md#対応プラグイン--plugins))
 - **ライセンス**: MIT
 
 ---

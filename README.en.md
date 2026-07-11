@@ -21,7 +21,7 @@
 ## What it does — in 30 seconds
 
 ```
-Your agent (Claude Code / gemini-cli / codex)
+Your agent (Claude Code / codex / agy)
         │
         ▼
   ┌─ CodeRouter ──┐
@@ -77,7 +77,7 @@ That's it. Claude Code works as usual, but your local Ollama is answering behind
 |---|---|
 | Claude Code + local Ollama, tool calling breaks | **Yes** — wire translation + tool repair |
 | Claude Code + local, dies after long sessions | **Helpful** — 6 guards + self-healing |
-| codex / gemini-cli + Ollama works fine | Optional — if you want fallback |
+| codex / agy + Ollama works fine | Optional — if you want fallback |
 | Using Claude API directly, no issues | Not needed |
 
 Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-coderouter.en.md)
@@ -247,6 +247,8 @@ Open `http://localhost:8088/dashboard` while debugging — most issues become vi
 - **Tests**: 1,500+ (the 5 runtime deps have never grown since v1)
 - **OS**: macOS (Apple Silicon recommended) / Linux / Windows WSL2
 - **Backends**: Ollama / llama.cpp / LM Studio / vLLM / MLX-LM / OpenRouter / NVIDIA NIM / Anthropic API
+- **External agent CLIs**: bundle Claude Code / codex / grok / antigravity as a single `agent_cli` provider (requires `coderouter-plugin-agents`; details → [external-agents guide](./docs/backends/external-agents.en.md))
+- **Plugins**: compress / memory / agents, all opt-in with zero impact on core dependencies (list & install → [docs/README.en.md](./docs/README.en.md#plugins))
 - **License**: MIT
 
 ---
