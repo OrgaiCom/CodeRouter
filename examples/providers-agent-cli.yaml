@@ -1,26 +1,28 @@
 # ============================================================
 # CodeRouter providers.yaml — 外部コーディングエージェント CLI (agent_cli)
-# 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1a (claude)・Phase 1d (grok) 実装済み
+# 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1a (claude)・Phase 1b (codex)・
+#              Phase 1d (grok) 実装済み
 #
 # 出典: docs/designs/external-agents-adapter.md
-# 目的: Claude Code CLI (`claude -p --output-format json`) や Grok CLI を
-#       CodeRouter の1プロバイダとして登録し、他のオーケストレータ
+# 目的: Claude Code CLI (`claude -p --output-format json`)、Codex CLI、
+#       Grok CLI を CodeRouter の1プロバイダとして登録し、他のオーケストレータ
 #       (別の Claude Code / Cursor 等) から「1つのモデル」として透過的に
 #       呼び出せるようにする。
 #       CodeRouter はワンショット exec (プロンプト in → テキスト out) の
 #       1変換だけを担い、エージェントのマルチターン制御ループそのものは
 #       中で完結させる (future.md の「1リクエスト=1変換」思想を維持)。
 #
-# 実装スコープ (v2.7.8 時点):
-#   - agent: claude (Phase 1a) と grok (Phase 1d) が実装済み。いずれも
-#     サブスクリプション OAuth を優先し (claude: `~/.claude/.credentials.json`
-#     または `claude setup-token`、grok: `~/.grok/auth.json`)、子プロセスには
+# 実装スコープ (v2.7.9 時点):
+#   - agent: claude (Phase 1a)・codex (Phase 1b)・grok (Phase 1d) が実装済み。
+#     いずれもサブスクリプション OAuth を優先し (claude:
+#     `~/.claude/.credentials.json` または `claude setup-token`、codex:
+#     `~/.codex/auth.json`、grok: `~/.grok/auth.json`)、子プロセスには
 #     ANTHROPIC_API_KEY 等を含む親環境を継承させない
 #     (env allowlist、下記 passthrough_env 参照)。
-#   - agent: codex / gemini は config スキーマ上は宣言できるが、
+#   - agent: gemini のみ config スキーマ上は宣言できるが、
 #     アダプタ構築時に AdapterError ("not implemented yet" — 実装済み
 #     エージェントの列挙付き) で拒否される。末尾にコメントアウトした
-#     Phase 1b-1c のプレビューブロック (未実装) を参照。
+#     Phase 1c のプレビューブロック (未実装) を参照。
 #   - 既定は read_only (書き込み不可)。書き込みを許可するには
 #     allow_file_writes: true と sandbox_mode: edit|full_auto を両方
 #     明示する必要がある (片方だけだと config load 時に ValueError)。
@@ -41,6 +43,11 @@
 #          -H 'Content-Type: application/json' \
 #          -H 'X-CodeRouter-Profile: claude-agent' \
 #          -d '{"model":"opus","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
+#      下記の codex ブロックを有効化した場合の動作確認 (要 `codex login` 済み):
+#        curl http://localhost:8088/v1/chat/completions \
+#          -H 'Content-Type: application/json' \
+#          -H 'X-CodeRouter-Profile: codex' \
+#          -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
 #      下記の grok ブロックを有効化した場合の動作確認 (要 `grok login` 済み):
 #        curl http://localhost:8088/v1/chat/completions \
 #          -H 'Content-Type: application/json' \
@@ -78,6 +85,49 @@ providers:
       max_turns: 8                # CLI 内部のターン上限 (--max-turns)
       passthrough_env: [CLAUDE_CODE_OAUTH_TOKEN]   # setup-token を使う場合のみ (任意)
       agent_depth_limit: 2         # ネスト再帰 (CODEROUTER_AGENT_DEPTH) の上限
+
+  # ---- OpenAI Codex CLI (Phase 1b・実装済み — v2.7.9) ----
+  # 実装済みだが既定ではコメントアウトしてある: このファイルをそのまま
+  # コピーしても codex CLI のインストールを要求しないようにするため。
+  # codex CLI (0.144.1 で検証) を導入し `codex login` を済ませてから
+  # 有効化すること (`codex login status` が exit 0 を返せば認証 OK)。
+  # pre-1.0・ほぼ毎日リリースのためバージョン pin 推奨 (command にフルパス指定可)。
+  #
+  # 認証: ChatGPT プランサブスクリプション OAuth (`~/.codex/auth.json` または
+  #   OS キーチェーン、約8日で stale・使用時自動リフレッシュ)。CI で API
+  #   キー従量課金を使う場合のみ CODEX_API_KEY (exec専用) または
+  #   OPENAI_API_KEY を passthrough_env に列挙する。CODEX_HOME で
+  #   config/資格情報ディレクトリを上書き可能。
+  # max_turns: codex には対応する CLI フラグが無いため常に無視される。
+  #   時間上限は exec_timeout_s (+ プロセスグループ kill) のみが担う。
+  # サンドボックス: codex exec には承認フラグ (-a/--ask-for-approval) が
+  #   存在しない (非対話実行のため)。edit/full_auto はいずれも
+  #   -s workspace-write に写る (claude の acceptEdits と同様、両者は
+  #   区別されない)。
+  #
+  # - name: agent-codex
+  #   kind: agent_cli
+  #   model: gpt-5.5                # 現行フロンティアモデルの例。既定モデルは
+  #                                  # 環境/プラン依存のため明示推奨
+  #   paid: false                   # ChatGPT プランサブスクリプション OAuth 運用 = 従量課金ゼロ
+  #   capabilities:
+  #     streaming: false
+  #     tools: false
+  #   agent_cli:
+  #     agent: codex
+  #     command: codex
+  #     workdir: ~/.coderouter/agents/codex
+  #     exec_timeout_s: 600
+  #     allow_file_writes: false
+  #     sandbox_mode: read_only     # -s read-only にマップ
+  #     max_turns: 8                # codex では無視される (上記コメント参照)
+  #     passthrough_env: []         # OAuth は ~/.codex/auth.json を HOME 継承で読むため空でよい。
+  #                                  # CI で API キーを使う場合のみ CODEX_API_KEY (exec専用)
+  #                                  # または OPENAI_API_KEY を列挙する
+  #
+  # 有効化する場合は profiles にも次を追加する:
+  #   - name: codex
+  #     providers: [agent-codex]
 
   # ---- xAI Grok CLI (Phase 1d・実装済み — v2.7.8) ----
   # 実装済みだが既定ではコメントアウトしてある: このファイルをそのまま
@@ -139,36 +189,20 @@ profiles:
 #       match: { model_pattern: "claude-agent.*" }
 
 # ============================================================
-# 以下はプレビュー (Phase 1b-1c・未実装) — コメントアウト
+# 以下はプレビュー (Phase 1c・未実装) — コメントアウト
 #
-# 下記の agent: codex / gemini は config スキーマとしては
+# 下記の agent: gemini は config スキーマとしては
 # 有効 (providers.yaml として読み込める) だが、AgentCliAdapter が
-# claude / grok 以外を拒否するため、実際にリクエストを投げると
+# claude / codex / grok 以外を拒否するため、実際にリクエストを投げると
 # 起動時におおよそ次の形の AdapterError (正確な文言は変わりうる)
-#   AdapterError: agent 'codex' is not implemented yet
-#   (implemented: claude, grok). Wait for the agent's phase (1b/1c).
+#   AdapterError: agent 'gemini' is not implemented yet
+#   (implemented: claude, codex, grok). Wait for the agent's phase (1c).
 # で失敗する (retryable=False)。将来のフェーズが実装されるまでの
 # forward-compatible なプレースホルダとして参照用に残してある。
 # 詳細: docs/designs/external-agents-adapter.md §3, §9
 # ============================================================
 
 # providers:
-#   # ---- OpenAI Codex CLI (Phase 1b・未実装) ----
-#   - name: agent-codex
-#     kind: agent_cli
-#     model: gpt-5.5
-#     paid: false               # サブスク OAuth 運用なら false
-#     capabilities:
-#       streaming: false
-#     agent_cli:
-#       agent: codex
-#       command: codex
-#       workdir: ~/.coderouter/agents/codex
-#       exec_timeout_s: 600
-#       allow_file_writes: false
-#       sandbox_mode: read_only
-#       passthrough_env: []        # サブスク OAuth は ~/.codex から読む
-#
 #   # ---- Google Gemini CLI (Phase 1c・未実装) ----
 #   - name: agent-gemini
 #     kind: agent_cli
@@ -187,7 +221,5 @@ profiles:
 #       passthrough_env: [GEMINI_API_KEY]   # OAuth キャッシュが無い場合の保険
 #
 # profiles:
-#   - name: codex
-#     providers: [agent-codex]
 #   - name: gemini
 #     providers: [agent-gemini]

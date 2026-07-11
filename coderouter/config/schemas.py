@@ -171,16 +171,24 @@ class AgentCliConfig(BaseModel):
     invokes an external coding-agent CLI (codex / gemini / grok / claude)
     in a single one-shot ``exec`` and returns the final answer as one
     ``prompt in → text out`` transformation. ``claude`` (Claude Code CLI,
-    Phase 1a) and ``grok`` (grok CLI, Phase 1d) are implemented;
-    codex / gemini are declared at the schema level so configs are
-    forward-compatible, but the adapter rejects them until their phase
-    lands.
+    Phase 1a), ``codex`` (codex CLI, Phase 1b) and ``grok`` (grok CLI,
+    Phase 1d) are implemented; ``gemini`` is declared at the schema level
+    so configs are forward-compatible, but the adapter rejects it until its
+    phase (1c) lands.
 
     Auth note (grok): the grok CLI uses OAuth credentials stored under
     ``~/.grok`` (``grok login``), which the adapter's HOME inheritance
     already covers — no extra config needed. For CI / API-key setups, list
     ``GROK_CODE_XAI_API_KEY`` in ``passthrough_env`` (this is grok's key
     env var — NOT ``XAI_API_KEY``).
+
+    Auth note (codex): the codex CLI uses a ChatGPT-plan OAuth login stored
+    under ``~/.codex`` (``codex login``), which the adapter's HOME
+    inheritance already covers — the credentials go stale after roughly 8
+    days and are auto-refreshed on use, so no extra config is needed for
+    interactive/subscription setups. For CI / API-key setups, list
+    ``CODEX_API_KEY`` (exec-only) or ``OPENAI_API_KEY`` (general) in
+    ``passthrough_env``.
 
     Follows the ``extra="forbid"`` convention used across this module so a
     typo'd key fails at config-load rather than being silently ignored.
@@ -191,8 +199,9 @@ class AgentCliConfig(BaseModel):
     agent: Literal["codex", "gemini", "grok", "claude"] = Field(
         ...,
         description=(
-            "External coding-agent CLI to invoke. 'claude' (Phase 1a) and "
-            "'grok' (Phase 1d) are implemented; 'codex' / 'gemini' pending."
+            "External coding-agent CLI to invoke. 'claude' (Phase 1a), "
+            "'codex' (Phase 1b) and 'grok' (Phase 1d) are implemented; "
+            "'gemini' (Phase 1c) pending."
         ),
     )
     command: str | None = Field(

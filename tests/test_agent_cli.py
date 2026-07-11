@@ -1,20 +1,25 @@
-"""Tests for the agent_cli adapter (Phase 1a claude + Phase 1d grok).
+"""Tests for the agent_cli adapter (Phase 1a claude + Phase 1b codex +
+Phase 1d grok).
 
-Implements the design's §8 test plan for the Phase 1a/1d scope:
+Implements the design's §8 test plan for the Phase 1a/1b/1d scope:
 
 * T1  argv construction (model / max-turns / permission-mode mapping,
-      allow_file_writes clamp) — for both claude and grok (grok adds the
-      --prompt-file / --no-memory / --sandbox shape).
-* T2  claude / grok JSON parsing (success / is_error / malformed / missing
-      fields; grok's zero-usage + sessionId meta).
+      allow_file_writes clamp) — for claude, codex and grok (codex adds the
+      exec/--json/--skip-git-repo-check/--ephemeral/-s/trailing "-" shape;
+      grok adds the --prompt-file / --no-memory / --sandbox shape).
+* T2  claude / codex / grok output parsing (success / is_error / malformed /
+      missing fields; codex's JSONL + cached-tokens-as-subset usage +
+      thread_id meta; grok's zero-usage + sessionId meta).
 * T3  stubbed subprocess via ``asyncio.create_subprocess_exec`` monkeypatch
-      (grok additionally checks the prompt-file lifecycle: 0600 file exists
+      (codex checks the stdin prompt-delivery path with no prompt file;
+      grok additionally checks the prompt-file lifecycle: 0600 file exists
       and contains the prompt DURING the exec, deleted afterwards, also on
       failure / timeout paths).
 * T4  TestClient E2E through ``POST /v1/chat/completions``.
 * T6  timeout → process-group kill + retryable AdapterError.
 * T7  child-env isolation (no ANTHROPIC_API_KEY leak, NO_COLOR present,
-      passthrough allowlist incl. GROK_CODE_XAI_API_KEY, depth +1).
+      passthrough allowlist incl. GROK_CODE_XAI_API_KEY / CODEX_API_KEY,
+      depth +1).
 * T8  recursion depth limit → non-retryable AdapterError.
 
 Plus config-schema validation (agent_cli required, base_url optionality,
@@ -86,6 +91,37 @@ GROK_RESULT = {
 }
 GROK_JSON = json.dumps(GROK_RESULT).encode("utf-8")
 
+# ---------------------------------------------------------------------------
+# Canned codex `exec --json` JSONL output (verified on codex-cli 0.144.1 —
+# see _codex/facts-codex.md; one JSON object per line, newline-delimited)
+# ---------------------------------------------------------------------------
+
+CODEX_JSONL = b"\n".join(
+    [
+        json.dumps(
+            {"type": "thread.started", "thread_id": "019f4e74-08fd-77b2-9cc6-9afa744df130"}
+        ).encode("utf-8"),
+        json.dumps({"type": "turn.started"}).encode("utf-8"),
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {"id": "item_0", "type": "agent_message", "text": "2"},
+            }
+        ).encode("utf-8"),
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 13810,
+                    "cached_input_tokens": 9984,
+                    "output_tokens": 5,
+                    "reasoning_output_tokens": 0,
+                },
+            }
+        ).encode("utf-8"),
+    ]
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -115,6 +151,21 @@ def _make_grok_adapter(**agent_cli_overrides: object) -> AgentCliAdapter:
         name="agent-grok",
         kind="agent_cli",
         model="grok-4.5",
+        paid=True,
+        capabilities=Capabilities(streaming=False),
+        agent_cli=AgentCliConfig(**acfg),  # type: ignore[arg-type]
+    )
+    return AgentCliAdapter(provider)
+
+
+def _make_codex_adapter(**agent_cli_overrides: object) -> AgentCliAdapter:
+    """Build an AgentCliAdapter with a codex sub-config + overrides."""
+    acfg: dict[str, object] = {"agent": "codex"}
+    acfg.update(agent_cli_overrides)
+    provider = ProviderConfig(
+        name="agent-codex",
+        kind="agent_cli",
+        model="gpt-5.5",
         paid=True,
         capabilities=Capabilities(streaming=False),
         agent_cli=AgentCliConfig(**acfg),  # type: ignore[arg-type]
@@ -331,6 +382,79 @@ def test_grok_argv_no_memory_and_no_prompt_in_argv() -> None:
 
 
 # ---------------------------------------------------------------------------
+# T1 (codex) — argv construction
+# ---------------------------------------------------------------------------
+
+
+def test_codex_argv_read_only_default_full_snapshot() -> None:
+    adapter = _make_codex_adapter(workdir="/tmp/wd")
+    argv = adapter._build_codex_argv("/tmp/wd")
+    assert argv == [
+        "codex",
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "-m",
+        "gpt-5.5",
+        "-C",
+        "/tmp/wd",
+        "-s",
+        "read-only",
+        "-",
+    ]
+
+
+def test_codex_argv_edit_maps_workspace_write() -> None:
+    adapter = _make_codex_adapter(sandbox_mode="edit", allow_file_writes=True)
+    argv = adapter._build_codex_argv("/w")
+    assert argv[argv.index("-s") + 1] == "workspace-write"
+
+
+def test_codex_argv_full_auto_maps_workspace_write() -> None:
+    # exec has no approval flag in 0.144.1, so full_auto collapses onto the
+    # same workspace-write value as edit.
+    adapter = _make_codex_adapter(sandbox_mode="full_auto", allow_file_writes=True)
+    argv = adapter._build_codex_argv("/w")
+    assert argv[argv.index("-s") + 1] == "workspace-write"
+    assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+
+
+def test_codex_argv_read_only_clamp_when_writes_disabled() -> None:
+    adapter = _make_codex_adapter(sandbox_mode="edit", allow_file_writes=False)
+    argv = adapter._build_codex_argv("/w")
+    assert argv[argv.index("-s") + 1] == "read-only"
+
+
+def test_codex_argv_omits_max_turns_even_when_set() -> None:
+    # codex has no --max-turns equivalent; the flag must never appear, even
+    # when the config sets max_turns explicitly.
+    adapter = _make_codex_adapter(max_turns=5)
+    argv = adapter._build_codex_argv("/w")
+    assert "--max-turns" not in argv
+
+
+def test_codex_argv_model_override() -> None:
+    adapter = _make_codex_adapter(model="gpt-5.5-mini")
+    argv = adapter._build_codex_argv("/w")
+    assert argv[argv.index("-m") + 1] == "gpt-5.5-mini"
+
+
+def test_codex_argv_always_skips_git_check_and_ephemeral() -> None:
+    adapter = _make_codex_adapter()
+    argv = adapter._build_codex_argv("/w")
+    assert "--skip-git-repo-check" in argv
+    assert "--ephemeral" in argv
+
+
+def test_codex_argv_trailing_stdin_sentinel_and_no_prompt() -> None:
+    adapter = _make_codex_adapter()
+    argv = adapter._build_codex_argv("/w")
+    assert argv[-1] == "-"
+    assert all("hi there" not in arg for arg in argv)
+
+
+# ---------------------------------------------------------------------------
 # T7 — child-env isolation
 # ---------------------------------------------------------------------------
 
@@ -396,6 +520,17 @@ def test_env_grok_api_key_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     env = adapter._build_child_env()
     assert env["GROK_CODE_XAI_API_KEY"] == "xai-tok-123"
     assert "XAI_API_KEY" not in env
+
+
+def test_env_codex_api_key_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CODEX_API_KEY (codex's exec-only CI key env) is forwarded only when
+    allowlisted; ChatGPT-plan OAuth under ~/.codex rides on HOME."""
+    monkeypatch.setenv("CODEX_API_KEY", "codex-tok-123")
+    monkeypatch.setenv("OPENAI_API_KEY", "wrong-var-should-not-leak")
+    adapter = _make_codex_adapter(passthrough_env=["CODEX_API_KEY"])
+    env = adapter._build_child_env()
+    assert env["CODEX_API_KEY"] == "codex-tok-123"
+    assert "OPENAI_API_KEY" not in env
 
 
 def test_env_depth_incremented(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -519,6 +654,144 @@ def test_grok_parse_thought_field_ignored() -> None:
 
 
 # ---------------------------------------------------------------------------
+# T2 (codex) — codex JSONL parsing
+# ---------------------------------------------------------------------------
+
+
+def test_codex_parse_success() -> None:
+    adapter = _make_codex_adapter()
+    text, usage, meta = adapter._parse_codex(CODEX_JSONL, b"")
+    assert text == "2"
+    # cached_input_tokens (9984) is a SUBSET of input_tokens (13810), not
+    # additive — prompt_tokens stays 13810, NOT 13810 + 9984.
+    assert usage["prompt_tokens"] == 13810
+    assert usage["completion_tokens"] == 5
+    assert usage["total_tokens"] == 13815
+    assert usage["prompt_tokens_details"]["cached_tokens"] == 9984
+    # reasoning_output_tokens was 0 → no completion_tokens_details emitted.
+    assert "completion_tokens_details" not in usage
+    assert meta["coderouter_session_id"] == "019f4e74-08fd-77b2-9cc6-9afa744df130"
+
+
+def test_codex_parse_reasoning_tokens_surfaced_when_nonzero() -> None:
+    adapter = _make_codex_adapter()
+    lines = [
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "ok"}}),
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 10,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 20,
+                    "reasoning_output_tokens": 7,
+                },
+            }
+        ),
+    ]
+    payload = "\n".join(lines).encode("utf-8")
+    _text, usage, _meta = adapter._parse_codex(payload, b"")
+    assert usage["completion_tokens_details"]["reasoning_tokens"] == 7
+    assert "prompt_tokens_details" not in usage
+
+
+def test_codex_parse_multiple_turn_completed_summed() -> None:
+    adapter = _make_codex_adapter()
+    lines = [
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "x"}}),
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 10, "output_tokens": 1, "cached_input_tokens": 2},
+            }
+        ),
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 20, "output_tokens": 3, "cached_input_tokens": 4},
+            }
+        ),
+    ]
+    payload = "\n".join(lines).encode("utf-8")
+    _text, usage, _meta = adapter._parse_codex(payload, b"")
+    assert usage["prompt_tokens"] == 30
+    assert usage["completion_tokens"] == 4
+    assert usage["prompt_tokens_details"]["cached_tokens"] == 6
+
+
+def test_codex_parse_garbage_lines_skipped_answer_still_parsed() -> None:
+    adapter = _make_codex_adapter()
+    lines = [
+        "not json at all {",
+        json.dumps(["also", "not", "a", "dict"]),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "ok"}}),
+        "",
+        "   ",
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+    ]
+    payload = "\n".join(lines).encode("utf-8")
+    text, usage, _meta = adapter._parse_codex(payload, b"")
+    assert text == "ok"
+    assert usage["prompt_tokens"] == 1
+
+
+def test_codex_parse_last_agent_message_wins() -> None:
+    adapter = _make_codex_adapter()
+    lines = [
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "first"}}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "last"}}),
+    ]
+    payload = "\n".join(lines).encode("utf-8")
+    text, _usage, _meta = adapter._parse_codex(payload, b"")
+    assert text == "last"
+
+
+def test_codex_parse_error_event_without_agent_message_raises_retryable() -> None:
+    adapter = _make_codex_adapter()
+    payload = json.dumps({"type": "error", "message": "boom"}).encode("utf-8")
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_codex(payload, b"")
+    assert info.value.retryable is True
+    assert "boom" in str(info.value) or "error" in str(info.value)
+
+
+def test_codex_parse_turn_failed_without_agent_message_raises_retryable() -> None:
+    adapter = _make_codex_adapter()
+    payload = json.dumps({"type": "turn.failed", "reason": "context_overflow"}).encode("utf-8")
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_codex(payload, b"")
+    assert info.value.retryable is True
+
+
+def test_codex_parse_error_after_valid_agent_message_answer_wins() -> None:
+    # A completed answer beats a trailing error event.
+    adapter = _make_codex_adapter()
+    lines = [
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}),
+        json.dumps({"type": "error", "message": "late failure"}),
+    ]
+    payload = "\n".join(lines).encode("utf-8")
+    text, _usage, _meta = adapter._parse_codex(payload, b"")
+    assert text == "done"
+
+
+def test_codex_parse_no_agent_message_raises_retryable() -> None:
+    adapter = _make_codex_adapter()
+    payload = json.dumps({"type": "turn.started"}).encode("utf-8")
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_codex(payload, b"")
+    assert info.value.retryable is True
+    assert "no agent_message" in str(info.value)
+
+
+def test_codex_parse_empty_stdout_raises_retryable() -> None:
+    adapter = _make_codex_adapter()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_codex(b"   \n", b"")
+    assert info.value.retryable is True
+
+
+# ---------------------------------------------------------------------------
 # T3 — generate() with a stubbed subprocess
 # ---------------------------------------------------------------------------
 
@@ -609,6 +882,44 @@ async def test_grok_generate_nonzero_exit_cleans_prompt_file(
     path = argv[argv.index("--prompt-file") + 1]
     assert not os.path.exists(path)
     assert list(tmp_path.glob(".coderouter-prompt-*")) == []
+
+
+# ---------------------------------------------------------------------------
+# T3 (codex) — generate() with a stubbed subprocess (stdin prompt delivery)
+# ---------------------------------------------------------------------------
+
+
+async def test_codex_generate_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    proc = _FakeProc(stdout=CODEX_JSONL, returncode=0)
+    captured = _patch_exec(monkeypatch, proc)
+    adapter = _make_codex_adapter(workdir=str(tmp_path))
+
+    resp = await adapter.generate(_request())
+
+    assert resp.choices[0]["message"]["content"] == "2"
+    assert resp.coderouter_provider == "agent-codex"
+    assert resp.model == "gpt-5.5"
+    assert resp.coderouter_session_id == "019f4e74-08fd-77b2-9cc6-9afa744df130"
+    # Prompt was fed on stdin, not argv — codex is a stdin-delivery agent
+    # like claude, not a --prompt-file agent like grok.
+    assert proc.stdin_received is not None
+    assert b"hi there" in proc.stdin_received
+    argv = captured[0]
+    assert all("hi there" not in arg for arg in argv)
+    assert "--prompt-file" not in argv
+    # No private prompt file was ever created in the workdir.
+    assert list(tmp_path.glob(".coderouter-prompt-*")) == []
+
+
+async def test_codex_generate_nonzero_exit_is_retryable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    proc = _FakeProc(stdout=b"", stderr=b"not inside a trusted directory", returncode=1)
+    _patch_exec(monkeypatch, proc)
+    adapter = _make_codex_adapter(workdir=str(tmp_path))
+    with pytest.raises(AdapterError) as info:
+        await adapter.generate(_request())
+    assert info.value.retryable is True
 
 
 # ---------------------------------------------------------------------------
@@ -704,17 +1015,17 @@ async def test_healthcheck_present_binary(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_unsupported_agent_raises_non_retryable() -> None:
     provider = ProviderConfig(
-        name="agent-codex",
+        name="agent-gemini",
         kind="agent_cli",
-        model="gpt-5.5",
+        model="gemini-pro",
         paid=True,
-        agent_cli=AgentCliConfig(agent="codex"),
+        agent_cli=AgentCliConfig(agent="gemini"),
     )
     with pytest.raises(AdapterError) as info:
         AgentCliAdapter(provider)
     assert info.value.retryable is False
     assert "not implemented yet" in str(info.value)
-    assert "implemented: claude, grok" in str(info.value)
+    assert "implemented: claude, codex, grok" in str(info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -866,3 +1177,62 @@ def test_e2e_grok_chat_completions(grok_e2e_client: TestClient) -> None:
     assert body["coderouter_provider"] == "agent-grok"
     # grok emits no token counts — usage is reported as zeros end-to-end.
     assert body["usage"]["total_tokens"] == 0
+
+
+# ---------------------------------------------------------------------------
+# T4 (codex) — TestClient E2E through /v1/chat/completions
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def codex_e2e_config(tmp_path: Path) -> CodeRouterConfig:
+    return CodeRouterConfig(
+        allow_paid=True,
+        default_profile="codex-agent",
+        providers=[
+            ProviderConfig(
+                name="agent-codex",
+                kind="agent_cli",
+                model="gpt-5.5",
+                paid=True,
+                capabilities=Capabilities(streaming=False),
+                agent_cli=AgentCliConfig(agent="codex", workdir=str(tmp_path)),
+            ),
+        ],
+        profiles=[FallbackChain(name="codex-agent", providers=["agent-codex"])],
+    )
+
+
+@pytest.fixture
+def codex_e2e_client(
+    codex_e2e_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    proc = _FakeProc(stdout=CODEX_JSONL, returncode=0)
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _FakeProc:
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("coderouter.ingress.app.load_config", lambda path=None: codex_e2e_config)
+    uninstall_collector()
+    app = create_app()
+    try:
+        with TestClient(app) as tc:
+            yield tc
+    finally:
+        uninstall_collector()
+
+
+def test_e2e_codex_chat_completions(codex_e2e_client: TestClient) -> None:
+    resp = codex_e2e_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-5.5", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"X-CodeRouter-Profile": "codex-agent"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["choices"][0]["message"]["content"] == "2"
+    assert body["coderouter_provider"] == "agent-codex"
+    assert body["usage"]["prompt_tokens"] == 13810
+    assert body["usage"]["total_tokens"] == 13815
+    assert body["coderouter_session_id"] == "019f4e74-08fd-77b2-9cc6-9afa744df130"

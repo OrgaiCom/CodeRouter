@@ -2,7 +2,7 @@
 
 > 対象バージョン: CodeRouter v2.x 系 / Phase 1（in-core adapter）
 > 関連: [`docs/future.md`](../future.md) §1.2・§5、[`docs/backends/launcher.md`](../backends/launcher.md)
-> ステータス: 設計確定 / Phase 1a (claude)・Phase 1d (grok) 実装済み
+> ステータス: 設計確定 / Phase 1a (claude)・Phase 1b (codex)・Phase 1d (grok) 実装済み
 
 本設計書は、OpenAI Codex CLI・Google Gemini CLI・xAI Grok・Anthropic Claude Code CLI の4つの外部コーディングエージェントを、CodeRouter の新しいアダプタ種別 `kind="agent_cli"` として本体に組み込む方式を定義するものである。CLI のフラグ・認証仕様はすべて調査レポート（`RESEARCH-cli.md`、2026-07 時点）を、コード上の拡張点はすべてコード解析報告書（`ANALYSIS-code.md`）を典拠とする。ユーザー確定事項（`DECISIONS.md`）は拘束条件であり、本書はそれを厳密に実装する。
 
@@ -621,3 +621,22 @@ Phase 1d（grok）実装時に、設計時点の調査（`RESEARCH-cli.md`、202
 | メモリ | （記載なし） | grok はクロスセッションメモリを持つ。ステートレス性維持のためアダプタは **`--no-memory` を常時付与** |
 
 あわせて、§5.2.1 の検証ルール #1（`agent=="grok"` かつ `passthrough_env` に `XAI_API_KEY` が無い場合の警告）は前提の消滅により**廃止**した（実装には含まれない）。§9.2 の「API 直（openai_compat）推奨」は引き続き有効な代替経路である。
+
+### 11.4 Phase 1b 実CLI検証結果（codex-cli 0.144.1, 2026-07-11）
+
+Phase 1b（codex）実装時に、設計時点の調査（`RESEARCH-cli.md`、2026-07 時点）と実 CLI（codex-cli 0.144.1、作者の Mac、2026-07-11）との差分を検証した。本設計書の本文（§3.1・§5.1.5・§5.1.6・§5.2.1・§5.3.3・§5.4・§9・§11.1）のうち codex に関する記述は以下の検証結果で読み替えること（歴史的記録として本文は改変しない）。
+
+| 項目 | 設計時の想定 | 実 CLI での検証結果（0.144.1） |
+|---|---|---|
+| 承認フラグ（edit/full_auto） | `-a/--ask-for-approval` が存在し、`edit` → `-s workspace-write -a on-request`、`full_auto` → `-s workspace-write -a never` とマッピング（§5.4） | **`-a`/`--ask-for-approval` は `exec` サブコマンドに存在しない**（0.144.1 の `exec --help` に無し。非対話実行なので承認プロンプト自体が無い）。設計の `edit`/`full_auto` マッピングは obsolete — 両方とも `-s workspace-write` のみで、`edit` と `full_auto` は区別されない |
+| `--full-auto` | 非推奨のため使わないと注記（§5.1.5 補足） | **確認済み・不使用のまま**。`--dangerously-bypass-approvals-and-sandbox` も同様に使わない |
+| `--skip-git-repo-check` | git 外ディレクトリで動かす場合に付与、と注記（§5.1.5 補足） | **実機で必須と確認**。CodeRouter の隔離 workdir は git リポジトリではないため、無いと exit 1 + stderr `Not inside a trusted directory and --skip-git-repo-check was not specified.` で即座に失敗する（実測）。アダプタは常時付与する |
+| `--ephemeral` | セッション不保存の位置付けで言及（§5.1.5 補足） | **採用を確定**。grok の `--no-memory` と同じ理由（ステートレス思想）で常時付与する |
+| プロンプト投入 | 「引数末尾 or `-`（stdin）」（§5.1.5 表） | **stdin 方式を確定採用**。PROMPT 省略時（または明示 `-`）は stdin から読む。argv 末尾に明示の `-` を置く。claude と同じ経路であり、grok のような `--prompt-file` は不要 |
+| JSON 出力スキーマ | JSONL・最終回答は最後の `item.completed`（`item.type=="agent_message"`）の `item.text`、usage は `turn.completed.usage` の `input_tokens`/`cached_input_tokens`/`output_tokens`（§5.1.6） | **実機で確認・スキーマに追加あり**: `turn.completed.usage` に**新フィールド `reasoning_output_tokens`**が含まれる（設計時点では未記載）。0 より大きい場合は `completion_tokens_details.reasoning_tokens` として保持する（防御的）。`cached_input_tokens` は `input_tokens` の部分集合であり加算しない（実測: input 13810 ⊃ cached 9984） |
+| `--max-turns` / `--timeout` | 「（フラグ無し→外部 timeout で囲む）」と設計時点から想定済み（§5.1.5 表、§10 リスク表） | **設計どおり確認**。`--max-turns` も `--timeout` も存在せず、`AgentCliConfig.max_turns` は codex では無視される。`exec_timeout_s` + PGID kill のみが時間上限 |
+| 認証 | ChatGPT プラン OAuth or API key、約8日失効に既に言及（§5.3.3・§11.1） | **概ね設計どおりで確認・詳細確定**。`~/.codex/auth.json`（または OS キーチェーン）、約8日で stale・使用時自動リフレッシュ。CI 用に**`CODEX_API_KEY`（exec 専用）**および `OPENAI_API_KEY`（一般）の両方を確認。`CODEX_HOME` で config/資格情報ディレクトリを上書き可能（設計時点で未記載の追加事項） |
+| モデル | `gpt-5.5`（§3.1 の providers.yaml 例） | **`gpt-5.5` は現行フロンティアモデルとして引き続き有効**。既定モデルは環境/プラン依存のため `providers.yaml` での明示を推奨する方針も変更なし |
+| 成熟度 / バージョン churn | pre-1.0・要 pin（§10 リスク表、§11.1） | **確認済み**。CLI は pre-1.0 でほぼ毎日リリース。`--json` の別名は依然 `--experimental-json` のままでスキーマ未凍結 → バージョン pin 推奨 + 防御的パース必須の方針を維持 |
+
+あわせて、§5.1.5 表の codex 行の「サンドボックス/承認」列は `-s read-only` のみが確定であり、`edit`/`full_auto` は上表のとおり `-s workspace-write` に統一されたことを付記する（本文は歴史的記録として改変しない）。
