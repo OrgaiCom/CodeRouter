@@ -63,6 +63,7 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 - **free-tier-guide** — NVIDIA NIM × OpenRouter Free でコストゼロ運用 / Zero-cost operation · [日本語](guides/free-tier-guide.md) · [English](guides/free-tier-guide.en.md)
 - **troubleshooting** — つまずいたときの解決集 / Fixing problems · [日本語](guides/troubleshooting.md) · [English](guides/troubleshooting.en.md)
 - **security** — シークレット管理とセキュリティ方針 / Secrets handling & security posture · [日本語](guides/security.md) · [English](guides/security.en.md)
+- **subagent-routing** — Claude Code のサブエージェントをモデルごとに振り分ける / Route Claude Code sub-agents to different models · [日本語](guides/subagent-routing.md) · [English](guides/subagent-routing.en.md)
 
 ## 3. ローカル LLM バックエンド / Local LLM backends — `backends/`
 

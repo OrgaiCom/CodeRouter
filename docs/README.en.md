@@ -60,6 +60,7 @@ Day-to-day usage.
 - **free-tier-guide** — Zero-cost operation with NVIDIA NIM × OpenRouter Free · [日本語](guides/free-tier-guide.md) · [English](guides/free-tier-guide.en.md)
 - **troubleshooting** — Fixing problems · [日本語](guides/troubleshooting.md) · [English](guides/troubleshooting.en.md)
 - **security** — Secrets handling & security posture · [日本語](guides/security.md) · [English](guides/security.en.md)
+- **subagent-routing** — Route Claude Code sub-agents to different models · [日本語](guides/subagent-routing.md) · [English](guides/subagent-routing.en.md)
 
 ## 3. Local LLM backends — `backends/`
 
