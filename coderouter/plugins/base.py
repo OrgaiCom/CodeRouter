@@ -1,11 +1,13 @@
-"""Plugin SDK Protocol contracts (v2.3.0).
+"""Plugin SDK Protocol contracts (v2.3.0, Adapter wired in v2.8.0).
 
-Six extension points are defined here. Two are wired into the engine
-in v2.3.0 (:class:`InputFilter`, :class:`Observer`); four are
-Protocol-only (:class:`Frontend`, :class:`Guard`, :class:`OutputFilter`,
-:class:`Adapter`) and will get engine integration when a real plugin
-drives the requirement — see ``docs/inside/plugin-architecture-draft.md``
-§3 for the full design rationale.
+Six extension points are defined here. Three are wired into the engine
+(:class:`InputFilter`, :class:`Observer` since v2.3.0; :class:`Adapter`
+since v2.8.0 — see ``docs/designs/agent-cli-plugin-extraction.md`` §2);
+three remain Protocol-only (:class:`Frontend`, :class:`Guard`,
+:class:`OutputFilter`) and will get engine integration when a real
+plugin drives the requirement — see
+``docs/inside/plugin-architecture-draft.md`` §3 for the full design
+rationale.
 
 Why declare contracts ahead of integration? It lets a plugin author
 build against the SDK *now* (and ship a working ``coderouter.frontend``
@@ -14,9 +16,11 @@ backward-incompatible Protocol revision later. ``runtime_checkable``
 is used so :func:`isinstance` checks work in the loader for clearer
 error messages.
 
-All hooks are async. Failures must NEVER block the engine response —
-the engine wraps every hook call in try/except and degrades gracefully
-(see ``coderouter/routing/fallback.py`` integration site).
+InputFilter / Observer are async and run repeatedly on the hot path;
+failures must NEVER block the engine response, so the engine wraps
+every hook call in try/except and degrades gracefully (see
+``coderouter/routing/fallback.py`` integration site). Adapter is
+different in shape — see its docstring below.
 """
 from __future__ import annotations
 
@@ -25,7 +29,8 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     # Avoid circular imports at runtime — Protocol typing only needs
     # these for documentation and static analysis.
-    from coderouter.config.schemas import CodeRouterConfig
+    from coderouter.adapters.base import BaseAdapter
+    from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
     from coderouter.translation.anthropic import (
         AnthropicRequest,
         AnthropicResponse,
@@ -94,6 +99,44 @@ class Observer(Protocol):
 
 
 # ====================================================================
+# Adapter hook (engine integration in v2.8.0)
+# ====================================================================
+
+
+@runtime_checkable
+class Adapter(Protocol):
+    """New ``kind`` value in providers.yaml, backed by a plugin.
+
+    The plugin declares the ``kind`` string it serves and a factory
+    that turns a matching :class:`~coderouter.config.schemas.ProviderConfig`
+    into a :class:`~coderouter.adapters.base.BaseAdapter` instance —
+    the same surface :func:`coderouter.adapters.registry.build_adapter`
+    uses for in-core kinds, so the engine treats plugin adapters
+    indistinguishably from built-ins once registered. See
+    ``docs/designs/agent-cli-plugin-extraction.md`` §2 for the design
+    rationale.
+
+    Shape-wise this hook differs from :class:`InputFilter` /
+    :class:`Observer`: those are instances the engine calls repeatedly
+    on the hot path, so they're async. An adapter provider is instead
+    a **factory** consulted once per provider at engine startup (and
+    again if the provider is re-registered at runtime) — construction
+    is I/O-free, so :meth:`build` is synchronous, matching
+    ``build_adapter``.
+    """
+
+    name: str
+    # The ``kind`` value this plugin serves in providers.yaml. Distinct
+    # from ``name`` (the plugin's own identifier, used in
+    # ``plugins.enabled`` / logs) — kept 1:1 for now; a future
+    # ``kinds: tuple[str, ...]`` can generalize this if a real plugin
+    # needs to serve more than one kind.
+    kind: str
+
+    def build(self, config: ProviderConfig) -> BaseAdapter: ...
+
+
+# ====================================================================
 # Future hooks (Protocol-only, engine integration in v2.4+)
 # ====================================================================
 
@@ -151,18 +194,3 @@ class OutputFilter(Protocol):
     async def transform(
         self, response: AnthropicResponse
     ) -> AnthropicResponse: ...
-
-
-@runtime_checkable
-class Adapter(Protocol):
-    """New ``kind`` value in providers.yaml (e.g. ``bedrock-native``).
-
-    Plugins implement the same async surface as
-    :class:`coderouter.adapters.base.BaseAdapter` so the engine can
-    treat them indistinguishably from built-in adapters once the
-    loader registers the new ``kind`` mapping.
-
-    Not yet integrated — Protocol contract only.
-    """
-
-    name: str

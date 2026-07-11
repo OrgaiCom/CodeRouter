@@ -20,8 +20,8 @@ from typing import Any
 class PluginRegistry:
     """In-memory registry of loaded plugin instances grouped by hook kind.
 
-    Use the typed ``input_filters`` / ``observers`` properties on the
-    hot path; plugin code should not iterate ``_by_group`` directly.
+    Use the typed ``input_filters`` / ``observers`` / ``adapters``
+    properties; plugin code should not iterate ``_by_group`` directly.
     """
 
     def __init__(self) -> None:
@@ -64,6 +64,17 @@ class PluginRegistry:
     def observers(self) -> list[Any]:
         """Plugins registered as ``coderouter.observer``."""
         return list(self._by_group.get("observer", ()))
+
+    @property
+    def adapters(self) -> list[Any]:
+        """Plugins registered as ``coderouter.adapter`` (kind factories).
+
+        Unlike ``input_filters`` / ``observers``, these aren't called
+        repeatedly on the hot path — :func:`coderouter.adapters.registry.build_adapter`
+        consults this list once per provider to resolve a plugin-served
+        ``kind`` (v2.8.0, docs/designs/agent-cli-plugin-extraction.md §2.4).
+        """
+        return list(self._by_group.get("adapter", ()))
 
     def is_empty(self) -> bool:
         """True iff no plugin instance has been registered, in any group.

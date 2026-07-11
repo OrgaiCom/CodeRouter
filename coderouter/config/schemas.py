@@ -342,13 +342,23 @@ class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., description="Unique identifier used in profiles.yaml")
-    kind: Literal["openai_compat", "anthropic", "agent_cli"] = Field(
+    # v2.8.0: widened from Literal["openai_compat", "anthropic", "agent_cli"]
+    # to str so a provider can name a kind served by an adapter plugin
+    # (docs/designs/agent-cli-plugin-extraction.md §3). Config loading
+    # happens before plugin discovery (coderouter/ingress/app.py
+    # ``load_config`` then ``discover_and_load``), so pydantic can't know
+    # the full set of valid kinds at this point — an unknown kind still
+    # fails fast, just one step later, in ``build_adapter`` when the
+    # engine builds its adapter cache at startup.
+    kind: str = Field(
         default="openai_compat",
         description=(
             "Adapter type. 'openai_compat' covers llama.cpp / Ollama / "
             "OpenRouter / LM Studio / Together / Groq. 'anthropic' is the "
             "native Anthropic Messages API passthrough (v0.3.x). 'agent_cli' "
-            "invokes an external coding-agent CLI one-shot (see AgentCliConfig)."
+            "invokes an external coding-agent CLI one-shot (see AgentCliConfig). "
+            "Other values must be served by an adapter plugin listed in "
+            "plugins.enabled."
         ),
     )
     # base_url is required for HTTP-backed adapters (openai_compat / anthropic)

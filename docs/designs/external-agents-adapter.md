@@ -552,6 +552,10 @@ Grok の公式 API は OpenAI 互換であり、**既存 `kind="openai_compat"` 
 
 現状 Adapter Protocol は実体が空（`name: str` のみ、`plugins/base.py` L168-169、`ANALYSIS-code.md` §1）でデッドエンドである。将来 core が Adapter hook を配線したら、in-core の `AgentCliAdapter` を**ほぼそのまま** `coderouter-plugin-agents` へ移設できる（前方互換、`ANALYSIS-code.md` §3）。ロードは entry-point 方式（`group="coderouter.adapters"` 等）+ `plugins.enabled` の二段ゲート（`PluginsConfig`、`schemas.py` L1247）を経る。
 
+> **ステータス（2026-07-11 追記）**: 作者の方向性指示（「作業ごとにモデルを割当・サブエージェントを利用する」、`_article/direction-brief-2026-07-11.md`）を受けた方向性確定により、Phase 2 の優先度が上昇した（`docs/inside/future.md` §2.5 参照）。あわせて、§11.3〜§11.5 に記録した実 CLI 検証（grok の `--sandbox`/認証仕様変更、codex の承認フラグ obsolete 化、gemini 個人向け終了→antigravity 移行）が示す **CLI churn（バージョン間の破壊的変更）に Core を追従させ続けるコストを Core のリリース周期から切り離す**動機も加わった。移行トリガは変わらず: (i) agent_cli 利用比重の恒常化 (ii) CLI churn 追従コストが Core リリースを圧迫 (iii) コミュニティ要望。着手そのものは未着手（発火条件待ち）。
+>
+> 訂正（2026-07-11）: entry-point group 名は loader 実装（`plugins/loader.py` L94）に合わせ `coderouter.adapter`（単数形）が正。詳細は [`agent-cli-plugin-extraction.md`](./agent-cli-plugin-extraction.md) を参照。
+
 ---
 
 ## 10. リスクと未解決事項

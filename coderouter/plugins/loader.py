@@ -38,10 +38,14 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Active hook groups in v2.3.0. The engine wires these into the
-# request flow; plugins targeting them will see their methods called
-# at runtime.
-PLUGIN_GROUPS_V2_3: tuple[str, ...] = ("input_filter", "observer")
+# Active hook groups. The engine wires these into the request flow;
+# plugins targeting them will see their methods called at runtime.
+# ``input_filter`` / ``observer`` since v2.3.0; ``adapter`` joined in
+# v2.8.0 (docs/designs/agent-cli-plugin-extraction.md §2.4) — its
+# factories are consulted from ``build_adapter``, not iterated on the
+# hot path like the other two, but it goes through the same
+# discover-then-enable-gate machinery below.
+PLUGIN_GROUPS_V2_3: tuple[str, ...] = ("input_filter", "observer", "adapter")
 
 # Hook groups whose Protocol contracts are stable but whose engine
 # integration is deferred. Listing them here means a plugin author
@@ -51,7 +55,6 @@ PLUGIN_GROUPS_FUTURE: tuple[str, ...] = (
     "frontend",
     "guard",
     "output_filter",
-    "adapter",
 )
 
 
