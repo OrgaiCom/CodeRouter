@@ -11,7 +11,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.8.0] — 2026-07-11 (Plugin SDK: Adapter hook wired — Phase 2a of the agent_cli extraction)
 
-Opens the Plugin SDK's Adapter surface: the previously dead-end `Adapter`
+**PR #71**. Opens the Plugin SDK's Adapter surface: the previously dead-end `Adapter`
 Protocol (name-only) is now a real engine-integrated hook, so an external
 plugin package can provide new `kind` values for providers.yaml without
 touching Core. This is Phase 2a of the agent_cli plugin-extraction design

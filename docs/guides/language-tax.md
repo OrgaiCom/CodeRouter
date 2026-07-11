@@ -31,7 +31,7 @@ English version: [`language-tax.en.md`](./language-tax.en.md)
 
 ## 2. 実測データ
 
-実在の本番トークナイザで計測した結果です（再現スクリプト: `_OUTPUTS/CodeRouter-language-tax/measure/`）。
+実在の本番トークナイザで計測した結果です（再現スクリプト: `_OUTPUTS/01-機能実装/language-tax/measure/`）。
 
 ### 経済的な税 — 同じ意味で JA vs EN（対訳5ペアの平均）
 

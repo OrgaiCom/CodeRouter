@@ -31,7 +31,7 @@ Two distinct axes:
 
 ## 2. Measured data
 
-Measured with real production tokenizers (reproduce: `_OUTPUTS/CodeRouter-language-tax/measure/`).
+Measured with real production tokenizers (reproduce: `_OUTPUTS/01-機能実装/language-tax/measure/`).
 
 ### Economic tax — same meaning, JA vs EN (avg of 5 translation pairs)
 
