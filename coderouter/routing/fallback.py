@@ -1104,9 +1104,13 @@ class FallbackEngine:
         # via ``add_done_callback(_observer_tasks.discard)`` in
         # :meth:`_fanout_observers`.
         self._observer_tasks: set[asyncio.Task[None]] = set()
-        # Cache adapters so we don't re-instantiate per request
+        # Cache adapters so we don't re-instantiate per request. v2.8.0:
+        # pass the plugin registry through so a provider whose ``kind``
+        # is served by an enabled adapter plugin resolves via
+        # ``build_adapter``'s plugin lookup (agent-cli-plugin-extraction
+        # §3.5) instead of raising "Unknown adapter kind".
         self._adapters: dict[str, BaseAdapter] = {
-            p.name: build_adapter(p) for p in config.providers
+            p.name: build_adapter(p, self._plugin_registry) for p in config.providers
         }
         # v1.9-C: per-process adaptive routing adjuster (rolling-window
         # latency + error-rate observations, debounced rank changes).
@@ -1217,7 +1221,7 @@ class FallbackEngine:
                 break
         if not replaced:
             self.config.providers.append(provider)
-        self._adapters[provider.name] = build_adapter(provider)
+        self._adapters[provider.name] = build_adapter(provider, self._plugin_registry)
 
         try:
             chain = self.config.profile_by_name(profile_name)
