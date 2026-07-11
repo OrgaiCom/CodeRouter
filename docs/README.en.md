@@ -68,7 +68,7 @@ Installing, launching, and connecting local inference backends.
 - **install-backends** — Installing the three backends (llama.cpp / vLLM / MLX) · [日本語](backends/install-backends.md) · [English](backends/install-backends.en.md)
 - **launcher-quickstart** — Install a backend and launch, the shortest path · [日本語](backends/launcher-quickstart.md)
 - **launcher** — Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md)
-- **external-agents** — External coding-agent CLI (agent_cli, v2.7.7, claude only) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
+- **external-agents** — External coding-agent CLI (agent_cli, 4 CLIs: claude/codex/grok/antigravity; requires `coderouter-plugin-agents` since v2.9.0) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
 - **llamacpp-direct** — Connect llama.cpp directly · [日本語](backends/llamacpp-direct.md) · [English](backends/llamacpp-direct.en.md)
 - **lmstudio-direct** — Connect LM Studio directly · [日本語](backends/lmstudio-direct.md) · [English](backends/lmstudio-direct.en.md)
 - **hf-ollama-models** — Use HF models via Ollama · [日本語](backends/hf-ollama-models.md)
@@ -100,8 +100,9 @@ CodeRouter's **Plugin SDK** (since v2.3.0) loads out-of-tree plugins *opt-in*: a
 
 | Plugin | What it does | Install | Repo |
 |---|---|---|---|
-| **compress** | Compresses tool output (JSON / logs) before it reaches the LLM to cut tokens; originals kept locally and reversible (CCR). `cache-align` also aligns Anthropic prompt caching. | `pip install coderouter-plugin-compress` | [coderouter-plugin-compress](https://github.com/zephel01/coderouter-plugin-compress) |
+| **compress** | Compresses tool output (JSON / logs) before it reaches the LLM to cut tokens; originals kept locally and reversible (CCR). `cache-align` also aligns Anthropic prompt caching. | Not yet on PyPI — install from git+https:<br>`uv pip install "coderouter-plugin-compress[accuracy] @ git+https://github.com/zephel01/coderouter-plugin-compress"` | [coderouter-plugin-compress](https://github.com/zephel01/coderouter-plugin-compress) |
 | **memory** | Extracts key facts from responses into `facts.jsonl` and auto-injects them into the next session's system prompt — solving "explain it every time" at the wire layer. | `pip install coderouter-plugin-memory` | [coderouter-plugin-memory](https://github.com/zephel01/coderouter-plugin-memory) |
+| **agents** | Registers external coding-agent CLIs (claude / codex / grok / antigravity) as `kind: agent_cli` providers. The in-core implementation was removed in v2.9.0, making this plugin required. See [backends/external-agents](backends/external-agents.en.md). | Not yet on PyPI — install from git+https:<br>`uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"` | [coderouter-plugin-agents](https://github.com/zephel01/coderouter-plugin-agents) |
 
 Enable by adding to `providers.yaml`; a `plugin-loaded` line in the startup log confirms activation.
 
@@ -112,6 +113,7 @@ plugins:
     - compress-stats    # report compression ratio in coderouter stats
     - cache-align       # align prompt-cache breakpoints
     - memory            # cross-session memory
+    - agents            # external agent CLIs (agent_cli)
   config:
     compress:
       mode: safe        # off | safe | aggressive
@@ -120,8 +122,10 @@ plugins:
       consolidate_model: qwen3:1.7b
 ```
 
+When using an `agent_cli` provider, enabling `agents` is not optional — it's **required** (without it, `coderouter serve` fails at startup). See [backends/external-agents](backends/external-agents.en.md) for details.
+
 See each plugin's repo README for full configuration.
 
 ---
 
-Last updated: 2026-06-24
+Last updated: 2026-07-11
