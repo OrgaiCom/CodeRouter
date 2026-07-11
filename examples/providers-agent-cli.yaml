@@ -1,28 +1,31 @@
 # ============================================================
 # CodeRouter providers.yaml — 外部コーディングエージェント CLI (agent_cli)
-# 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1a (claude)・Phase 1b (codex)・
-#              Phase 1d (grok) 実装済み
+# 【カテゴリ】 kind="agent_cli" アダプタ / Phase 1 完了 — claude (1a)・codex (1b)・
+#              antigravity (1c)・grok (1d) の4バックエンドすべて実装済み
 #
 # 出典: docs/designs/external-agents-adapter.md
 # 目的: Claude Code CLI (`claude -p --output-format json`)、Codex CLI、
-#       Grok CLI を CodeRouter の1プロバイダとして登録し、他のオーケストレータ
-#       (別の Claude Code / Cursor 等) から「1つのモデル」として透過的に
-#       呼び出せるようにする。
+#       Antigravity CLI (`agy`)、Grok CLI を CodeRouter の1プロバイダとして
+#       登録し、他のオーケストレータ (別の Claude Code / Cursor 等) から
+#       「1つのモデル」として透過的に呼び出せるようにする。
 #       CodeRouter はワンショット exec (プロンプト in → テキスト out) の
 #       1変換だけを担い、エージェントのマルチターン制御ループそのものは
 #       中で完結させる (future.md の「1リクエスト=1変換」思想を維持)。
 #
-# 実装スコープ (v2.7.9 時点):
-#   - agent: claude (Phase 1a)・codex (Phase 1b)・grok (Phase 1d) が実装済み。
-#     いずれもサブスクリプション OAuth を優先し (claude:
-#     `~/.claude/.credentials.json` または `claude setup-token`、codex:
-#     `~/.codex/auth.json`、grok: `~/.grok/auth.json`)、子プロセスには
-#     ANTHROPIC_API_KEY 等を含む親環境を継承させない
-#     (env allowlist、下記 passthrough_env 参照)。
-#   - agent: gemini のみ config スキーマ上は宣言できるが、
-#     アダプタ構築時に AdapterError ("not implemented yet" — 実装済み
-#     エージェントの列挙付き) で拒否される。末尾にコメントアウトした
-#     Phase 1c のプレビューブロック (未実装) を参照。
+# 実装スコープ (v2.7.10 時点 — Phase 1 完了):
+#   - agent: claude (Phase 1a)・codex (Phase 1b)・antigravity (Phase 1c)・
+#     grok (Phase 1d) の4つすべてが実装済み。いずれもサブスクリプション
+#     OAuth を優先し (claude: `~/.claude/.credentials.json` または
+#     `claude setup-token`、codex: `~/.codex/auth.json`、antigravity:
+#     OS キーリング + `~/.gemini/antigravity-cli/`、grok:
+#     `~/.grok/auth.json`)、子プロセスには ANTHROPIC_API_KEY 等を含む
+#     親環境を継承させない (env allowlist、下記 passthrough_env 参照)。
+#   - agent: gemini は config スキーマ上は宣言できるが、Google が
+#     2026年6月に個人アカウント向け Gemini CLI 提供を終了したため、
+#     アダプタ構築時に必ず専用メッセージ付きの AdapterError で拒否される:
+#       AdapterError: Google discontinued Gemini CLI for individual
+#       accounts (June 2026). Use agent='antigravity' instead.
+#     後継の antigravity ブロックを下記に用意してある(末尾の参考節も参照)。
 #   - 既定は read_only (書き込み不可)。書き込みを許可するには
 #     allow_file_writes: true と sandbox_mode: edit|full_auto を両方
 #     明示する必要がある (片方だけだと config load 時に ValueError)。
@@ -48,6 +51,12 @@
 #          -H 'Content-Type: application/json' \
 #          -H 'X-CodeRouter-Profile: codex' \
 #          -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
+#      下記の antigravity ブロックを有効化した場合の動作確認 (要 `agy` の
+#      初回ログイン済み):
+#        curl http://localhost:8088/v1/chat/completions \
+#          -H 'Content-Type: application/json' \
+#          -H 'X-CodeRouter-Profile: antigravity' \
+#          -d '{"model":"Gemini 3.5 Flash (Low)","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
 #      下記の grok ブロックを有効化した場合の動作確認 (要 `grok login` 済み):
 #        curl http://localhost:8088/v1/chat/completions \
 #          -H 'Content-Type: application/json' \
@@ -129,6 +138,69 @@ providers:
   #   - name: codex
   #     providers: [agent-codex]
 
+  # ---- Google Antigravity CLI (Phase 1c・実装済み — v2.7.10) ----
+  # 実装済みだが既定ではコメントアウトしてある: このファイルをそのまま
+  # コピーしても agy のインストールを要求しないようにするため。
+  # Antigravity CLI (コマンド名 `agy`。gemini-cli のフォークではない
+  # 別実装、agy 1.1.1 で検証) を導入し、初回 `agy` 実行でブラウザの
+  # Google アカウントログインを済ませてから有効化すること
+  # (`agy models` が一覧を返せば認証 OK)。
+  # 当初計画されていた agent: gemini は Google が2026年6月に個人
+  # アカウント向け提供を終了したため、後継の antigravity として
+  # Phase 1c を実装した。agent: gemini は config スキーマには残るが
+  # 実行すると専用メッセージ付きの AdapterError で拒否される
+  # (詳細はファイル冒頭のコメント、および docs/backends/external-agents.md
+  # を参照)。early-days プロダクトのためバージョン pin 推奨
+  # (command にフルパス指定可)。
+  #
+  # プロンプト投入: agy には stdin 経由のプロンプト受け取りも
+  #   --prompt-file 相当のフラグも無いため、プロンプトは argv の値
+  #   (`-p <prompt>`) として渡すほかない。Linux の MAX_ARG_STRLEN
+  #   (約128KiB) の上限と `ps` でのプロンプト可視性が既知の制限として
+  #   残る (claude/codex は stdin、grok は --prompt-file を使うため
+  #   この制限を受けない)。
+  # stdin 注意: agy に stdin をパイプすると応答がハングすることが
+  #   実機で確認されている。アダプタは stdin に何も書かず即クローズ
+  #   するため CodeRouter 経由では問題にならないが、agy を直接
+  #   スクリプトで叩く場合は stdin を空にする (</dev/null 等) こと。
+  # 出力: --output-format 系のフラグが無くプレーンテキストのみのため、
+  #   トークン usage・セッション ID は取得不能。usage は常にゼロ報告
+  #   (cost も ProviderConfig.cost に単価を設定しない限り 0 のまま)。
+  # max_turns: agy には対応する CLI フラグが無いため常に無視される
+  #   (codex と同様)。
+  # タイムアウト: agy は --print-timeout という CLI 側タイムアウトを
+  #   持つ唯一のエージェント。exec_timeout_s から生成し、外側の
+  #   asyncio.wait_for + プロセスグループ kill と合わせて二重防壁になる。
+  # モデル名: API ID ではなく表示名文字列 (`agy models` で一覧)。
+  #   Claude Opus 4.6 (Thinking) 等、Google 以外のモデルまで呼べる。
+  # 認証: Google アカウント OAuth (無料枠可)。資格情報は OS キーリング
+  #   優先 + ~/.gemini/antigravity-cli/ (credentials.enc / settings.json)。
+  #   HOME (macOS では USER も) 継承で headless 動作するため
+  #   passthrough_env: [] でよい。API キー経由の環境変数名は情報が
+  #   錯綜しており未確認 (UNCONFIRMED) — 断定しない。
+  #
+  # - name: agent-antigravity
+  #   kind: agent_cli
+  #   model: "Gemini 3.5 Flash (Low)"   # 表示名文字列。`agy models` で一覧確認
+  #   paid: false                        # Google アカウント OAuth 運用(無料枠含む) = 従量課金ゼロ
+  #   capabilities:
+  #     streaming: false
+  #     tools: false
+  #   agent_cli:
+  #     agent: antigravity
+  #     # command は省略可 (既定 "agy" — バイナリ名が製品名と異なる)
+  #     workdir: ~/.coderouter/agents/antigravity
+  #     exec_timeout_s: 600
+  #     allow_file_writes: false
+  #     sandbox_mode: read_only     # --mode plan にマップ
+  #     max_turns: 8                # antigravity では無視される (上記コメント参照)
+  #     passthrough_env: []         # OAuth は OS キーリング + ~/.gemini/antigravity-cli/ を
+  #                                  # HOME 継承で読むため空でよい。API キー env は UNCONFIRMED
+  #
+  # 有効化する場合は profiles にも次を追加する:
+  #   - name: antigravity
+  #     providers: [agent-antigravity]
+
   # ---- xAI Grok CLI (Phase 1d・実装済み — v2.7.8) ----
   # 実装済みだが既定ではコメントアウトしてある: このファイルをそのまま
   # コピーしても grok CLI のインストールを要求しないようにするため。
@@ -189,37 +261,27 @@ profiles:
 #       match: { model_pattern: "claude-agent.*" }
 
 # ============================================================
-# 以下はプレビュー (Phase 1c・未実装) — コメントアウト
+# 参考: agent: gemini は書けるが常に拒否される
 #
-# 下記の agent: gemini は config スキーマとしては
-# 有効 (providers.yaml として読み込める) だが、AgentCliAdapter が
-# claude / codex / grok 以外を拒否するため、実際にリクエストを投げると
-# 起動時におおよそ次の形の AdapterError (正確な文言は変わりうる)
-#   AdapterError: agent 'gemini' is not implemented yet
-#   (implemented: claude, codex, grok). Wait for the agent's phase (1c).
-# で失敗する (retryable=False)。将来のフェーズが実装されるまでの
-# forward-compatible なプレースホルダとして参照用に残してある。
-# 詳細: docs/designs/external-agents-adapter.md §3, §9
+# 当初計画されていた Phase 1c は Google Gemini CLI (コマンド `gemini`)
+# を対象としていたが、Google が2026年6月に個人アカウント向け提供を
+# 終了したため実装対象から外れ、後継の Antigravity CLI (`agy`) を
+# 対象に agent: antigravity として実装された (上記参照)。
+#
+# agent: gemini は config スキーマの Literal には残っているため
+# 次のような設定は providers.yaml として "読み込める" が、
+# AgentCliAdapter の構築時に必ず次の専用メッセージで拒否される
+# (retryable=False):
+#   AdapterError: Google discontinued Gemini CLI for individual
+#   accounts (June 2026). Use agent='antigravity' instead.
+#
+# 詳細: docs/backends/external-agents.md の「gemini の廃止と
+# antigravity への移行」節、docs/designs/external-agents-adapter.md §11.5
 # ============================================================
 
 # providers:
-#   # ---- Google Gemini CLI (Phase 1c・未実装) ----
 #   - name: agent-gemini
 #     kind: agent_cli
-#     model: gemini-2.5-pro
-#     paid: false               # サブスク OAuth 運用なら false
-#     capabilities:
-#       streaming: false
 #     agent_cli:
-#       agent: gemini
-#       command: gemini
-#       workdir: ~/.coderouter/agents/gemini
-#       exec_timeout_s: 600
-#       allow_file_writes: false
-#       max_turns: 8               # settings.json の maxSessionTurns 相当
-#       sandbox_mode: read_only
-#       passthrough_env: [GEMINI_API_KEY]   # OAuth キャッシュが無い場合の保険
-#
-# profiles:
-#   - name: gemini
-#     providers: [agent-gemini]
+#       agent: gemini   # → 上記 AdapterError で拒否される。
+#                        #   agent: antigravity に置き換えること。

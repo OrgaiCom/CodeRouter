@@ -1,20 +1,25 @@
 """Tests for the agent_cli adapter (Phase 1a claude + Phase 1b codex +
-Phase 1d grok).
+Phase 1d grok + Phase 1c antigravity — Phase 1 complete).
 
-Implements the design's §8 test plan for the Phase 1a/1b/1d scope:
+Implements the design's §8 test plan for the full Phase 1 scope:
 
 * T1  argv construction (model / max-turns / permission-mode mapping,
-      allow_file_writes clamp) — for claude, codex and grok (codex adds the
-      exec/--json/--skip-git-repo-check/--ephemeral/-s/trailing "-" shape;
-      grok adds the --prompt-file / --no-memory / --sandbox shape).
-* T2  claude / codex / grok output parsing (success / is_error / malformed /
-      missing fields; codex's JSONL + cached-tokens-as-subset usage +
-      thread_id meta; grok's zero-usage + sessionId meta).
+      allow_file_writes clamp) — for claude, codex, grok and antigravity
+      (codex adds the exec/--json/--skip-git-repo-check/--ephemeral/-s/
+      trailing "-" shape; grok adds the --prompt-file / --no-memory /
+      --sandbox shape; antigravity adds the argv-delivered -p prompt /
+      --mode / --print-timeout shape).
+* T2  claude / codex / grok / antigravity output parsing (success /
+      is_error / malformed / missing fields; codex's JSONL +
+      cached-tokens-as-subset usage + thread_id meta; grok's zero-usage +
+      sessionId meta; antigravity's ANSI-stripped plain text + zero-usage +
+      empty meta).
 * T3  stubbed subprocess via ``asyncio.create_subprocess_exec`` monkeypatch
       (codex checks the stdin prompt-delivery path with no prompt file;
       grok additionally checks the prompt-file lifecycle: 0600 file exists
       and contains the prompt DURING the exec, deleted afterwards, also on
-      failure / timeout paths).
+      failure / timeout paths; antigravity checks the argv-delivery path:
+      no prompt file, no stdin bytes, prompt present in captured argv).
 * T4  TestClient E2E through ``POST /v1/chat/completions``.
 * T6  timeout → process-group kill + retryable AdapterError.
 * T7  child-env isolation (no ANTHROPIC_API_KEY leak, NO_COLOR present,
@@ -23,7 +28,9 @@ Implements the design's §8 test plan for the Phase 1a/1b/1d scope:
 * T8  recursion depth limit → non-retryable AdapterError.
 
 Plus config-schema validation (agent_cli required, base_url optionality,
-sandbox / allow_file_writes conflict) and healthcheck / retryable semantics.
+sandbox / allow_file_writes conflict, antigravity's "agy" command default)
+and healthcheck / retryable semantics, including the dedicated gemini →
+antigravity migration rejection message.
 
 Subprocess stubbing follows the ``_FakeProc`` shape used in
 ``tests/test_launcher_mtp.py``; the TestClient scaffolding mirrors
@@ -124,6 +131,17 @@ CODEX_JSONL = b"\n".join(
 
 
 # ---------------------------------------------------------------------------
+# Canned antigravity (agy) plain-text output (verified agy 1.1.1 — no
+# --output-format flag exists; output is plain text, optionally ANSI-styled)
+# ---------------------------------------------------------------------------
+
+ANTIGRAVITY_PLAIN = b"9\n"
+# A representative ANSI-decorated variant: SGR color codes around the answer
+# plus a trailing OSC title-set sequence, both of which must be stripped.
+ANTIGRAVITY_ANSI = b"\x1b[32m9\x1b[0m\n\x1b]0;agy\x07"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -167,6 +185,21 @@ def _make_codex_adapter(**agent_cli_overrides: object) -> AgentCliAdapter:
         kind="agent_cli",
         model="gpt-5.5",
         paid=True,
+        capabilities=Capabilities(streaming=False),
+        agent_cli=AgentCliConfig(**acfg),  # type: ignore[arg-type]
+    )
+    return AgentCliAdapter(provider)
+
+
+def _make_antigravity_adapter(**agent_cli_overrides: object) -> AgentCliAdapter:
+    """Build an AgentCliAdapter with an antigravity sub-config + overrides."""
+    acfg: dict[str, object] = {"agent": "antigravity"}
+    acfg.update(agent_cli_overrides)
+    provider = ProviderConfig(
+        name="agent-antigravity",
+        kind="agent_cli",
+        model="Gemini 3.5 Flash (Low)",
+        paid=False,
         capabilities=Capabilities(streaming=False),
         agent_cli=AgentCliConfig(**acfg),  # type: ignore[arg-type]
     )
@@ -452,6 +485,77 @@ def test_codex_argv_trailing_stdin_sentinel_and_no_prompt() -> None:
     argv = adapter._build_codex_argv("/w")
     assert argv[-1] == "-"
     assert all("hi there" not in arg for arg in argv)
+
+
+# ---------------------------------------------------------------------------
+# T1 (antigravity) — argv construction
+# ---------------------------------------------------------------------------
+
+
+def test_antigravity_argv_read_only_default_full_snapshot() -> None:
+    adapter = _make_antigravity_adapter(workdir="/tmp/wd")
+    argv = adapter._build_antigravity_argv("/tmp/wd", None, "solve 4+5")
+    assert argv == [
+        "agy",
+        "-p",
+        "solve 4+5",
+        "--model",
+        "Gemini 3.5 Flash (Low)",
+        "--mode",
+        "plan",
+        "--print-timeout",
+        "600s",
+    ]
+
+
+def test_antigravity_argv_edit_maps_accept_edits() -> None:
+    adapter = _make_antigravity_adapter(sandbox_mode="edit", allow_file_writes=True)
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert argv[argv.index("--mode") + 1] == "accept-edits"
+    assert "--dangerously-skip-permissions" not in argv
+
+
+def test_antigravity_argv_full_auto_maps_accept_edits_and_skip_permissions() -> None:
+    adapter = _make_antigravity_adapter(sandbox_mode="full_auto", allow_file_writes=True)
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert argv[argv.index("--mode") + 1] == "accept-edits"
+    assert "--dangerously-skip-permissions" in argv
+
+
+def test_antigravity_argv_read_only_clamp_when_writes_disabled() -> None:
+    # sandbox_mode=edit but allow_file_writes=False → clamp to plan, and
+    # --dangerously-skip-permissions must never appear either.
+    adapter = _make_antigravity_adapter(sandbox_mode="edit", allow_file_writes=False)
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert argv[argv.index("--mode") + 1] == "plan"
+    assert "--dangerously-skip-permissions" not in argv
+
+
+def test_antigravity_argv_omits_max_turns_even_when_set() -> None:
+    # agy has no --max-turns equivalent; the flag must never appear, even
+    # when the config sets max_turns explicitly.
+    adapter = _make_antigravity_adapter(max_turns=5)
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert "--max-turns" not in argv
+
+
+def test_antigravity_argv_model_override() -> None:
+    adapter = _make_antigravity_adapter(model="Gemini 3.1 Pro (High)")
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert argv[argv.index("--model") + 1] == "Gemini 3.1 Pro (High)"
+
+
+def test_antigravity_argv_print_timeout_from_exec_timeout_s() -> None:
+    adapter = _make_antigravity_adapter(exec_timeout_s=120)
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert argv[argv.index("--print-timeout") + 1] == "120s"
+
+
+def test_antigravity_argv_no_sandbox_no_add_dir() -> None:
+    adapter = _make_antigravity_adapter()
+    argv = adapter._build_antigravity_argv("/w", None, "p")
+    assert "--sandbox" not in argv
+    assert "--add-dir" not in argv
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +896,41 @@ def test_codex_parse_empty_stdout_raises_retryable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# T2 (antigravity) — plain-text parsing
+# ---------------------------------------------------------------------------
+
+
+def test_antigravity_parse_plain_text_success() -> None:
+    adapter = _make_antigravity_adapter()
+    text, usage, meta = adapter._parse_antigravity(ANTIGRAVITY_PLAIN, b"")
+    assert text == "9"
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert meta == {}
+
+
+def test_antigravity_parse_ansi_stripped() -> None:
+    adapter = _make_antigravity_adapter()
+    text, _usage, _meta = adapter._parse_antigravity(ANTIGRAVITY_ANSI, b"")
+    assert text == "9"
+    assert "\x1b" not in text
+
+
+def test_antigravity_parse_empty_stdout_raises_retryable() -> None:
+    adapter = _make_antigravity_adapter()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_antigravity(b"   \n", b"")
+    assert info.value.retryable is True
+    assert "no stdout" in str(info.value)
+
+
+def test_antigravity_parse_whitespace_only_after_ansi_strip_raises_retryable() -> None:
+    adapter = _make_antigravity_adapter()
+    with pytest.raises(AdapterError) as info:
+        adapter._parse_antigravity(b"\x1b[32m\x1b[0m  \n", b"")
+    assert info.value.retryable is True
+
+
+# ---------------------------------------------------------------------------
 # T3 — generate() with a stubbed subprocess
 # ---------------------------------------------------------------------------
 
@@ -923,6 +1062,45 @@ async def test_codex_generate_nonzero_exit_is_retryable(
 
 
 # ---------------------------------------------------------------------------
+# T3 (antigravity) — generate() with a stubbed subprocess (argv delivery)
+# ---------------------------------------------------------------------------
+
+
+async def test_antigravity_generate_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    proc = _FakeProc(stdout=ANTIGRAVITY_PLAIN, returncode=0)
+    captured = _patch_exec(monkeypatch, proc)
+    adapter = _make_antigravity_adapter(workdir=str(tmp_path))
+
+    resp = await adapter.generate(_request())
+
+    assert resp.choices[0]["message"]["content"] == "9"
+    assert resp.coderouter_provider == "agent-antigravity"
+    assert resp.model == "Gemini 3.5 Flash (Low)"
+    assert resp.usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    # Nothing is written to stdin — verified required for agy, which hangs
+    # if anything is piped to it.
+    assert proc.stdin_received is None
+    # The prompt is carried on argv (the CLI's only delivery channel).
+    argv = captured[0]
+    assert any("hi there" in arg for arg in argv)
+    # No private prompt file is ever created in the workdir for antigravity.
+    assert list(tmp_path.glob(".coderouter-prompt-*")) == []
+
+
+async def test_antigravity_generate_nonzero_exit_is_retryable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    proc = _FakeProc(stdout=b"", stderr=b"auth failed", returncode=1)
+    _patch_exec(monkeypatch, proc)
+    adapter = _make_antigravity_adapter(workdir=str(tmp_path))
+    with pytest.raises(AdapterError) as info:
+        await adapter.generate(_request())
+    assert info.value.retryable is True
+
+
+# ---------------------------------------------------------------------------
 # T6 — timeout → process-group kill
 # ---------------------------------------------------------------------------
 
@@ -1013,7 +1191,7 @@ async def test_healthcheck_present_binary(monkeypatch: pytest.MonkeyPatch) -> No
     assert await adapter.healthcheck() is True
 
 
-def test_unsupported_agent_raises_non_retryable() -> None:
+def test_gemini_rejected_with_antigravity_migration_message() -> None:
     provider = ProviderConfig(
         name="agent-gemini",
         kind="agent_cli",
@@ -1024,8 +1202,12 @@ def test_unsupported_agent_raises_non_retryable() -> None:
     with pytest.raises(AdapterError) as info:
         AgentCliAdapter(provider)
     assert info.value.retryable is False
-    assert "not implemented yet" in str(info.value)
-    assert "implemented: claude, codex, grok" in str(info.value)
+    message = str(info.value)
+    assert "antigravity" in message
+    assert "discontinued" in message
+    # The OLD generic "not implemented yet" message must no longer fire for
+    # gemini — it now gets its own dedicated migration message instead.
+    assert "not implemented yet" not in message
 
 
 # ---------------------------------------------------------------------------
@@ -1056,6 +1238,29 @@ def test_schema_base_url_required_for_openai_compat() -> None:
 def test_schema_command_defaults_to_agent() -> None:
     cfg = AgentCliConfig(agent="claude")
     assert cfg.command == "claude"
+
+
+def test_schema_command_defaults_to_agy_for_antigravity() -> None:
+    # antigravity is the one agent whose binary name differs from the
+    # ``agent`` value (product "Antigravity CLI", command "agy").
+    cfg = AgentCliConfig(agent="antigravity")
+    assert cfg.command == "agy"
+
+
+def test_schema_command_still_defaults_to_agent_for_others() -> None:
+    for agent in ("claude", "codex", "grok"):
+        cfg = AgentCliConfig(agent=agent)  # type: ignore[arg-type]
+        assert cfg.command == agent
+
+
+def test_schema_antigravity_accepted_by_literal() -> None:
+    cfg = AgentCliConfig(agent="antigravity")
+    assert cfg.agent == "antigravity"
+
+
+def test_schema_antigravity_explicit_command_not_overridden() -> None:
+    cfg = AgentCliConfig(agent="antigravity", command="/opt/bin/agy")
+    assert cfg.command == "/opt/bin/agy"
 
 
 def test_schema_write_conflict_rejected() -> None:
@@ -1236,3 +1441,67 @@ def test_e2e_codex_chat_completions(codex_e2e_client: TestClient) -> None:
     assert body["usage"]["prompt_tokens"] == 13810
     assert body["usage"]["total_tokens"] == 13815
     assert body["coderouter_session_id"] == "019f4e74-08fd-77b2-9cc6-9afa744df130"
+
+
+# ---------------------------------------------------------------------------
+# T4 (antigravity) — TestClient E2E through /v1/chat/completions
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def antigravity_e2e_config(tmp_path: Path) -> CodeRouterConfig:
+    return CodeRouterConfig(
+        allow_paid=True,
+        default_profile="antigravity-agent",
+        providers=[
+            ProviderConfig(
+                name="agent-antigravity",
+                kind="agent_cli",
+                model="Gemini 3.5 Flash (Low)",
+                paid=False,
+                capabilities=Capabilities(streaming=False),
+                agent_cli=AgentCliConfig(agent="antigravity", workdir=str(tmp_path)),
+            ),
+        ],
+        profiles=[FallbackChain(name="antigravity-agent", providers=["agent-antigravity"])],
+    )
+
+
+@pytest.fixture
+def antigravity_e2e_client(
+    antigravity_e2e_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    proc = _FakeProc(stdout=ANTIGRAVITY_PLAIN, returncode=0)
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _FakeProc:
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config", lambda path=None: antigravity_e2e_config
+    )
+    uninstall_collector()
+    app = create_app()
+    try:
+        with TestClient(app) as tc:
+            yield tc
+    finally:
+        uninstall_collector()
+
+
+def test_e2e_antigravity_chat_completions(antigravity_e2e_client: TestClient) -> None:
+    resp = antigravity_e2e_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "Gemini 3.5 Flash (Low)",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers={"X-CodeRouter-Profile": "antigravity-agent"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["choices"][0]["message"]["content"] == "9"
+    assert body["coderouter_provider"] == "agent-antigravity"
+    assert body["usage"]["total_tokens"] == 0
+    # antigravity emits no session id — meta is empty end-to-end.
+    assert "coderouter_session_id" not in body

@@ -2,7 +2,7 @@
 
 > 対象バージョン: CodeRouter v2.x 系 / Phase 1（in-core adapter）
 > 関連: [`docs/future.md`](../future.md) §1.2・§5、[`docs/backends/launcher.md`](../backends/launcher.md)
-> ステータス: 設計確定 / Phase 1a (claude)・Phase 1b (codex)・Phase 1d (grok) 実装済み
+> ステータス: 設計確定 / Phase 1(1a claude・1b codex・1c antigravity・1d grok)実装済み・1c は antigravity として実装
 
 本設計書は、OpenAI Codex CLI・Google Gemini CLI・xAI Grok・Anthropic Claude Code CLI の4つの外部コーディングエージェントを、CodeRouter の新しいアダプタ種別 `kind="agent_cli"` として本体に組み込む方式を定義するものである。CLI のフラグ・認証仕様はすべて調査レポート（`RESEARCH-cli.md`、2026-07 時点）を、コード上の拡張点はすべてコード解析報告書（`ANALYSIS-code.md`）を典拠とする。ユーザー確定事項（`DECISIONS.md`）は拘束条件であり、本書はそれを厳密に実装する。
 
@@ -640,3 +640,26 @@ Phase 1b（codex）実装時に、設計時点の調査（`RESEARCH-cli.md`、20
 | 成熟度 / バージョン churn | pre-1.0・要 pin（§10 リスク表、§11.1） | **確認済み**。CLI は pre-1.0 でほぼ毎日リリース。`--json` の別名は依然 `--experimental-json` のままでスキーマ未凍結 → バージョン pin 推奨 + 防御的パース必須の方針を維持 |
 
 あわせて、§5.1.5 表の codex 行の「サンドボックス/承認」列は `-s read-only` のみが確定であり、`edit`/`full_auto` は上表のとおり `-s workspace-write` に統一されたことを付記する（本文は歴史的記録として改変しない）。
+
+### 11.5 Phase 1c 実CLI検証結果（gemini 廃止と Antigravity CLI `agy` 1.1.1, 2026-07-11）
+
+Phase 1c 着手時点で、本設計書の本文（§1.1・§3.1・§5.1.5・§5.2.1・§5.3.3・§5.4・§9・§11.1）が前提としていた対象 CLI そのもの（Google Gemini CLI、コマンド `gemini`）が実装対象から外れた。Google が個人アカウント向け Gemini CLI の提供を終了したためであり、以下は検証結果である（歴史的記録として本文は改変しない。本文中の `gemini` に関する記述は下表で読み替えること）。
+
+| 項目 | 設計時の想定（gemini） | 実機での検証結果（agy 1.1.1、作者の Mac、2026-07-11） |
+|---|---|---|
+| 対象 CLI そのもの | Google Gemini CLI（コマンド `gemini`）を想定（§1.1・§3.1・§4.1 構成図など） | 個人アカウント向け Gemini CLI（`@google/gemini-cli` 0.50.0 系）の OAuth は **2026-06-18 で提供終了**（公式ブログ）。実機で次の verbatim エラーを確認: `IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google`（`reasonCode: UNSUPPORTED_CLIENT`, `tierId: free-tier`） |
+| trusted-directory ゲート | （設計時点で gemini については未記載） | 旧 gemini CLI は trusted-directory ゲートで **exit 55**（`--skip-trust` または `GEMINI_CLI_TRUST_WORKSPACE=true` が必要）にも遭遇。個人アカウント終了とは別に以前から存在する制約 |
+| 後継 CLI との関係 | （未検討） | 後継の **Antigravity CLI**（コマンド `agy`）は gemini-cli の**フォークではなく Go 製の別実装**。個人の Google アカウント OAuth（無料枠含む）はこちらで存続する |
+| 出力形式 | `--output-format json`（§5.1.5 表・§5.1.6 表） | agy には `--output-format` 系のフラグが**存在しない**。出力はプレーンテキストのみで、トークン usage・セッション ID・構造化エラーはいずれも取得不能 |
+| 承認/モード制御 | `--approval-mode default/auto_edit/--yolo`（§5.4 表） | agy は `--mode plan\|accept-edits` を持つ（ヘルプに列挙されるのはこの2値のみ）。`--dangerously-skip-permissions` で全ツール実行を自動承認できる。read_only→`--mode plan`、edit→`--mode accept-edits`、full_auto→`--mode accept-edits --dangerously-skip-permissions` |
+| CLI 側タイムアウト | 「全体 `--timeout` フラグは無い」と記載（§5.1.5 補足） | agy は `--print-timeout <Go duration>`（既定 5m0s）という print モード自身のタイムアウトを持つ。**claude/codex/grok にはこの種のフラグが無く、agy が唯一**。`exec_timeout_s` から生成し、外側の `asyncio.wait_for` + PGID kill と合わせて二重防壁になる |
+| ターン上限 | `maxSessionTurns`（settings.json、CLI フラグ無し。exit 53 でハンドリング想定、§5.1.5・§9） | agy には `--max-turns` 相当のフラグが存在しない。`AgentCliConfig.max_turns` は antigravity では常に無視される（codex と同じ扱い） |
+| プロンプト投入 | `-p "<prompt>"`（§5.1.5 表） | `-p` / `--print` / `--prompt` は argv 値必須。**stdin 経由のプロンプト受け取りは無く、grok のような `--prompt-file` 相当のフラグも無い**。プロンプトは argv 値として渡すほかなく、`MAX_ARG_STRLEN`（約128KiB）と `ps` 可視性が既知の制限として残る |
+| stdin パイプ時の挙動 | （未検討） | **stdin に何かをパイプすると agy がハングする**ことを実機で確認（`printf '...' \| agy -p "..."` は応答なしのまま `Error: timeout waiting for response`）。アダプタは stdin に何も書かず即クローズする（`communicate(input=None)`）ため CodeRouter 経由では問題にならない（`</dev/null` での正常動作を実機確認済み） |
+| 非 TTY 出力バグ | （未検討） | v1.x 初期に「非 TTY だと出力空 + exit 0」の既知バグ報告があったが、**agy 1.1.1 では再現せず**（TTY・非 TTY いずれも正常） |
+| モデル指定 | `gemini-2.5-pro` のような API ID 相当を想定（§3.1 の providers.yaml 例） | `--model` は **表示名文字列**（`Gemini 3.5 Flash (Low)` 等）。`agy models` で一覧確認できる。Google 以外のモデル（例: `Claude Opus 4.6 (Thinking)`）まで agy 経由で呼べる |
+| 認証 | Google OAuth キャッシュ（`~/.gemini/`）+ `GEMINI_API_KEY` を保険として `passthrough_env`（§5.3.3） | 資格情報は **OS キーリングを優先**し、`~/.gemini/antigravity-cli/`（`credentials.enc` / `settings.json`）にも保管。`HOME`（macOS では `USER` も）継承で headless 動作し `passthrough_env: []` でよい。API キー経由の環境変数名は情報が錯綜しており **UNCONFIRMED**（断定しない） |
+| エラー体系 | （未検討） | exit code の公開表は無い。非零 exit は既存どおり retryable 扱いとする |
+| スキーマ上の帰結 | （n/a） | `AgentCliConfig.agent` の `Literal` に **5番目の値 `"antigravity"`** を追加。`command` の既定値は agent 名と同じだが **antigravity のみ既定 `"agy"`**（バイナリ名が製品名と異なるため）。`gemini` は `Literal` に残すが、アダプタ `__init__` で「Google discontinued Gemini CLI for individual accounts (June 2026) → use agent='antigravity'」という専用メッセージ付きで拒否する（`retryable=False`） |
+
+以上により Phase 1（1a claude・1b codex・1c antigravity・1d grok）が完了した。§9 の実装フェーズ表・§11.1 の比較表にある「gemini」列は、上表の読み替えを前提とした歴史的記録として残す（本文は改変しない）。

@@ -2,7 +2,7 @@
 
 > English: [`external-agents.en.md`](./external-agents.en.md)
 
-`kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加され(Phase 1a: claude)、v2.7.8 で grok が追加され(Phase 1d)、v2.7.9 で codex が追加された(Phase 1b)。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
+`kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加され(Phase 1a: claude)、v2.7.8 で grok が追加され(Phase 1d)、v2.7.9 で codex が追加され(Phase 1b)、v2.7.10 で antigravity が追加された(Phase 1c)。これにより **Phase 1(4バックエンド)は完了**した。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
 
 ---
 
@@ -10,17 +10,34 @@
 
 コーディングエージェント CLI は本来、ファイルを書き換えながら何ターンも自律的に動くステートフルな制御ループであり、CodeRouter の「1リクエスト = 1変換」という思想とは相性が悪い。`agent_cli` はこれを **ワンショット `exec`**(プロンプト in → 最終回答テキスト out)に押し込めることで両立させている。オーケストレーション(マルチターン制御・ツール実行)はエージェント CLI 内部で完結し、CodeRouter 側からは「1回の対話で答えを返すだけの1つのプロバイダ」として見える。
 
-- **対象 CLI**: `agent` フィールドで `claude` / `codex` / `gemini` / `grok` の4種を宣言できる。
-- **実装状況(v2.7.9 時点)**: **`claude`(Claude Code CLI・Phase 1a)・`codex`(OpenAI Codex CLI・Phase 1b)・`grok`(Grok CLI・Phase 1d)が実装済み**。`gemini` のみ `providers.yaml` のスキーマ上は書けるが、アダプタ構築時に必ず AdapterError で拒否される(Phase 1c は未実装)。エラーメッセージは概ね次の形である(正確な文言はバージョンにより変わりうる):
+- **対象 CLI**: `agent` フィールドで `claude` / `codex` / `antigravity` / `grok` の4種を宣言できる。`gemini` もスキーマの `Literal` には残っているが、常に拒否される(下記参照)。
+- **実装状況(v2.7.10 時点)**: **Phase 1 が完了し、`claude`(Claude Code CLI・Phase 1a)・`codex`(OpenAI Codex CLI・Phase 1b)・`antigravity`(Google Antigravity CLI・Phase 1c)・`grok`(Grok CLI・Phase 1d)の4バックエンドすべてが実装済み**。`gemini` は Google が2026年6月に個人アカウント向け Gemini CLI の提供を終了したため実装対象から外れ、アダプタ構築時に必ず次のような専用メッセージ付きの AdapterError で拒否される:
 
   ```
-  AdapterError: agent 'gemini' is not implemented yet (implemented: claude, codex, grok).
-  Wait for the agent's phase (1c).
+  AdapterError: Google discontinued Gemini CLI for individual accounts (June 2026).
+  Use agent='antigravity' instead.
   ```
 
-  この拒否は `retryable=False` — フォールバックチェーンに他プロバイダがあっても、設定ミスとして即座に停止する。
+  この拒否は `retryable=False` — フォールバックチェーンに他プロバイダがあっても、設定ミスとして即座に停止する。経緯の詳細は [gemini の廃止と antigravity への移行](#gemini-の廃止と-antigravity-への移行) を参照。
 
-- 本ドキュメントの共通部分(認証設計・設定リファレンス・制限事項)は claude ターゲットを軸に記述し、codex / grok 固有の挙動はそれぞれ [codex(OpenAI Codex CLI)](#codexopenai-codex-cli) / [grok(Grok CLI)](#grokgrok-cli) セクションにまとめる。gemini の設定例は `examples/providers-agent-cli.yaml` 末尾にコメントアウトされたプレビューとして置かれているが、動作しない。
+- 本ドキュメントの共通部分(認証設計・設定リファレンス・制限事項)は claude ターゲットを軸に記述し、codex / antigravity / grok 固有の挙動はそれぞれ [codex(OpenAI Codex CLI)](#codexopenai-codex-cli) / [antigravity(Google Antigravity CLI)](#antigravitygoogle-antigravity-cli) / [grok(Grok CLI)](#grokgrok-cli) セクションにまとめる。
+
+### gemini の廃止と antigravity への移行
+
+旧 Gemini CLI(`@google/gemini-cli` 0.50.0 系)は、個人アカウントの OAuth が **2026-06-18 をもって廃止済み**である(公式ブログ)。実機で以下のエラーが確認されている。
+
+```
+IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals.
+To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google
+```
+
+(`reasonCode: UNSUPPORTED_CLIENT`, `tierId: free-tier`)
+
+さらに旧 gemini CLI は trusted-directory ゲートで **exit 55**(`--skip-trust` または `GEMINI_CLI_TRUST_WORKSPACE=true` が必要)にも本アダプタの実機検証中に遭遇している — こちらは個人アカウント終了とは別に以前から存在する制約である。
+
+Google が後継として案内しているのは **Antigravity CLI**(コマンド名 `agy`)である。gemini-cli のフォークではなく Go 製の別実装であり、個人の Google アカウント OAuth(無料枠含む)はこちらで存続する。CodeRouter はこの移行を受けて、当初計画していた Phase 1c(`agent: "gemini"`)を **`agent: "antigravity"`** として実装した(v2.7.10)。
+
+`agent: "gemini"` はスキーマの `Literal` には残すが、アダプタ構築時に上記の専用メッセージで拒否される。`gemini` を使っていた設定は `agent: antigravity` に切り替え、[antigravity(Google Antigravity CLI)](#antigravitygoogle-antigravity-cli) セクションの設定例を参照すること。
 
 ---
 
@@ -96,14 +113,14 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 
 | フィールド | 型 | 既定値 | 説明 |
 |---|---|---|---|
-| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.9 で実装済みなのは `claude`・`codex`・`grok`。`gemini` はアダプタ構築時に拒否される** |
-| `command` | `str \| null` | `null`(未設定時は `agent` と同名) | CLI 実行ファイル名 or 絶対パス。`PATH` から解決 |
+| `agent` | `"claude" \| "codex" \| "antigravity" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.10 で `claude`・`codex`・`antigravity`・`grok` の4つすべてが実装済み(Phase 1 完了)。`gemini` はスキーマに残るがアダプタ構築時に拒否される** |
+| `command` | `str \| null` | `null`(未設定時は `agent` と同名) | CLI 実行ファイル名 or 絶対パス。`PATH` から解決。**`agent: antigravity` のみ既定値は `agy`**(バイナリ名が製品名と異なるため) |
 | `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
-| `exec_timeout_s` | `float` | `600.0`(範囲 `1.0`–`1800.0`) | exec 全体の強制タイムアウト(秒)。`ProviderConfig.timeout_s` とは**別系統**(後者は agent_cli では使われない) |
+| `exec_timeout_s` | `float` | `600.0`(範囲 `1.0`–`1800.0`) | exec 全体の強制タイムアウト(秒)。`ProviderConfig.timeout_s` とは**別系統**(後者は agent_cli では使われない)。antigravity ではこの値から `--print-timeout` も生成される(下記参照) |
 | `allow_file_writes` | `bool` | `false` | ファイル書き込みを許可するか。`false` のときは `sandbox_mode` の値に関わらず read-only にクランプされる |
-| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、codex は [codex セクション](#sandbox_mode--codex-フラグのマッピング)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
-| `model` | `str \| null` | `null`(未設定時は `ProviderConfig.model` を使用) | CLI の `--model` / `-m` に渡すモデル名(claude: `opus` / `sonnet` / `haiku` / `fable` 等、codex: `gpt-5.5` 等、grok: `grok-4.5` 等) |
-| `max_turns` | `int \| null` | `8`(範囲 `1`–`50`) | CLI 内部のターン上限。`--max-turns` として渡る。**codex には対応する CLI フラグが無いため常に無視される**(codex では `exec_timeout_s` + プロセスグループ kill のみが時間上限になる) |
+| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、codex は [codex セクション](#sandbox_mode--codex-フラグのマッピング)、antigravity は [antigravity セクション](#sandbox_mode--antigravity-フラグのマッピング)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
+| `model` | `str \| null` | `null`(未設定時は `ProviderConfig.model` を使用) | CLI の `--model` / `-m` に渡すモデル名(claude: `opus` / `sonnet` / `haiku` / `fable` 等、codex: `gpt-5.5` 等、antigravity: `"Gemini 3.5 Flash (Low)"` 等の**表示名文字列**、grok: `grok-4.5` 等) |
+| `max_turns` | `int \| null` | `8`(範囲 `1`–`50`) | CLI 内部のターン上限。`--max-turns` として渡る。**codex・antigravity には対応する CLI フラグが無いため常に無視される**(この2つでは `exec_timeout_s` + プロセスグループ kill のみが時間上限になる。antigravity はこれに加えて CLI 自身の `--print-timeout` も持つ) |
 | `passthrough_env` | `list[str]` | `[]` | 親環境から子プロセスへ転送する環境変数名のallowlist。`ANTHROPIC_API_KEY` はここに書かない限り渡らない |
 | `agent_depth_limit` | `int` | `2`(範囲 `1`–`4`) | 再帰ネストの上限。`CODEROUTER_AGENT_DEPTH` が上限以上なら `AdapterError(retryable=False)` で即停止 |
 
@@ -221,6 +238,109 @@ codex CLI は pre-1.0 でほぼ毎日リリースされている。`--json` の�
 
 ---
 
+## antigravity(Google Antigravity CLI)
+
+v2.7.10(Phase 1c)で `agent: antigravity` が実装され、これで **Phase 1(claude・codex・antigravity・grok の4バックエンド)は完了**した。当初計画されていた `gemini` は Google が個人アカウント向け提供を終了したため、後継の Antigravity CLI(コマンド `agy`)を対象に実装している。詳しい経緯は [gemini の廃止と antigravity への移行](#gemini-の廃止と-antigravity-への移行) を参照。プロンプトを **argv 値として**渡す点(claude/codex の stdin、grok の `--prompt-file` とはいずれも異なる)、プレーンテキスト出力(usage は常にゼロ)、そして CLI 自身がタイムアウトを持つ唯一のエージェントである点が固有の挙動である。以下は agy **1.1.1**(作者の Mac、2026-07-11 実機検証)を基準とする。
+
+### 設定例
+
+```yaml
+providers:
+  - name: agent-antigravity
+    kind: agent_cli
+    model: "Gemini 3.5 Flash (Low)"   # 表示名文字列(API IDではない。下記参照)
+    paid: false                       # Google アカウント OAuth 運用(無料枠含む) = 従量課金ゼロ
+    capabilities:
+      streaming: false
+      tools: false
+    agent_cli:
+      agent: antigravity
+      # command は省略可(既定 "agy" — バイナリ名が製品名と異なる点に注意)
+      workdir: ~/.coderouter/agents/antigravity
+      exec_timeout_s: 600
+      allow_file_writes: false
+      sandbox_mode: read_only
+      passthrough_env: []             # OAuth は OS キーリング + ~/.gemini/antigravity-cli/ を
+                                       # HOME(macOS では USER も)継承で読むため空でよい。
+                                       # API キー env は UNCONFIRMED(下記参照)
+```
+
+### アダプタが構築する argv
+
+`sandbox_mode: read_only`(既定)の場合、アダプタは次の argv を構築する。
+
+```
+agy -p <prompt> --model "Gemini 3.5 Flash (Low)" --mode plan --print-timeout 600s
+```
+
+### プロンプトは argv 値経由(claude/codex の stdin・grok の `--prompt-file` のいずれとも異なる)
+
+4エージェントのプロンプト配送方式は3パターンに分かれる。
+
+| agent | 配送方式 | 備考 |
+|---|---|---|
+| claude | stdin | `-p` は引数省略時に stdin を読む |
+| codex | stdin(argv 末尾に明示 `-`) | claude と同じ経路 |
+| grok | `--prompt-file`(隔離 workdir 内 0600 一時ファイル) | argv 値・stdin いずれも不可なため |
+| antigravity | argv 値(`-p <prompt>`) | stdin 不可・`--prompt-file` 相当のフラグも無い |
+
+agy の `-p` / `--print` / `--prompt` は値必須のフラグであり、stdin からプロンプトを読む経路も、grok のような `--prompt-file` 相当のフラグも存在しない。したがってプロンプトは argv の値として渡すほかなく、Linux の `MAX_ARG_STRLEN`(約128KiB)というサイズ上限と、`ps` からプロンプト全文が見えてしまう既知の制限が残る(他に選択肢が無いためドキュメント化するのみ)。argv はリスト形式で渡され(`shell=True` は使わない)、シェル解釈は経由しない。
+
+### stdin にパイプするとハングする — agy を直接叩く場合の注意
+
+アダプタ自身は stdin に何も書き込まず即座にクローズする(`communicate(input=None)`、実機で `</dev/null` により正常動作することを確認済み)ため CodeRouter 経由では問題にならない。しかし **agy に stdin から何かをパイプすると応答が返らずハングする**ことが実機で確認されている(`printf '...' | agy -p "..."` は応答待ちのまま `Error: timeout waiting for response` になる)。agy は stdin をコンテキストとして読む機能を持たない。CLI を直接スクリプトで叩く場合は、必ず stdin を空にする(`</dev/null` 等)こと。
+
+### `sandbox_mode` → antigravity フラグのマッピング
+
+claude/codex/grok と同様、`allow_file_writes=false` のときは `sandbox_mode` の値に関わらず `read_only` にクランプされる。
+
+| `sandbox_mode` | agy フラグ | 備考 |
+|---|---|---|
+| `read_only`(既定) | `--mode plan` | ファイル変更なし。`allow_file_writes=false` のとき常にこのモードにクランプされる |
+| `edit` | `--mode accept-edits` | ファイル編集を自動承認 |
+| `full_auto` | `--mode accept-edits --dangerously-skip-permissions` | 全ツール実行を自動承認(agy の `--help` に列挙されているモード値は `accept-edits`/`plan` の2値のみ。full_auto は `--dangerously-skip-permissions` の追加で表現する) |
+
+### プレーンテキスト出力と usage 常時ゼロ
+
+agy には `--output-format` 系のフラグが**存在しない**。出力はプレーンテキストのみである。アダプタは stdout を UTF-8 デコードした上で ANSI エスケープを防御的に除去(regex)し、前後の空白を strip して最終回答とする。空文字列になった場合は retryable な `AdapterError` を送出する。JSON 出力が無いためトークン usage・セッション ID・構造化エラーはいずれも取得不能であり、grok と同様に usage は**常にゼロ**で報告される(`coderouter_cost_usd` も `ProviderConfig.cost` に単価を設定しない限り 0 のまま)。レスポンスメタデータにセッション ID は入らない。
+
+### `--print-timeout` — CLI 側タイムアウトを持つ初めてのエージェント
+
+agy は `--print-timeout <Go duration>`(既定 5m0s)という print モード自身の待ち時間上限フラグを持つ。claude/codex/grok にはこの種の CLI 側タイムアウトが無い。アダプタは `AgentCliConfig.exec_timeout_s` から `--print-timeout` を生成し(例: `exec_timeout_s=600` → `--print-timeout 600s`)、CLI 自身に自己終了させる一次防壁とする。これに加えて、従来どおり外側の `asyncio.wait_for` + プロセスグループ SIGKILL による二次防壁も維持しており、antigravity は**二重のタイムアウト**を持つ唯一のエージェントになる。
+
+### `max_turns` は無視される
+
+agy には `--max-turns` に相当するフラグが無い。`AgentCliConfig.max_turns` は antigravity では常に無視され(codex と同様)、時間上限は `--print-timeout` と `exec_timeout_s` の二重防壁のみが担う。
+
+### 認証(Google アカウント OAuth・無料枠可)
+
+agy は Google アカウント OAuth に対応しており、無料枠でも動作する。資格情報は OS キーリングを優先し、`~/.gemini/antigravity-cli/`(`credentials.enc` / `settings.json`)にも保管される。アダプタの `HOME` 継承(macOS では `USER` も)によって `passthrough_env: []` のまま headless 動作する(既存の `_build_child_env()` で対応済み)。セットアップ手順:
+
+1. `agy` を初回実行するとブラウザでの Google アカウントログインが始まる。ログインを済ませておく。
+2. `agy models` を実行し、モデル一覧が返ることをスモーク確認する。
+
+API キー経由の認証(環境変数名)は情報が錯綜しており(`ANTIGRAVITY_API_KEY` 説あり・`GEMINI_API_KEY` は無視されるという説もあり)**未確認(UNCONFIRMED)**。本ドキュメントでは断定しない。
+
+### モデル名は表示名文字列 — Claude モデルまで届く
+
+`--model` に渡す値は API ID ではなく、`agy models` が返す**表示名文字列**である。実機(agy 1.1.1)で確認された一覧の例:
+
+```
+Gemini 3.5 Flash (Medium/High/Low)
+Gemini 3.1 Pro (Low/High)
+Claude Sonnet 4.6 (Thinking)
+Claude Opus 4.6 (Thinking)
+GPT-OSS 120B (Medium)
+```
+
+面白いことに、agy 経由では Google 以外のモデル、たとえば Claude Opus 4.6 まで呼び出せる。`providers.yaml` の `model` フィールドには、このいずれかの表示名文字列をそのまま(空白・括弧を含めて)書くこと。
+
+### early-days プロダクトであることの注意
+
+Antigravity CLI は登場したばかりのプロダクトである。フラグ体系・モデル一覧は今後変わる可能性が高いため、**バージョンの pin を推奨する**(`command` に固定版バイナリのフルパスを指定できる)。プレーンテキスト出力の性質上 JSON スキーマ変化のようなパース事故は起きにくいが、想定外の空応答・非零終了コードは防御的に扱われ、retryable な `AdapterError` としてフォールバックチェーンの次のプロバイダへ降格する。
+
+---
+
 ## grok(Grok CLI)
 
 v2.7.8(Phase 1d)で `agent: grok` が実装された。claude と同じワンショット exec 方式だが、プロンプトの渡し方・クロスセッションメモリの無効化・usage 報告の各点で grok 固有の挙動がある。以下は grok CLI **v0.2.93**([stable] チャネル、2026-07-10 実機検証)を基準とする。
@@ -322,7 +442,9 @@ grok CLI は early beta である(v0.2.93 [stable] チャネル、2026-07-10 時
 | `grok exited 1: ...` で失敗する | grok CLI は認証・ネットワーク・実行時エラーを終了コード1で終わり、エラーテキストを stderr に出す | アダプタが stderr の末尾を `AdapterError` に含めるので、そのメッセージを手がかりにする。認証エラーなら `grok login` を再実行し、`grok models` が通ることをスモーク確認する |
 | `codex exited 1: ...` で失敗する(OAuth の stale を疑う場合) | codex の OAuth トークンは約8日で stale になる。使用時自動リフレッシュされるが、長期間呼び出しが無いと stale のまま失敗することがある | `codex login status` でログイン状態を確認し、必要なら `codex login` を再実行する。定期的に codex を実行しておくと stale 化を避けやすい |
 | `Not inside a trusted directory and --skip-git-repo-check was not specified.` が表示される | 通常は発生しない — アダプタは `--skip-git-repo-check` を常時付与するため | もし表示された場合は CodeRouter 側の argv 構築にバグがある可能性が高い。バージョンを確認し、再現するなら issue を報告する |
-| CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名)が `PATH` 上に無い | `claude --version` / `codex --version` / `grok --version` が通ることを確認する。フルパスを `command` に指定してもよい |
+| `agent: gemini` を指定すると `AdapterError` になる/`IneligibleTierError` が出る | Google が2026年6月に個人アカウント向け Gemini CLI 提供を終了したため(実機で `IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals...` を確認) | `agent: antigravity` に切り替える。設定例は [antigravity(Google Antigravity CLI)](#antigravitygoogle-antigravity-cli) セクションを参照 |
+| `agy` が応答を返さずハングする | agy に stdin をパイプしている(例: `printf '...' \| agy -p "..."`) | stdin をパイプしない。何も書かず `</dev/null` にリダイレクトする。CodeRouter 経由の呼び出しではアダプタが既にこの対策(stdin 即クローズ)を取っている |
+| CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名。ただし antigravity のみ既定 `agy`)が `PATH` 上に無い | `claude --version` / `codex --version` / `agy --version` / `grok --version` が通ることを確認する。フルパスを `command` に指定してもよい |
 
 ---
 
