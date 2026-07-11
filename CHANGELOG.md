@@ -9,6 +9,82 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.9.0] — 2026-07-11 (agent_cli extraction Phase 2c — in-core adapter removed)
+
+**BREAKING.** Phase 2c of the agent_cli plugin extraction
+(`docs/designs/agent-cli-plugin-extraction.md` §5/§7): the in-core
+`agent_cli` adapter branch is **removed** from `coderouter/adapters/registry.py`.
+`kind: agent_cli` now resolves exclusively through the external plugin
+**`coderouter-plugin-agents`** — the Phase 2b grace period, during which the
+in-core copy still won resolution, has ended.
+
+**Who is affected**: anyone with one or more `kind: agent_cli` providers in
+`providers.yaml`. If the plugin isn't installed and enabled, `coderouter
+serve` now fails at startup.
+
+**What to do**: install the plugin and enable it —
+
+```bash
+uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+# or: pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+# uv-tool installs of coderouter-cli need the plugin in the same tool env:
+#   uv tool install coderouter-cli \
+#     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+```
+
+```yaml
+plugins:
+  enabled: [agents]
+```
+
+**What is unchanged**: existing `kind: agent_cli` provider entries and the
+`agent_cli:` sub-config (`AgentCliConfig` — schema, fields, defaults) need no
+edits; they remain a stable Core contract per the design's §4.4 case (b).
+Per-CLI behavior (claude/codex/antigravity/grok argv, auth, output parsing)
+is unaffected — only the adapter's Core-vs-plugin wiring changed.
+
+**Safety nets**: a `kind: agent_cli` provider without the plugin installed
+and enabled now fails `serve` at startup with a targeted migration hint
+(install command + `plugins.enabled` snippet) rather than a generic
+unknown-kind error, and `coderouter doctor` independently emits a
+config-level warning with the same fix snippet for configs that would hit
+this at startup.
+
+### Removed
+
+- **In-core `agent_cli` adapter** (`coderouter/adapters/agent_cli.py`, ~1181
+  lines) and the `build_adapter` in-core branch for `kind == "agent_cli"`
+  (`coderouter/adapters/registry.py`) — the adapter body, fully moved to
+  `coderouter-plugin-agents` 0.1.0 in Phase 2b, is deleted from Core. `kind:
+  agent_cli` now resolves only via the plugin-provided-kind lookup path.
+- **`agent-cli-in-core-deprecated` warning** (introduced in Phase 2b,
+  `docs/designs/agent-cli-plugin-extraction.md` §5.1) — removed along with
+  the in-core branch it guarded; there is nothing left for it to warn about.
+
+### Added
+
+- **`coderouter doctor` migration check** — detects a config with one or
+  more `kind: agent_cli` providers where `plugins.enabled` does not include
+  `agents` (or the plugin isn't installed/discoverable), and emits a
+  config-level warning with a ready-to-paste fix snippet
+  (`plugins:\n  enabled: [agents]` plus the install command).
+- **Targeted unknown-kind / migration hint at `serve` startup** — when
+  `build_adapter` cannot resolve `kind: agent_cli` (plugin missing or not
+  enabled), the raised error now names the specific migration steps (install
+  `coderouter-plugin-agents`, add `plugins.enabled: [agents]`) instead of
+  the generic "unknown kind" listing used for arbitrary typos.
+
+### Changed
+
+- **`ProviderConfig` / `AgentCliConfig` docstrings and error text**
+  (`coderouter/config/schemas.py`) — updated to state plainly that
+  `agent_cli` is plugin-served as of v2.9.0 and that the schema itself is
+  unaffected.
+- **`Adapter` plugin Protocol docstrings** (`coderouter/plugins/base.py`) —
+  updated to drop transitional Phase 2b language (in-core shadowing,
+  deprecation warning) now that `agent_cli` resolves solely through the
+  plugin path, same as any other plugin-provided `kind`.
+
 ## [v2.8.1] — 2026-07-11 (agent_cli moved to coderouter-plugin-agents — Phase 2b)
 
 **PR #72**. Phase 2b of the agent_cli plugin extraction
