@@ -11,7 +11,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.7.10] — 2026-07-11 (agent_cli Phase 1c: antigravity — Phase 1 complete)
 
-Completes agent_cli Phase 1: `agent: antigravity` (the Google Antigravity
+**PR #70**. Completes agent_cli Phase 1: `agent: antigravity` (the Google Antigravity
 CLI, command `agy`) is now implemented, joining `claude` (1a), `codex`
 (1b), and `grok` (1d) — all four Phase 1 backends are now in place. This
 target replaces the originally-planned `gemini`: on the author's Mac, the
