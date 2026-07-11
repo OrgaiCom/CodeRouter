@@ -9,9 +9,104 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.7.10] — 2026-07-11 (agent_cli Phase 1c: antigravity — Phase 1 complete)
+
+Completes agent_cli Phase 1: `agent: antigravity` (the Google Antigravity
+CLI, command `agy`) is now implemented, joining `claude` (1a), `codex`
+(1b), and `grok` (1d) — all four Phase 1 backends are now in place. This
+target replaces the originally-planned `gemini`: on the author's Mac, the
+legacy Gemini CLI (`@google/gemini-cli` 0.50.x) now fails individual-account
+OAuth outright with a verified `IneligibleTierError: This client is no
+longer supported for Gemini Code Assist for individuals. To continue using
+Gemini, please migrate to the Antigravity suite of products:
+https://antigravity.google` (`reasonCode: UNSUPPORTED_CLIENT`,
+`tierId: free-tier`) — Google discontinued Gemini CLI for individual
+accounts on 2026-06-18. The same legacy CLI also still hits the
+trusted-directory gate with exit 55 (`--skip-trust` /
+`GEMINI_CLI_TRUST_WORKSPACE=true`), a pre-existing constraint unrelated to
+the discontinuation. Google's stated successor is the Antigravity CLI
+(`agy`) — a separate Go rewrite, not a fork of gemini-cli — which keeps
+individual Google-account OAuth alive, including the free tier. Verified
+against agy **1.1.1** (author's Mac, 2026-07-11), its flag surface differs
+meaningfully from gemini-cli's: no `--output-format json` (plain-text
+output only), `--mode plan|accept-edits` instead of an approval-mode flag,
+a `--dangerously-skip-permissions` full-bypass flag, a CLI-side
+`--print-timeout` (the first agent_cli target with its own timeout), no
+`--max-turns`, and no stdin channel for the prompt at all — piping stdin to
+`agy` hangs (field-verified). `agent: gemini` remains schema-declared but
+is now rejected with a migration-pointer message instead of a generic
+not-implemented one.
+
+### Added
+
+- **`agent: antigravity` builder/parser in `AgentCliAdapter`**
+  (`coderouter/adapters/agent_cli.py`) — invokes the Antigravity CLI
+  one-shot as `agy -p <prompt> --model <model> --mode plan --print-timeout
+  <exec_timeout_s>s` (read_only default). The prompt rides on argv as the
+  value of `-p` — agy has no `--prompt-file` equivalent and hangs if stdin
+  is piped (field-verified), so this is the fourth prompt-delivery pattern
+  among the four backends (claude/codex use stdin, grok uses
+  `--prompt-file`, antigravity uses argv). Documented limitation: Linux's
+  `MAX_ARG_STRLEN` (~128KiB) caps prompt size, and the prompt is visible in
+  `ps` output — there is no way around this with agy's current flag
+  surface. Output is plain text: stdout is decoded UTF-8, defensively
+  stripped of ANSI escapes, and trimmed; an empty result raises a
+  retryable `AdapterError`. There is no `--output-format json`, so token
+  usage, session id, and structured errors are all unavailable — usage is
+  reported as all zeros (same treatment as grok), and
+  `coderouter_session_id` is never populated.
+- **`sandbox_mode` → antigravity flag mapping** — `read_only` →
+  `--mode plan`; `edit` → `--mode accept-edits`; `full_auto` →
+  `--mode accept-edits --dangerously-skip-permissions`. As with the other
+  three backends, the effective mode is clamped to read-only whenever
+  `allow_file_writes=false`.
+- **`--print-timeout` as a CLI-side first wall** — generated from
+  `AgentCliConfig.exec_timeout_s` (e.g. `exec_timeout_s=600` →
+  `--print-timeout 600s`), letting agy self-terminate before the outer
+  `asyncio.wait_for` + process-group `SIGKILL` fires. antigravity is the
+  only agent_cli target with a double timeout wall.
+- **`max_turns` ignored for antigravity** — agy has no
+  `--max-turns`-equivalent flag; `AgentCliConfig.max_turns` has no effect
+  when `agent: antigravity`, same as codex.
+- **`command` defaults to `"agy"`** — the only agent_cli target whose
+  default executable name differs from the `agent` field value (the binary
+  is named for the CLI, not the product).
+- **5th `Literal` value on `AgentCliConfig.agent`** — `"antigravity"` joins
+  `claude`/`codex`/`gemini`/`grok`.
+
+### Changed
+
+- **`agent: gemini` now rejected with a migration message** instead of the
+  generic "not implemented yet" wording — constructing the adapter with
+  `agent: gemini` now raises `AdapterError: Google discontinued Gemini CLI
+  for individual accounts (June 2026). Use agent='antigravity' instead.`
+  (`retryable=False`).
+- **Schema docstrings** (`coderouter/config/schemas.py`) — `AgentCliConfig`
+  field descriptions updated for the four-backend reality
+  (claude/codex/antigravity/grok implemented, gemini rejected), including
+  the `command` and `max_turns` docstrings noting antigravity's `agy`
+  default and ignored `max_turns`.
+- **Docs & examples** — `docs/backends/external-agents.md`/`.en.md` gain a
+  full antigravity section (config example, adapter argv, the
+  argv-vs-stdin-vs-`--prompt-file` prompt-delivery comparison across all
+  four backends, mode mapping table, plain-text parsing and zero usage,
+  the `--print-timeout` double wall, OAuth setup with the `agy models`
+  smoke check, the display-string model-name caveat including that Claude
+  models are reachable through agy, the stdin-pipe-hang warning, and the
+  version-pin caveat) and lead with the gemini-discontinuation story
+  (updated implementation-status wording: Phase 1 complete, all four
+  backends). The design doc `docs/designs/external-agents-adapter.md` gets
+  a new appendix §11.5 recording the gemini-to-antigravity delta (body
+  text left as the historical record); its header status line now reads
+  Phase 1 (1a/1b/1c/1d) complete. `examples/providers-agent-cli.yaml`
+  replaces the Phase 1c gemini preview block with a documented (still
+  commented-out) antigravity block, with the now-empty
+  "unimplemented preview" framing removed since nothing remains
+  unimplemented.
+
 ## [v2.7.9] — 2026-07-11 (agent_cli Phase 1b: codex)
 
-**PR #69**. Adds the third target to the `agent_cli` adapter: `agent: codex` (the OpenAI
+Adds the third target to the `agent_cli` adapter: `agent: codex` (the OpenAI
 Codex CLI) is now implemented alongside `claude` (Phase 1a) and `grok`
 (Phase 1d). The implementation was verified against the real CLI (codex-cli
 0.144.1, 2026-07-11), and one design-time assumption from the 2026-07

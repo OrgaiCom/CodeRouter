@@ -168,13 +168,18 @@ class AgentCliConfig(BaseModel):
 
     Introduced by the external-agents-adapter design (Phase 1). One
     ``agent_cli`` sub-config drives the :class:`AgentCliAdapter`, which
-    invokes an external coding-agent CLI (codex / gemini / grok / claude)
-    in a single one-shot ``exec`` and returns the final answer as one
-    ``prompt in → text out`` transformation. ``claude`` (Claude Code CLI,
-    Phase 1a), ``codex`` (codex CLI, Phase 1b) and ``grok`` (grok CLI,
-    Phase 1d) are implemented; ``gemini`` is declared at the schema level
-    so configs are forward-compatible, but the adapter rejects it until its
-    phase (1c) lands.
+    invokes an external coding-agent CLI (codex / gemini / grok / claude /
+    antigravity) in a single one-shot ``exec`` and returns the final answer
+    as one ``prompt in → text out`` transformation. ``claude`` (Claude Code
+    CLI, Phase 1a), ``codex`` (codex CLI, Phase 1b), ``grok`` (grok CLI,
+    Phase 1d) and ``antigravity`` (Antigravity CLI, Phase 1c, in lieu of
+    ``gemini``) are implemented. ``gemini`` is declared at the schema level
+    for backward-compatible config parsing, but the adapter rejects it with
+    a migration pointer: Google discontinued the (legacy) Gemini CLI's
+    OAuth for individual accounts in June 2026 (``IneligibleTierError`` /
+    ``UNSUPPORTED_CLIENT`` on the real client) and its successor is the
+    Antigravity CLI (command ``agy``, a separate Go implementation, not a
+    gemini-cli fork) — set ``agent: "antigravity"`` instead.
 
     Auth note (grok): the grok CLI uses OAuth credentials stored under
     ``~/.grok`` (``grok login``), which the adapter's HOME inheritance
@@ -190,25 +195,41 @@ class AgentCliConfig(BaseModel):
     ``CODEX_API_KEY`` (exec-only) or ``OPENAI_API_KEY`` (general) in
     ``passthrough_env``.
 
+    Auth note (antigravity): the Antigravity CLI uses a Google-account OAuth
+    login (free tier included), with credentials preferentially stored in
+    the OS keyring and mirrored under ``~/.gemini/antigravity-cli/``
+    (``credentials.enc`` / ``settings.json``) — the adapter's HOME (and, on
+    macOS, USER) inheritance already covers this, no extra config needed.
+    Any API-key environment variable for CI / non-interactive setups is
+    UNCONFIRMED (field reports disagree on the variable name) — this
+    docstring deliberately does not name one as authoritative; if you find
+    one that works, list it in ``passthrough_env``.
+
     Follows the ``extra="forbid"`` convention used across this module so a
     typo'd key fails at config-load rather than being silently ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    agent: Literal["codex", "gemini", "grok", "claude"] = Field(
+    agent: Literal["codex", "gemini", "grok", "claude", "antigravity"] = Field(
         ...,
         description=(
             "External coding-agent CLI to invoke. 'claude' (Phase 1a), "
-            "'codex' (Phase 1b) and 'grok' (Phase 1d) are implemented; "
-            "'gemini' (Phase 1c) pending."
+            "'codex' (Phase 1b), 'grok' (Phase 1d) and 'antigravity' "
+            "(Phase 1c, Google's Antigravity CLI, command 'agy') are "
+            "implemented. 'gemini' is rejected by the adapter — Google "
+            "discontinued the Gemini CLI for individual accounts in June "
+            "2026; use 'antigravity' instead."
         ),
     )
     command: str | None = Field(
         default=None,
         description=(
             "CLI executable name or absolute path (resolved via PATH). "
-            "When unset, defaults to the ``agent`` name."
+            "When unset, defaults to the ``agent`` name — EXCEPT "
+            "'antigravity', whose binary is named ``agy`` (the product is "
+            "'Antigravity CLI' but the executable keeps the short, "
+            "pre-rename command name)."
         ),
     )
     workdir: str | None = Field(
@@ -291,9 +312,14 @@ class AgentCliConfig(BaseModel):
         ``sandbox_mode="read_only"`` is contradictory — the operator asked
         for writes while pinning a read-only sandbox. Fail fast at load,
         matching the module's other cross-field validators.
+
+        ``command`` defaults to the ``agent`` name for every agent EXCEPT
+        ``antigravity``, whose binary is ``agy`` — the product renamed from
+        Gemini CLI to Antigravity CLI, but the executable kept its short
+        pre-rename name.
         """
         if self.command is None:
-            self.command = self.agent
+            self.command = "agy" if self.agent == "antigravity" else self.agent
         if self.allow_file_writes and self.sandbox_mode == "read_only":
             raise ValueError(
                 "agent_cli: allow_file_writes=True conflicts with "

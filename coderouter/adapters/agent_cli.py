@@ -1,9 +1,9 @@
 """External coding-agent CLI adapter (``kind="agent_cli"``).
 
 This adapter invokes an external coding-agent CLI (Claude Code / Codex /
-Gemini / Grok) as a single one-shot ``exec`` and returns the agent's final
-answer as one ``prompt in → text out`` transformation. It is the in-core
-implementation of the external-agents-adapter design
+Antigravity / Grok) as a single one-shot ``exec`` and returns the agent's
+final answer as one ``prompt in → text out`` transformation. It is the
+in-core implementation of the external-agents-adapter design
 (``docs/designs/external-agents-adapter.md``).
 
 Design in one paragraph
@@ -18,10 +18,10 @@ CodeRouter merely performs the one conversion. Following the
 ``openai_compat`` precedent, a *single* adapter class fronts *multiple*
 target agents, dispatched on the ``agent`` field.
 
-Implemented agents (Phase 1a + 1b + 1d)
-========================================
+Implemented agents (Phase 1 complete: 1a + 1b + 1c + 1d)
+==========================================================
 
-Three targets are implemented here:
+Four targets are implemented here:
 
 * ``claude`` (Claude Code CLI, Phase 1a) — the most stable CLI, the most
   fine-grained safety controls, and the only one that emits
@@ -42,22 +42,44 @@ Three targets are implemented here:
   ``ProviderConfig.cost``, design §5.1.6). ``--no-memory`` is always passed
   so a user-level cross-session memory setting cannot leak state between
   requests.
+* ``antigravity`` (Antigravity CLI, command ``agy``, Phase 1c, in lieu of
+  ``gemini``) — headless one-shot via ``agy -p <prompt> --mode ...``.
+  Google discontinued the legacy Gemini CLI's OAuth for individual
+  accounts in June 2026 (field-verified ``IneligibleTierError`` /
+  ``UNSUPPORTED_CLIENT``); its successor, the Antigravity CLI, is a
+  separate Go implementation (not a gemini-cli fork) fulfilling the design's
+  "gemini" slot. It has no stdin or ``--prompt-file`` channel — piped stdin
+  hangs the CLI (field-verified on agy 1.1.1) — so the prompt rides argv
+  (see the security note below). Output is plain text with no
+  ``--output-format`` flag, no token/cost figures, and no session id, so
+  usage is reported as zeros and meta is empty, mirroring grok's rationale.
+  It is also the only agent with a CLI-side self-termination flag
+  (``--print-timeout``), layered *underneath* the adapter's own
+  ``asyncio.wait_for`` + PGID SIGKILL rather than replacing it.
 
-The remaining agent (gemini) is declared in the config schema so
-providers.yaml is forward-compatible, but constructing an adapter for it
-raises a clear ``AdapterError`` until its phase (1c) lands.
+``gemini`` itself is declared in the config schema for backward-compatible
+config parsing, but constructing an adapter for it raises a clear
+``AdapterError`` with a migration pointer to ``agent="antigravity"``.
 
 Security (design §6, non-negotiable)
 ====================================
 
 * **allowlist argv only** — the child is launched with
   :func:`asyncio.create_subprocess_exec` and a list argv. ``shell=True`` is
-  never used; the prompt is never subject to shell interpretation (claude
-  and codex read it from stdin — codex's argv carries a trailing ``-``
-  sentinel making that explicit; grok reads it from a private ``0600``
-  prompt file inside the resolved workdir — its ``-p`` requires the prompt
-  as an argv value, and argv would both hit Linux's ~128KiB
-  ``MAX_ARG_STRLEN`` on huge prompts and leak the text into ``ps`` output).
+  never used. Prompt delivery is one of three mechanisms depending on the
+  agent: claude and codex read it from stdin (codex's argv carries a
+  trailing ``-`` sentinel making that explicit); grok reads it from a
+  private ``0600`` prompt file inside the resolved workdir (its ``-p``
+  requires the prompt as an argv value, and argv would both hit Linux's
+  ~128KiB ``MAX_ARG_STRLEN`` on huge prompts and leak the text into ``ps``
+  output); antigravity has neither a stdin nor a ``--prompt-file`` channel
+  (piped stdin hangs the CLI, field-verified), so its prompt is carried on
+  argv — accepting the same ``MAX_ARG_STRLEN`` cap and local ``ps``
+  visibility that grok's file delivery was specifically designed to avoid.
+  No shell is involved in any case (list argv, never shell text), and the
+  documented threat model (an isolated, single-operator workstation) treats
+  local ``ps`` visibility as an accepted, documented limitation for
+  antigravity rather than a defect.
 * **default read-only** — ``allow_file_writes=False`` /
   ``sandbox_mode="read_only"`` are the defaults, mapped to claude's
   ``--permission-mode plan``. Writes require explicit opt-in and the sandbox
@@ -82,6 +104,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import time
@@ -148,6 +171,29 @@ _CODEX_SANDBOX_ARGS = {
     "full_auto": ["-s", "workspace-write"],
 }
 
+# sandbox_mode → antigravity ``--mode`` flags (design §5.4, Antigravity CLI
+# 1.1.1, verified via facts-antigravity.md). ``agy --help`` only enumerates
+# two ``--mode`` values (``plan`` / ``accept-edits``), so ``full_auto`` maps
+# onto ``accept-edits`` plus the separate ``--dangerously-skip-permissions``
+# flag (auto-approves all tool executions) rather than a third ``--mode``
+# value. ``--sandbox`` is deliberately never used here: it has a known bypass
+# bug when combined with ``--dangerously-skip-permissions`` (agy issue #36).
+_ANTIGRAVITY_MODE_ARGS = {
+    "read_only": ["--mode", "plan"],
+    "edit": ["--mode", "accept-edits"],
+    "full_auto": ["--mode", "accept-edits", "--dangerously-skip-permissions"],
+}
+
+# Compiled ANSI escape sequence stripper for antigravity's plain-text output
+# (design §5.1.6). Covers CSI sequences (``ESC [ ... final-byte``) plus bare
+# OSC-style ``ESC ]`` sequences terminated by BEL or ``ESC \`` (kept simple —
+# antigravity's TUI chrome is not fully specified, so this is a defensive
+# best-effort strip, not a full ANSI parser).
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI ... final byte
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
+)
+
 
 def _chunk_text(text: str, size: int = _STREAM_CHUNK_CHARS) -> Iterator[str]:
     """Split ``text`` into ``size``-char pieces for the pseudo-stream."""
@@ -156,20 +202,26 @@ def _chunk_text(text: str, size: int = _STREAM_CHUNK_CHARS) -> Iterator[str]:
 
 
 class AgentCliAdapter(BaseAdapter):
-    """Invoke an external coding-agent CLI one-shot (claude + codex + grok).
+    """Invoke an external coding-agent CLI one-shot (claude + codex + grok +
+    antigravity).
 
     The ``agent`` field selects the argv builder / output parser via the
     dispatch tables built in :meth:`__init__`, mirroring how
     ``openai_compat`` fronts many HTTP backends from one class.
     """
 
+    _IMPLEMENTED_AGENTS = ("claude", "codex", "grok", "antigravity")
+
     def __init__(self, config: ProviderConfig) -> None:
         """Bind to a ``ProviderConfig`` and reject unsupported agents.
 
-        Constructing an adapter for an agent other than ``claude`` /
-        ``codex`` / ``grok`` raises a non-retryable :class:`AdapterError` —
-        the remaining target (gemini) is declared in the schema but not
-        implemented until its phase (design §9).
+        ``gemini`` gets its own rejection message (non-retryable): Google
+        discontinued the Gemini CLI's OAuth for individual accounts in June
+        2026, so this adapter points the operator at ``antigravity``
+        instead of a generic "not implemented" message. Any other
+        unimplemented value (future-proofing; currently none, since the
+        schema's ``Literal`` only allows the five known agents) falls back
+        to a generic message listing what IS implemented.
         """
         super().__init__(config)
         if config.agent_cli is None:  # pragma: no cover - schema enforces this
@@ -179,34 +231,50 @@ class AgentCliAdapter(BaseAdapter):
                 retryable=False,
             )
         self.acfg: AgentCliConfig = config.agent_cli
-        if self.acfg.agent not in ("claude", "codex", "grok"):
+        if self.acfg.agent not in self._IMPLEMENTED_AGENTS:
+            if self.acfg.agent == "gemini":
+                raise AdapterError(
+                    "agent 'gemini' is not supported: Google discontinued "
+                    "the Gemini CLI for individual accounts (June 2026; "
+                    "IneligibleTierError). Use agent='antigravity' "
+                    "(Antigravity CLI, command 'agy') instead.",
+                    provider=config.name,
+                    retryable=False,
+                )
             raise AdapterError(
-                f"agent {self.acfg.agent!r} is not implemented yet "
-                f"(implemented: claude, codex, grok). Wait for Phase 1c.",
+                f"agent {self.acfg.agent!r} is not implemented "
+                f"(implemented: {', '.join(self._IMPLEMENTED_AGENTS)}).",
                 provider=config.name,
                 retryable=False,
             )
         # agent → argv builder / output parser dispatch tables. claude landed
-        # in Phase 1a, codex in Phase 1b, grok in Phase 1d; Phase 1c adds
-        # gemini.
+        # in Phase 1a, codex in Phase 1b, grok in Phase 1d, antigravity in
+        # Phase 1c — all four (design §9) are now implemented.
         self._builders = {
             "claude": self._build_claude_argv,
             "codex": self._build_codex_argv,
             "grok": self._build_grok_argv,
+            "antigravity": self._build_antigravity_argv,
         }
         self._parsers = {
             "claude": self._parse_claude,
             "codex": self._parse_codex,
             "grok": self._parse_grok,
+            "antigravity": self._parse_antigravity,
         }
-        # Prompt delivery is per-agent: claude and codex read their prompt
-        # from stdin (10MB cap; codex's argv carries a trailing "-" sentinel
-        # making that explicit), which keeps argv free of the (potentially
-        # huge) prompt text. grok's ``-p`` REQUIRES the prompt as its argv
-        # value (piped stdin is only appended as extra context, verified on
-        # v0.2.93), so grok gets the prompt via ``--prompt-file`` instead —
-        # see ``_write_prompt_file`` for the rationale.
+        # Prompt delivery is per-agent, one of three mechanisms: claude and
+        # codex read their prompt from stdin (10MB cap; codex's argv carries
+        # a trailing "-" sentinel making that explicit), which keeps argv
+        # free of the (potentially huge) prompt text. grok's ``-p``
+        # REQUIRES the prompt as its argv value (piped stdin is only
+        # appended as extra context, verified on v0.2.93), so grok gets the
+        # prompt via ``--prompt-file`` instead — see ``_write_prompt_file``
+        # for the rationale. antigravity has NEITHER a stdin nor a
+        # ``--prompt-file`` channel — piped stdin hangs the CLI outright
+        # (field-verified on agy 1.1.1) — so its prompt rides argv instead;
+        # see ``_build_antigravity_argv`` for the tradeoff this accepts.
         self._uses_stdin = self.acfg.agent in ("claude", "codex")
+        self._uses_argv = self.acfg.agent == "antigravity"
 
     # ------------------------------------------------------------------
     # BaseAdapter contract
@@ -255,10 +323,16 @@ class AgentCliAdapter(BaseAdapter):
 
         # Agents that cannot take the prompt on stdin (grok) get it through a
         # private temp file inside the workdir; it is ALWAYS removed in the
-        # ``finally`` below, including on timeout / exception paths.
-        prompt_file = None if self._uses_stdin else self._write_prompt_file(prompt, workdir)
+        # ``finally`` below, including on timeout / exception paths. Argv
+        # agents (antigravity) get neither a file nor stdin bytes — the
+        # prompt text is handed straight to the builder instead.
+        prompt_file = (
+            None
+            if self._uses_stdin or self._uses_argv
+            else self._write_prompt_file(prompt, workdir)
+        )
         try:
-            argv = self._builders[self.acfg.agent](workdir, prompt_file)
+            argv = self._builders[self.acfg.agent](workdir, prompt_file, prompt)
             # Resolve the executable to an absolute path so argv[0] is a
             # concrete binary independent of the child's minimal PATH
             # (design §6 allowlist).
@@ -297,6 +371,10 @@ class AgentCliAdapter(BaseAdapter):
                     retryable=False,
                 ) from exc
 
+            # Non-stdin agents (grok's file delivery, antigravity's argv
+            # delivery) get None here, so ``communicate()`` closes stdin
+            # immediately without writing to it — verified required for
+            # antigravity, whose CLI hangs if anything is piped to stdin.
             stdin_bytes = prompt.encode("utf-8") if self._uses_stdin else None
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -366,7 +444,9 @@ class AgentCliAdapter(BaseAdapter):
     # claude argv builder + output parser
     # ------------------------------------------------------------------
 
-    def _build_claude_argv(self, workdir: str, prompt_file: str | None = None) -> list[str]:
+    def _build_claude_argv(
+        self, workdir: str, prompt_file: str | None = None, prompt: str | None = None
+    ) -> list[str]:
         """Assemble the ``claude -p`` argv (design §5.1.5 / §5.4).
 
         Shape::
@@ -375,12 +455,13 @@ class AgentCliAdapter(BaseAdapter):
                    --permission-mode <plan|acceptEdits> --add-dir <workdir>
 
         The prompt is fed on stdin (not argv), so it never appears here and
-        ``prompt_file`` is ignored (it exists only to keep the builder
-        signature uniform across agents). ``--bare`` is deliberately NOT
-        added — it would skip OAuth/keychain reads and break subscription
-        auth (design §5.3.4).
+        both ``prompt_file`` and ``prompt`` are ignored (they exist only to
+        keep the builder signature uniform across agents — see
+        ``_build_antigravity_argv`` for the one agent that needs ``prompt``).
+        ``--bare`` is deliberately NOT added — it would skip OAuth/keychain
+        reads and break subscription auth (design §5.3.4).
         """
-        del prompt_file  # claude takes the prompt on stdin, not from a file.
+        del prompt_file, prompt  # claude takes the prompt on stdin.
         model = self.acfg.model or self.config.model
         argv = [self.acfg.command, "-p", "--output-format", "json", "--model", model]
         if self.acfg.max_turns is not None:
@@ -494,7 +575,9 @@ class AgentCliAdapter(BaseAdapter):
     # codex argv builder + output parser (Phase 1b)
     # ------------------------------------------------------------------
 
-    def _build_codex_argv(self, workdir: str, prompt_file: str | None = None) -> list[str]:
+    def _build_codex_argv(
+        self, workdir: str, prompt_file: str | None = None, prompt: str | None = None
+    ) -> list[str]:
         """Assemble the ``codex exec`` argv (design §5.1.5 / §5.4, verified
         against codex-cli 0.144.1 — see ``_codex/facts-codex.md``).
 
@@ -504,19 +587,20 @@ class AgentCliAdapter(BaseAdapter):
                        -m <model> -C <workdir> -s <read-only|workspace-write> -
 
         The prompt is fed on stdin (not argv), so it never appears here and
-        ``prompt_file`` is ignored (it exists only to keep the builder
-        signature uniform across agents) — the trailing ``-`` makes the
-        stdin intent explicit to ``codex exec``, which otherwise treats a
-        bare invocation with no PROMPT arg the same way but reads more
-        ambiguously in a fixed argv list. ``--skip-git-repo-check`` is
-        ALWAYS passed because the isolated workdir is not a git repository
-        (without it the CLI exits 1). ``--ephemeral`` is ALWAYS passed so no
-        session state persists to disk, matching the adapter's stateless
-        one-shot ethos (the same rationale as grok's ``--no-memory``). codex
-        has no ``--max-turns`` equivalent, so ``AgentCliConfig.max_turns`` is
-        silently ignored here (documented in the schema).
+        both ``prompt_file`` and ``prompt`` are ignored (they exist only to
+        keep the builder signature uniform across agents) — the trailing
+        ``-`` makes the stdin intent explicit to ``codex exec``, which
+        otherwise treats a bare invocation with no PROMPT arg the same way
+        but reads more ambiguously in a fixed argv list. ``--skip-git-repo-
+        check`` is ALWAYS passed because the isolated workdir is not a git
+        repository (without it the CLI exits 1). ``--ephemeral`` is ALWAYS
+        passed so no session state persists to disk, matching the adapter's
+        stateless one-shot ethos (the same rationale as grok's
+        ``--no-memory``). codex has no ``--max-turns`` equivalent, so
+        ``AgentCliConfig.max_turns`` is silently ignored here (documented in
+        the schema).
         """
-        del prompt_file  # codex takes the prompt on stdin, not from a file.
+        del prompt_file, prompt  # codex takes the prompt on stdin.
         model = self.acfg.model or self.config.model
         argv = [
             self.acfg.command,
@@ -666,7 +750,9 @@ class AgentCliAdapter(BaseAdapter):
     # grok argv builder + output parser (Phase 1d)
     # ------------------------------------------------------------------
 
-    def _build_grok_argv(self, workdir: str, prompt_file: str | None = None) -> list[str]:
+    def _build_grok_argv(
+        self, workdir: str, prompt_file: str | None = None, prompt: str | None = None
+    ) -> list[str]:
         """Assemble the grok headless argv (design §5, grok CLI v0.2.93).
 
         Shape::
@@ -680,8 +766,11 @@ class AgentCliAdapter(BaseAdapter):
         would hit Linux's ~128KiB ``MAX_ARG_STRLEN`` on large prompts and
         leak the text into ``ps`` output. ``--no-memory`` is deliberate: it
         enforces the one-request-one-transformation statelessness even if
-        the user's grok config enables cross-session memory.
+        the user's grok config enables cross-session memory. ``prompt`` is
+        ignored (it exists only to keep the builder signature uniform across
+        agents — grok never takes it on argv).
         """
+        del prompt
         if prompt_file is None:  # pragma: no cover - generate() always supplies it
             raise AdapterError(
                 "grok argv requires a prompt file",
@@ -773,6 +862,108 @@ class AgentCliAdapter(BaseAdapter):
         if isinstance(session_id, str):
             meta["coderouter_session_id"] = session_id
         return result, usage, meta
+
+    # ------------------------------------------------------------------
+    # antigravity argv builder + output parser (Phase 1c, in lieu of gemini)
+    # ------------------------------------------------------------------
+
+    def _build_antigravity_argv(
+        self, workdir: str, prompt_file: str | None = None, prompt: str | None = None
+    ) -> list[str]:
+        """Assemble the ``agy -p`` argv (design §5.1.5 / §5.4, verified
+        against Antigravity CLI 1.1.1 — see ``_codex/facts-antigravity.md``).
+
+        Shape::
+
+            agy -p <prompt> --model <m> --mode <plan|accept-edits>
+                [--dangerously-skip-permissions] --print-timeout <n>s
+
+        ``workdir`` is unused here — antigravity picks up its working
+        directory from the child process's ``cwd`` (set by ``generate()``),
+        and this adapter deliberately never passes ``--add-dir`` (design
+        keeps the argv minimal; only claude's multi-root model needs it).
+        ``prompt_file`` is unused (antigravity has no such flag).
+
+        Prompt-delivery tradeoff (read this before touching the ``-p``
+        line): agy has no stdin channel — piping content to stdin makes the
+        real CLI hang waiting for a response that never comes (field-
+        verified on 1.1.1) — and no ``--prompt-file`` equivalent either. The
+        prompt therefore rides argv as the ``-p`` value, which is the *only*
+        delivery mechanism the CLI offers. This caps practical prompt size
+        at Linux's ~128KiB ``MAX_ARG_STRLEN`` and exposes the prompt text to
+        ``ps`` on the local host — exactly the two costs grok's
+        ``--prompt-file`` delivery was built to avoid (see the module
+        docstring's security section). No shell is involved (list argv, not
+        shell text), and the adapter's threat model — an isolated,
+        single-operator workstation — accepts local ``ps`` visibility as a
+        documented limitation rather than a defect; there is no safer
+        channel to fall back to.
+
+        ``--print-timeout`` is antigravity's own self-termination clock,
+        derived from ``exec_timeout_s`` — it is the CLI's *first* wall
+        against a hung call; the adapter's outer ``asyncio.wait_for`` +
+        process-group ``SIGKILL`` remains the second, unconditional wall
+        (design §6). ``max_turns`` is never emitted: agy has no ``--max-
+        turns``-equivalent flag (like codex), so ``AgentCliConfig.max_turns``
+        is silently ignored here (documented in the schema). No ``--sandbox``
+        (known bypass bug alongside ``--dangerously-skip-permissions``,
+        agy issue #36) and no ``--add-dir`` are ever passed.
+        """
+        del prompt_file  # antigravity has no prompt-file flag.
+        if prompt is None:  # pragma: no cover - generate() always supplies it
+            raise AdapterError(
+                "antigravity argv requires the prompt text",
+                provider=self.name,
+                retryable=False,
+            )
+        model = self.acfg.model or self.config.model
+        argv = [self.acfg.command, "-p", prompt, "--model", model]
+        argv += self._antigravity_mode_args()
+        argv += ["--print-timeout", f"{int(self.acfg.exec_timeout_s)}s"]
+        return argv
+
+    def _antigravity_mode_args(self) -> list[str]:
+        """Map ``sandbox_mode`` → antigravity ``--mode`` flags, clamped.
+
+        Same clamp as claude/codex/grok (design §5.4): when
+        ``allow_file_writes`` is False the effective mode is forced to
+        ``read_only`` regardless of ``sandbox_mode``, so writes always
+        require the explicit opt-in.
+        """
+        mode = self.acfg.sandbox_mode if self.acfg.allow_file_writes else "read_only"
+        return list(_ANTIGRAVITY_MODE_ARGS[mode])
+
+    def _parse_antigravity(
+        self, stdout: bytes, stderr: bytes
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """Parse antigravity's plain-text ``-p`` output (verified agy 1.1.1).
+
+        There is no ``--output-format`` flag at all (agy's ``--help`` does
+        not list one) — output is whatever the model printed, decorated
+        with whatever terminal styling the CLI applied even in non-TTY runs.
+        Parsing is therefore: UTF-8 decode (defensively, replacing invalid
+        bytes) → strip ANSI escape sequences (``_ANSI_RE``, best-effort, see
+        its definition) → ``.strip()`` surrounding whitespace. Empty output
+        raises a retryable :class:`AdapterError` so the chain can fall
+        through. There is no token/cost figure and no session id anywhere
+        in agy's output, so ``usage`` is all-zeros (cost stays 0 unless the
+        operator sets ``ProviderConfig.cost``, same rationale as grok,
+        design §5.1.6) and ``meta`` is empty.
+        """
+        text = _ANSI_RE.sub("", stdout.decode("utf-8", "replace")).strip()
+        if not text:
+            raise AdapterError(
+                "antigravity produced no stdout",
+                provider=self.name,
+                retryable=True,
+            )
+        usage: dict[str, Any] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        meta: dict[str, Any] = {}
+        return text, usage, meta
 
     # ------------------------------------------------------------------
     # helpers: prompt rendering, response shaping, env, workdir, kill

@@ -2,7 +2,7 @@
 
 > 日本語版: [`external-agents.md`](./external-agents.md)
 
-`kind: "agent_cli"` is an adapter that registers an external coding-agent CLI, such as the Claude Code CLI, as a single CodeRouter provider. It was newly added in v2.7.7 (Phase 1a: claude), v2.7.8 added grok (Phase 1d), and v2.7.9 added codex (Phase 1b). See [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) for the full design.
+`kind: "agent_cli"` is an adapter that registers an external coding-agent CLI, such as the Claude Code CLI, as a single CodeRouter provider. It was newly added in v2.7.7 (Phase 1a: claude), v2.7.8 added grok (Phase 1d), v2.7.9 added codex (Phase 1b), and v2.7.10 added antigravity (Phase 1c). **Phase 1 (all four backends) is now complete.** See [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) for the full design.
 
 ---
 
@@ -10,17 +10,34 @@
 
 A coding-agent CLI is normally a stateful control loop that runs many turns autonomously while editing files — a poor fit for CodeRouter's "one request = one transformation" ethos. `agent_cli` reconciles the two by collapsing the CLI into a **one-shot `exec`** (prompt in → final answer text out). Orchestration (multi-turn control, tool execution) stays entirely inside the agent CLI process; from CodeRouter's side it looks like just another provider that answers a single exchange.
 
-- **Supported CLIs**: the `agent` field can declare `claude` / `codex` / `gemini` / `grok`.
-- **Implementation status (as of v2.7.9)**: **`claude` (Claude Code CLI, Phase 1a), `codex` (OpenAI Codex CLI, Phase 1b), and `grok` (Grok CLI, Phase 1d) are implemented**. Only `gemini` can be written into `providers.yaml` at the schema level, but constructing the adapter always rejects it (Phase 1c is not yet implemented). The error message looks roughly like the following (the exact wording may differ between versions):
+- **Supported CLIs**: the `agent` field can declare `claude` / `codex` / `antigravity` / `grok`. `gemini` also remains in the schema's `Literal`, but it is always rejected (see below).
+- **Implementation status (as of v2.7.10)**: **Phase 1 is complete — `claude` (Claude Code CLI, Phase 1a), `codex` (OpenAI Codex CLI, Phase 1b), `antigravity` (Google Antigravity CLI, Phase 1c), and `grok` (Grok CLI, Phase 1d) are all implemented**. `gemini` fell out of scope because Google discontinued the Gemini CLI for individual accounts in June 2026; constructing the adapter with it always raises a dedicated migration error:
 
   ```
-  AdapterError: agent 'gemini' is not implemented yet (implemented: claude, codex, grok).
-  Wait for the agent's phase (1c).
+  AdapterError: Google discontinued Gemini CLI for individual accounts (June 2026).
+  Use agent='antigravity' instead.
   ```
 
-  This rejection is `retryable=False` — even if other providers exist in the fallback chain, it stops immediately as a configuration error.
+  This rejection is `retryable=False` — even if other providers exist in the fallback chain, it stops immediately as a configuration error. See [Gemini's discontinuation and the move to antigravity](#geminis-discontinuation-and-the-move-to-antigravity) for the full story.
 
-- The shared parts of this document (authentication design, configuration reference, limitations) are written against the `claude` target; codex- and grok-specific behavior are collected in the [codex (OpenAI Codex CLI)](#codex-openai-codex-cli) and [grok (Grok CLI)](#grok-grok-cli) sections, respectively. Example configs for `gemini` exist only as a commented-out preview at the bottom of `examples/providers-agent-cli.yaml` and do not work.
+- The shared parts of this document (authentication design, configuration reference, limitations) are written against the `claude` target; codex-, antigravity-, and grok-specific behavior are collected in the [codex (OpenAI Codex CLI)](#codex-openai-codex-cli), [antigravity (Google Antigravity CLI)](#antigravity-google-antigravity-cli), and [grok (Grok CLI)](#grok-grok-cli) sections, respectively.
+
+### Gemini's discontinuation and the move to antigravity
+
+The legacy Gemini CLI (`@google/gemini-cli` 0.50.x) has had individual-account OAuth **discontinued as of 2026-06-18** (per Google's official blog). On real hardware this now fails with:
+
+```
+IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals.
+To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google
+```
+
+(`reasonCode: UNSUPPORTED_CLIENT`, `tierId: free-tier`)
+
+The legacy gemini CLI was also hit during this adapter's field verification by its trusted-directory gate returning **exit 55** (requiring `--skip-trust` or `GEMINI_CLI_TRUST_WORKSPACE=true`) — a pre-existing constraint unrelated to the individual-account discontinuation.
+
+Google's stated successor is the **Antigravity CLI** (command name `agy`). It is not a fork of gemini-cli but a separate Go rewrite, and it is where individual Google-account OAuth (including the free tier) lives on. In response, CodeRouter implemented the originally-planned Phase 1c (`agent: "gemini"`) as **`agent: "antigravity"`** instead (v2.7.10).
+
+`agent: "gemini"` remains in the schema's `Literal`, but constructing the adapter rejects it with the migration message shown above. Configs that used `gemini` should switch to `agent: antigravity` — see the [antigravity (Google Antigravity CLI)](#antigravity-google-antigravity-cli) section for a working example.
 
 ---
 
@@ -96,14 +113,14 @@ All fields of the `agent_cli:` sub-config (`AgentCliConfig`) in `providers.yaml`
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `agent` | `"claude" \| "codex" \| "gemini" \| "grok"` | (required) | Which CLI to invoke. **As of v2.7.9, `claude`, `codex`, and `grok` are implemented; `gemini` is rejected when the adapter is constructed** |
-| `command` | `str \| null` | `null` (defaults to the same name as `agent`) | CLI executable name or absolute path, resolved via `PATH` |
+| `agent` | `"claude" \| "codex" \| "antigravity" \| "gemini" \| "grok"` | (required) | Which CLI to invoke. **As of v2.7.10, `claude`, `codex`, `antigravity`, and `grok` are all implemented (Phase 1 complete); `gemini` remains in the schema but is rejected when the adapter is constructed** |
+| `command` | `str \| null` | `null` (defaults to the same name as `agent`) | CLI executable name or absolute path, resolved via `PATH`. **`agent: antigravity` is the sole exception, defaulting to `agy`** (the binary name differs from the product name) |
 | `workdir` | `str \| null` | `null` (defaults to `~/.coderouter/agents/<provider name>`) | Working directory for the one-shot exec. `~` / env-var expansion is applied; a path containing `..` is rejected |
-| `exec_timeout_s` | `float` | `600.0` (range `1.0`–`1800.0`) | Forced timeout (seconds) for the whole exec. **Separate** from `ProviderConfig.timeout_s` (the latter is not used by agent_cli) |
+| `exec_timeout_s` | `float` | `600.0` (range `1.0`–`1800.0`) | Forced timeout (seconds) for the whole exec. **Separate** from `ProviderConfig.timeout_s` (the latter is not used by agent_cli). For antigravity this value also generates `--print-timeout` (see below) |
 | `allow_file_writes` | `bool` | `false` | Whether to allow file writes. When `false`, the effective mode is clamped to read-only regardless of `sandbox_mode` |
-| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | Maps to each CLI's sandbox/approval flags (claude: [table below](#sandbox_mode--permission-mode-mapping-claude); codex: [codex section](#sandbox_mode--codex-flag-mapping); grok: [grok section](#sandbox_mode--grok-flag-mapping)) |
-| `model` | `str \| null` | `null` (defaults to `ProviderConfig.model`) | Model name passed to the CLI's `--model` / `-m` (claude: `opus` / `sonnet` / `haiku` / `fable` etc.; codex: `gpt-5.5` etc.; grok: `grok-4.5` etc.) |
-| `max_turns` | `int \| null` | `8` (range `1`–`50`) | Turn cap inside the CLI. Passed as `--max-turns`. **codex has no corresponding CLI flag, so this is always ignored** (for codex, `exec_timeout_s` + process-group kill is the only time bound) |
+| `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | Maps to each CLI's sandbox/approval flags (claude: [table below](#sandbox_mode--permission-mode-mapping-claude); codex: [codex section](#sandbox_mode--codex-flag-mapping); antigravity: [antigravity section](#sandbox_mode--antigravity-flag-mapping); grok: [grok section](#sandbox_mode--grok-flag-mapping)) |
+| `model` | `str \| null` | `null` (defaults to `ProviderConfig.model`) | Model name passed to the CLI's `--model` / `-m` (claude: `opus` / `sonnet` / `haiku` / `fable` etc.; codex: `gpt-5.5` etc.; antigravity: a **display-string** like `"Gemini 3.5 Flash (Low)"`; grok: `grok-4.5` etc.) |
+| `max_turns` | `int \| null` | `8` (range `1`–`50`) | Turn cap inside the CLI. Passed as `--max-turns`. **codex and antigravity have no corresponding CLI flag, so this is always ignored for both** (for those two, `exec_timeout_s` + process-group kill is the only time bound; antigravity additionally has its own `--print-timeout`) |
 | `passthrough_env` | `list[str]` | `[]` | Allowlist of environment variable names forwarded from the parent process into the child. `ANTHROPIC_API_KEY` is not forwarded unless listed here |
 | `agent_depth_limit` | `int` | `2` (range `1`–`4`) | Recursion nesting cap. When `CODEROUTER_AGENT_DEPTH` reaches or exceeds this, the call stops immediately with `AdapterError(retryable=False)` |
 
@@ -221,6 +238,109 @@ The codex CLI is pre-1.0 and releases nearly daily. `--json`'s alias is still `-
 
 ---
 
+## antigravity (Google Antigravity CLI)
+
+v2.7.10 (Phase 1c) implements `agent: antigravity`, which completes **Phase 1 (claude, codex, antigravity, and grok — all four backends)**. This target replaces the originally-planned `gemini`, since Google discontinued that CLI for individual accounts — see [Gemini's discontinuation and the move to antigravity](#geminis-discontinuation-and-the-move-to-antigravity) for the story. Its distinguishing behaviors: the prompt rides on **argv** (unlike claude/codex's stdin or grok's `--prompt-file`), output is plain text (usage is always zero), and it's the only agent_cli target with its own CLI-side timeout. Everything below is based on agy **1.1.1** (field-verified on the author's Mac, 2026-07-11).
+
+### Example configuration
+
+```yaml
+providers:
+  - name: agent-antigravity
+    kind: agent_cli
+    model: "Gemini 3.5 Flash (Low)"   # a display string, not an API ID (see below)
+    paid: false                       # Google-account OAuth (including free tier) = zero metered cost
+    capabilities:
+      streaming: false
+      tools: false
+    agent_cli:
+      agent: antigravity
+      # command may be omitted (defaults to "agy" — the binary name differs from the product name)
+      workdir: ~/.coderouter/agents/antigravity
+      exec_timeout_s: 600
+      allow_file_writes: false
+      sandbox_mode: read_only
+      passthrough_env: []             # OAuth reads the OS keyring + ~/.gemini/antigravity-cli/ via
+                                       # inherited HOME (and USER on macOS), so empty is fine.
+                                       # API-key env is UNCONFIRMED (see below)
+```
+
+### The argv the adapter builds
+
+With `sandbox_mode: read_only` (the default), the adapter builds the following argv.
+
+```
+agy -p <prompt> --model "Gemini 3.5 Flash (Low)" --mode plan --print-timeout 600s
+```
+
+### The prompt is delivered via argv (unlike claude/codex's stdin or grok's `--prompt-file`)
+
+Prompt delivery splits into three patterns across the four backends.
+
+| agent | Delivery mechanism | Notes |
+|---|---|---|
+| claude | stdin | `-p` reads stdin when the argument is omitted |
+| codex | stdin (with an explicit trailing `-` on argv) | Same channel as claude |
+| grok | `--prompt-file` (a mode-`0600` temp file inside the isolated workdir) | Neither argv nor stdin is accepted |
+| antigravity | argv value (`-p <prompt>`) | stdin is not accepted; there's no `--prompt-file` equivalent either |
+
+agy's `-p` / `--print` / `--prompt` requires a value on argv — there is no stdin channel for the prompt, and no `--prompt-file`-equivalent flag either. So the prompt has to ride on argv, which carries Linux's `MAX_ARG_STRLEN` (~128KiB) size cap and exposes the full prompt text to `ps` as known limitations (documented here since there's no alternative with agy's current flag surface). The argv is passed as a list (never `shell=True`), so it doesn't go through shell interpretation.
+
+### Piping stdin causes a hang — a caveat for anyone scripting `agy` directly
+
+The adapter itself never writes to stdin and closes it immediately (`communicate(input=None)`, field-verified to work correctly via `</dev/null`), so this is a non-issue through CodeRouter. However, **piping anything into agy's stdin makes it hang** (field-verified: `printf '...' | agy -p "..."` sits waiting and eventually reports `Error: timeout waiting for response`). agy has no facility for reading stdin as context. If you script `agy` directly, always leave stdin empty (e.g. `</dev/null`).
+
+### `sandbox_mode` → antigravity flag mapping
+
+As with claude/codex/grok, when `allow_file_writes=false` the effective mode is clamped to `read_only` regardless of `sandbox_mode`.
+
+| `sandbox_mode` | agy flags | Notes |
+|---|---|---|
+| `read_only` (default) | `--mode plan` | No file changes. Always clamped to this mode when `allow_file_writes=false` |
+| `edit` | `--mode accept-edits` | Auto-approves file edits |
+| `full_auto` | `--mode accept-edits --dangerously-skip-permissions` | Auto-approves all tool execution (agy's `--help` only enumerates `accept-edits`/`plan` as mode values; full_auto is expressed by adding `--dangerously-skip-permissions`) |
+
+### Plain-text output and always-zero usage
+
+agy has **no `--output-format`-style flag at all** — output is plain text only. The adapter decodes stdout as UTF-8, defensively strips ANSI escapes (regex), and trims whitespace to produce the final answer; an empty result raises a retryable `AdapterError`. With no JSON output, token usage, session id, and structured errors are all unavailable — usage is reported as **always zero**, same as grok (`coderouter_cost_usd` stays 0 unless the operator sets unit prices in `ProviderConfig.cost`). No session id is ever surfaced in response metadata.
+
+### `--print-timeout` — the first agent with its own CLI-side timeout
+
+agy has a `--print-timeout <Go duration>` flag (default `5m0s`) that bounds how long print mode itself will wait. claude/codex/grok have no CLI-side timeout of this kind. The adapter generates `--print-timeout` from `AgentCliConfig.exec_timeout_s` (e.g. `exec_timeout_s=600` → `--print-timeout 600s`), giving the CLI a first wall to self-terminate against. This is on top of the existing outer `asyncio.wait_for` + process-group `SIGKILL` second wall, making antigravity the only agent with a **double timeout wall**.
+
+### `max_turns` is ignored
+
+agy has no `--max-turns`-equivalent flag. `AgentCliConfig.max_turns` always has no effect for antigravity (same as codex), and the time bound is carried entirely by the `--print-timeout` + `exec_timeout_s` double wall.
+
+### Authentication (Google-account OAuth, free tier included)
+
+agy supports Google-account OAuth, including the free tier. Credentials are stored primarily in the OS keyring, with `~/.gemini/antigravity-cli/` (`credentials.enc` / `settings.json`) as well. The adapter's `HOME` inheritance (plus `USER` on macOS) lets it run headless with `passthrough_env: []` (handled by the existing `_build_child_env()`). Setup steps:
+
+1. Run `agy` for the first time; it opens a browser for Google-account login. Complete it.
+2. Run `agy models` and smoke-check that the model list comes back.
+
+API-key-based authentication (the environment variable name) has conflicting reports (`ANTIGRAVITY_API_KEY` is claimed by some, and others claim `GEMINI_API_KEY` is ignored) and is **UNCONFIRMED**. This document does not assert either way.
+
+### Model names are display strings — Claude models are reachable through agy
+
+The value passed to `--model` isn't an API ID — it's a **display string** returned by `agy models`. Verified output from a real install (agy 1.1.1):
+
+```
+Gemini 3.5 Flash (Medium/High/Low)
+Gemini 3.1 Pro (Low/High)
+Claude Sonnet 4.6 (Thinking)
+Claude Opus 4.6 (Thinking)
+GPT-OSS 120B (Medium)
+```
+
+Interestingly, agy can reach non-Google models this way — including Claude Opus 4.6. Write one of these display strings verbatim (spaces, parentheses and all) into `providers.yaml`'s `model` field.
+
+### Early-days-product caveat
+
+The Antigravity CLI is a brand-new product. Its flag surface and model list are likely to keep changing, so **version pinning is recommended** (point `command` at a pinned binary's full path). Because output is plain text, JSON-schema-churn-style parsing accidents are less likely, but unexpected empty responses or nonzero exit codes are handled defensively and become a retryable `AdapterError`, demoting to the next provider in the fallback chain.
+
+---
+
 ## grok (Grok CLI)
 
 v2.7.8 (Phase 1d) implements `agent: grok`. It uses the same one-shot exec scheme as claude, but grok has its own behavior around prompt delivery, cross-session memory disabling, and usage reporting. Everything below is based on grok CLI **v0.2.93** ([stable] channel, field-verified on 2026-07-10).
@@ -322,7 +442,9 @@ The grok CLI is early beta (v0.2.93 [stable] channel as of 2026-07-10). Its JSON
 | Fails with `grok exited 1: ...` | The grok CLI exits with code 1 on auth/network/runtime errors, with the error text on stderr | The adapter includes a tail of stderr in the `AdapterError`, so use the message shown as your lead. For auth errors, re-run `grok login` and smoke-check that `grok models` works |
 | Fails with `codex exited 1: ...` (suspect stale OAuth) | codex's OAuth token goes stale after about 8 days. It auto-refreshes on use, but a long gap between calls can leave it stale and failing | Check login state with `codex login status` and re-run `codex login` if needed. Running codex occasionally helps avoid staleness |
 | `Not inside a trusted directory and --skip-git-repo-check was not specified.` appears | This should never happen — the adapter always passes `--skip-git-repo-check` | If you see this, it likely indicates a bug in CodeRouter's argv construction. Check your version and file an issue if it reproduces |
-| CLI fails to launch (`failed to launch ...`) | `command` (defaults to the same name as `agent`) isn't on `PATH` | Confirm `claude --version` / `codex --version` / `grok --version` works. You can also point `command` at a full path |
+| `agent: gemini` raises an `AdapterError` / you see `IneligibleTierError` | Google discontinued the Gemini CLI for individual accounts in June 2026 (field-verified: `IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals...`) | Switch to `agent: antigravity`. See the [antigravity (Google Antigravity CLI)](#antigravity-google-antigravity-cli) section for a working example |
+| `agy` hangs and never responds | Something is being piped into agy's stdin (e.g. `printf '...' \| agy -p "..."`) | Don't pipe stdin — write nothing and redirect from `</dev/null`. Calls made through CodeRouter already do this (the adapter closes stdin immediately) |
+| CLI fails to launch (`failed to launch ...`) | `command` (defaults to the same name as `agent`, except antigravity which defaults to `agy`) isn't on `PATH` | Confirm `claude --version` / `codex --version` / `agy --version` / `grok --version` works. You can also point `command` at a full path |
 
 ---
 
