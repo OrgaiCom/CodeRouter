@@ -11,7 +11,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ## [v2.9.0] — 2026-07-11 (agent_cli extraction Phase 2c — in-core adapter removed)
 
-**BREAKING.** Phase 2c of the agent_cli plugin extraction
+**PR #73**. **BREAKING.** Phase 2c of the agent_cli plugin extraction
 (`docs/designs/agent-cli-plugin-extraction.md` §5/§7): the in-core
 `agent_cli` adapter branch is **removed** from `coderouter/adapters/registry.py`.
 `kind: agent_cli` now resolves exclusively through the external plugin
