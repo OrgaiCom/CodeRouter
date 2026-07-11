@@ -9,9 +9,56 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.8.0] — 2026-07-11 (Plugin SDK: Adapter hook wired — Phase 2a of the agent_cli extraction)
+
+Opens the Plugin SDK's Adapter surface: the previously dead-end `Adapter`
+Protocol (name-only) is now a real engine-integrated hook, so an external
+plugin package can provide new `kind` values for providers.yaml without
+touching Core. This is Phase 2a of the agent_cli plugin-extraction design
+(`docs/designs/agent-cli-plugin-extraction.md`): hook wiring only — the
+in-core `agent_cli` adapter is unchanged and keeps working exactly as in
+v2.7.10; the actual move into `coderouter-plugin-agents` is Phase 2b/2c.
+
+### Added
+
+- **`Adapter` plugin Protocol** (`coderouter/plugins/base.py`) — `kind: str`
+  plus synchronous `build(config: ProviderConfig) -> BaseAdapter`. A factory
+  shape (kind → adapter), unlike the per-request hooks: construction happens
+  once at startup and does no I/O. The `adapter` entry-point group
+  (`coderouter.adapter`, singular — matching the loader's group mechanics)
+  moved from the future list into the active groups; the existing two-stage
+  gate (installed + listed in `plugins.enabled`) applies as-is.
+- **`build_adapter` plugin resolution** (`coderouter/adapters/registry.py`)
+  — resolution order is in-core kinds first (`openai_compat` / `anthropic` /
+  `agent_cli`; a plugin can never shadow them), then plugin-provided kinds,
+  then a `ValueError` listing every known kind plus an install/enable hint.
+  Both engine call sites (startup adapter cache + runtime
+  `register_provider`) pass the plugin registry.
+- **Tests** (`tests/test_plugin_adapter.py`, new, 10) — plugin-kind
+  resolution, in-core shadowing prevention, unknown-kind error contents,
+  two-stage gate via the real entry-point loader path, runtime
+  `register_provider` with a plugin kind, and an E2E request through
+  `POST /v1/chat/completions` served by a plugin-provided adapter.
+
+### Changed
+
+- **`ProviderConfig.kind`: `Literal[...]` → `str`** (`config/schemas.py`) —
+  plugin kinds cannot be known at config-load time (plugins are discovered
+  after the config is parsed), so the closed Literal had to open. Fail-fast
+  for a typo'd kind moves one step later but stays at startup: the engine
+  builds adapters for **all** providers eagerly in its constructor, so an
+  unknown kind still aborts `serve` at load with a message that now lists
+  in-core and plugin kinds (strictly more helpful than the old pydantic
+  error). Recorded as a design deviation in
+  `agent-cli-plugin-extraction.md` §8.1, including the residual limitation
+  that `doctor` (HTTP-probe based) does not surface typo'd kinds.
+- Plugin-group bookkeeping: `adapter` no longer warns as
+  "plugin-group-not-yet-active"; `PluginRegistry` gained an `adapters`
+  view alongside `input_filters` / `observers`.
+
 ## [v2.7.10] — 2026-07-11 (agent_cli Phase 1c: antigravity — Phase 1 complete)
 
-**PR #70**. Completes agent_cli Phase 1: `agent: antigravity` (the Google Antigravity
+Completes agent_cli Phase 1: `agent: antigravity` (the Google Antigravity
 CLI, command `agy`) is now implemented, joining `claude` (1a), `codex`
 (1b), and `grok` (1d) — all four Phase 1 backends are now in place. This
 target replaces the originally-planned `gemini`: on the author's Mac, the
