@@ -9,6 +9,29 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.9.2] — 2026-07-12 (config: no more dummy provider for swap-only setups)
+
+### Changed
+
+- **`providers` / `profiles` no longer require a dummy entry for swap-only
+  deployments.** Both top-level lists were `min_length=1` (or effectively
+  required), forcing an unreachable placeholder provider/profile (e.g.
+  `base_url: http://127.0.0.1:9`) into any config that only serves models
+  through `launcher.swap`. They are now optional (`providers: []` /
+  `profiles: []`, or omitted entirely) whenever `launcher.swap.enabled: true`
+  and `launcher.swap.models` has at least one entry — the injected
+  `launcher-swap-<name>` profile(s) already cover routing, and their
+  providers are registered at runtime on first on-demand spawn. Every other
+  deployment shape keeps the original fail-fast-at-load guarantee (now
+  enforced by `CodeRouterConfig._check_providers_and_profiles_nonempty`
+  rather than the field-level `min_length=1` it replaces), with an error
+  message pointing at the swap-only exemption. See
+  `tests/test_launcher_swap.py`
+  (`test_swap_only_config_loads_with_omitted_providers_and_profiles` and
+  neighbors) for the minimal swap-only config shape.
+
+---
+
 ## [v2.9.1] — 2026-07-12 (launcher model swap Phase 1 — llama-swap-style on-demand models)
 
 **New: `launcher.swap`** — an opt-in, dependency-free equivalent of
