@@ -9,6 +9,90 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.9.3] — 2026-07-12 (GUI/Web parity, swap polish, launcher UI fixes)
+
+### Added
+
+- **Per-model TTL override for `launcher.swap`.** `SwapModelSpec.ttl_seconds`
+  (new, optional, `None` by default) lets a catalog entry override the
+  global `launcher.swap.ttl_seconds` for just that one model — `None`
+  keeps following the global value, `0` unloads the model as soon as
+  its last in-flight lease releases (same meaning as the global field's
+  `0`, just scoped to one entry). `SwapManager.sweep_once` now resolves
+  each model's effective TTL individually, and the sweeper starts
+  whenever either the global TTL or at least one catalog entry's
+  override is set (previously gated solely on the global value). See
+  `tests/test_launcher_swap.py` (`test_ttl_override_spec_wins_over_global`,
+  `test_ttl_override_unset_falls_back_to_global`,
+  `test_ttl_override_zero_unloads_even_when_global_ttl_disabled`) and the
+  updated `launcher.swap` field table in `docs/backends/launcher.md` /
+  `launcher.en.md`.
+- **Configurable ephemeral-port retry count for `launcher.swap`.**
+  `LauncherSwapConfig.port_retry_attempts` (new, default `2`, range
+  0–5) replaces the previously hard-coded single retry for catalog
+  entries that leave `port` unset — the swap manager now attempts up
+  to `1 + port_retry_attempts` spawns (each on a freshly picked
+  ephemeral port) before giving up, versus the previous fixed 2 total
+  attempts. Fixed-port entries are unaffected (still exactly one
+  attempt — a second try on the same port would just collide again).
+  This narrows the practical impact of the known pick-then-bind TOCTOU
+  window documented on `SwapModelSpec.port` / `_pick_ephemeral_port`
+  but does not close it outright; a fixed `port` remains the only way
+  to eliminate the race entirely. See
+  `tests/test_launcher_swap.py`
+  (`test_port_none_retries_default_port_retry_attempts`,
+  `test_port_retry_attempts_exhausted_raises`,
+  `test_port_retry_attempts_configurable_to_zero`).
+- **`/launcher` UI now shows which processes are swap-managed.**
+  `GET /api/launcher/processes` includes `swap_managed` (bool) and
+  `swap_model` (the swap catalog model name, or `null`) for every
+  process; `spawn_process` gained a `swap_model` kwarg that
+  `SwapManager._spawn` now passes through. The process table renders a
+  small "swap" badge next to the name of any swap-managed process
+  (title shows the backing catalog model when known). Manually-started
+  processes are unaffected (`swap_managed: false`, `swap_model: null`).
+  See `tests/test_launcher_swap.py::test_i1_on_demand_spawn_reaches_200`.
+
+### Fixed
+
+- **Swap-managed "stopped" processes no longer accumulate in the launcher
+  registry.** `stop_process` only sets `status="stopped"` and never
+  removes the entry — deliberate for manually started processes (the
+  stopped row is visible history in the /launcher UI, with logs and an
+  explicit ✕ delete button), but swap-managed processes went through the
+  same path, so every failed readiness attempt left one permanent
+  "stopped" row (`1 + port_retry_attempts` rows per failed load — 3 with
+  the defaults) and every TTL unload left another, all growing
+  `GET /api/launcher/processes` and the UI without bound. `SwapManager`
+  now removes its own processes from the registry after stopping them,
+  in both the failed-readiness cleanup (`_spawn_with_retry`) and the TTL
+  unload (`_unload_locked`), guarded on `ManagedProcess.swap_managed` so
+  a manual process is never swept up. Crash leftovers (a swap process
+  that died on its own) are deliberately kept — their log tail is the
+  only crash forensics an operator has. See `tests/test_launcher_swap.py`
+  (`test_failed_load_leaves_no_registry_litter`,
+  `test_ttl_unload_removes_registry_entry`,
+  `test_registry_removal_skips_non_swap_processes`; adapted from the
+  review repro with its assertions inverted).
+- **/launcher UI no longer 404-polls a removed process's logs forever.**
+  The log panel's poller (`poll()` → `refreshLogs()`, every 3s) never
+  checked the response status: once the polled id left the registry —
+  a `coderouter serve` restart under a still-open browser tab, a delete
+  issued from another client, or (with the fix above) a swap TTL unload
+  removing the entry mid-view — the 404 body has no `.logs`, the
+  resulting TypeError landed in the generic catch, and `selectedLogId`
+  was never cleared, so the tab kept hitting
+  `GET /api/launcher/logs/<stale-id>` and spamming `404 Not Found` into
+  the serve log indefinitely. The UI now stops polling as soon as the
+  selected id disappears from the periodic `/api/launcher/processes`
+  refresh (usually before a single 404 is even issued), treats a logs
+  404 as terminal (shows "(process removed)" instead of retrying), and
+  the server keeps answering 404 for unknown ids — that behavior is
+  correct and now pinned by
+  `tests/test_launcher_swap.py::test_logs_unknown_proc_id_is_404`.
+
+---
+
 ## [v2.9.2] — 2026-07-12 (config: no more dummy provider for swap-only setups)
 
 ### Changed
