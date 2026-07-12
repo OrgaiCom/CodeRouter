@@ -276,14 +276,16 @@ Ollama など常用の backend と併用する、より実運用寄りの設定�
 | フィールド | 型 | 既定値 | 説明 |
 |---|---|---|---|
 | `enabled` | bool | `false` | オンデマンドスワップを有効化。`false` ならこれまで通り手動起動のみ(既存デプロイに影響なし) |
-| `ttl_seconds` | float \| null | `1800.0` | 進行中リクエストが無い状態がこの秒数続くとプロセスを自動停止。`null` = 無効(明示停止まで起動し続ける)、`0` = 最後のリクエスト完了で即アンロード。Phase 1 はグローバル1値のみ(モデル毎の上書きは未対応) |
+| `ttl_seconds` | float \| null | `1800.0` | 進行中リクエストが無い状態がこの秒数続くとプロセスを自動停止。`null` = 無効(明示停止まで起動し続ける)、`0` = 最後のリクエスト完了で即アンロード。全モデル共通のグローバル既定値 — `models[].ttl_seconds` で個別上書き可能([Unreleased]) |
 | `readiness_timeout_s` | float | `120.0`(1〜1800) | オンデマンド起動したモデルの準備完了を**リクエスト側が待つ**上限秒数。超えると dispatch フックが retryable な `AdapterError` を送出する。**下記の `launcher.readiness_timeout_s`(既定 300s)とは別物** — こちらは「1リクエストが待つ上限」、あちらは「プロセスの readiness 監視全般の上限」 |
 | `sweep_interval_s` | float | `15.0`(1〜600) | TTL 監視(sweeper)がアイドルプロセスを走査する間隔 |
+| `port_retry_attempts` | int | `2`(0〜5) | [Unreleased] `models[].port` が未指定のカタログエントリに対する、起動失敗時の追加リトライ回数(毎回新しいエフェメラルポートを取り直す)。`0` ならリトライなし。固定ポート指定時は無関係(常に1回のみ)。TOCTOU窓自体は解消しない — 詳細は `models[].port` の説明を参照 |
 | `inject_auto_router_rules` | bool | `true` | カタログの各モデル名ごとに `auto_router` ルール(`id: swap:<name>`、`model_pattern` は名前の完全一致)を自動生成するか。`false` にした場合は `X-CodeRouter-Profile` ヘッダ等で自分でルーティングを配線する |
 | `models[].name` | str(必須) | — | リクエストの `model` フィールドと照合される論理名。provider 名・専用プロファイル名は自動的に `launcher-swap-<name>` になる |
 | `models[].backend` | `"llama.cpp" \| "vllm" \| "mlx"`(必須) | — | 手動 Launcher UI と同じバックエンド種別 |
 | `models[].model_path` | str(必須) | — | モデルファイルの絶対または `~` 相対パス。**必ず `launcher.model_dirs` の配下**である必要があり、設定ロード時と起動時の2回検証される(パストラバーサル対策) |
-| `models[].port` | int \| null | `null` | 固定ポート推奨。省略時は OS 割当のエフェメラルポートを使い、起動失敗時に別ポートで1回だけリトライする(best-effort、強い TOCTOU 保証はない) |
+| `models[].port` | int \| null | `null` | 固定ポート推奨。省略時は OS 割当のエフェメラルポートを使い、起動失敗時に `launcher.swap.port_retry_attempts` 回まで(既定2回)別ポートでリトライする。best-effort — pick してから子プロセスが実際に bind するまでの間隙(TOCTOU)は解消されない。強い保証が要る場合は固定ポートを使うこと |
+| `models[].ttl_seconds` | float \| null | `null` | [Unreleased] このモデルだけの TTL 上書き。`null`(既定) = グローバルの `launcher.swap.ttl_seconds` に従う。`0` を指定するとグローバルの `0` と同じ意味(最後のリース解放で即アンロード)がこのモデルにだけ適用される |
 | `models[].option_profile` | str \| null | `null` | `launcher.option_profiles[backend]` の既存プリセット名。存在しない名前を指定すると設定ロード時にエラーになる |
 | `models[].num_ctx` | int | `8192`(≥256) | KV 見積り・起動パラメータの基準値 |
 | `models[].extra_args` | str | `""` | 追加 CLI フラグ(1本の文字列。`shlex` でパース。モデル/draft モデルの再指定は不可) |

@@ -171,6 +171,13 @@ class ManagedProcess:
     #     under its per-model lock); a launcher auto-restart racing that
     #     re-spawn would fight over the same fixed port.
     swap_managed: bool = False
+    # [Unreleased]: the swap catalog model name (SwapModelSpec.name) this
+    # process backs, set by SwapManager._spawn via spawn_process's
+    # swap_model kwarg. None for a manually-started process (swap_managed
+    # is False) or if a future swap-managed spawn path omits it. Purely
+    # informational — surfaced by GET /api/launcher/processes so the
+    # /launcher UI can label which catalog entry a running process is.
+    swap_model: str | None = None
     # asyncio subprocess handle — not serialised
     _proc: Any = field(default=None, repr=False, compare=False)
 
@@ -1027,7 +1034,13 @@ async def api_launcher_config_debug(request: Request) -> dict[str, Any]:
 
 @router.get("/api/launcher/processes")
 async def api_processes(request: Request) -> dict[str, Any]:
-    """List all managed processes."""
+    """List all managed processes.
+
+    [Unreleased]: ``swap_managed`` / ``swap_model`` let the ``/launcher``
+    UI (and other API clients) tell an on-demand SwapManager-spawned
+    process apart from a manually-started one, and label which swap
+    catalog model it backs.
+    """
     reg = _registry(request)
     return {
         "processes": [
@@ -1040,6 +1053,8 @@ async def api_processes(request: Request) -> dict[str, Any]:
                 "status": p.status,
                 "pid": p.pid,
                 "returncode": p.returncode,
+                "swap_managed": p.swap_managed,
+                "swap_model": p.swap_model,
             }
             for p in reg.all()
         ]
@@ -1100,6 +1115,7 @@ async def spawn_process(
     draft_model_path: str | None = None,
     mtp_mode: str = "auto",
     swap_managed: bool = False,
+    swap_model: str | None = None,
 ) -> ManagedProcess:
     """Build argv, spawn the child process, and arm readiness/log tailing.
 
@@ -1116,6 +1132,12 @@ async def spawn_process(
     exist. Any other exception from ``create_subprocess_exec`` propagates
     as-is. Callers decide how to surface these (HTTP 400/500 for
     ``api_start``, a retryable ``AdapterError`` for SwapManager).
+
+    ``swap_model`` ([Unreleased]) is purely informational — the swap
+    catalog model name (``SwapModelSpec.name``), recorded on the
+    resulting ``ManagedProcess`` for ``GET /api/launcher/processes`` /
+    the ``/launcher`` UI. Only ``SwapManager._spawn`` passes it; the
+    manual ``POST /api/launcher/start`` path leaves it ``None``.
     """
     options = options if options is not None else {}
     configured_binary: str | None = None
@@ -1178,6 +1200,7 @@ async def spawn_process(
         spec_auto=spec_auto and fallback_cmd is not None,
         fallback_cmd=fallback_cmd,
         swap_managed=swap_managed,
+        swap_model=swap_model,
     )
     proc.log_tail.append(f"[launcher] cmd: {' '.join(cmd)}")
     for note in spec_notes:
@@ -1378,6 +1401,10 @@ _LAUNCHER_HTML = r"""<!doctype html>
   <style>
     .dot { width:.5rem;height:.5rem;border-radius:9999px;display:inline-block; }
     .tabnum { font-variant-numeric:tabular-nums; }
+    .badge-swap { font-size:10px; text-transform:uppercase; letter-spacing:.02em;
+                  background:rgba(99,102,241,.2); color:#a5b4fc; padding:1px 6px;
+                  border-radius:9999px; margin-left:6px; vertical-align:middle;
+                  white-space:nowrap; }
     .log-box { font-family:monospace;font-size:.75rem;line-height:1.4;
                overflow-y:auto;max-height:14rem;white-space:pre-wrap;word-break:break-all; }
     .model-row:hover { background:rgba(255,255,255,.04);cursor:pointer; }
@@ -1851,7 +1878,17 @@ _LAUNCHER_HTML = r"""<!doctype html>
     try {
       const r = await fetch("/api/launcher/processes");
       const d = await r.json();
-      renderProcesses(d.processes || []);
+      const procs = d.processes || [];
+      renderProcesses(procs);
+      // [Unreleased] 404-loop fix: if the process whose logs we're
+      // polling is no longer in the registry (deleted from another
+      // client, swap TTL unload removed it, or the server restarted
+      // under a still-open tab), stop the log polling BEFORE it even
+      // issues a 404 — otherwise poll() would hit
+      // /api/launcher/logs/<stale-id> every POLL_MS forever.
+      if (selectedLogId && !procs.some(p => p.id === selectedLogId)) {
+        markLogGone();
+      }
     } catch (_) {}
   };
 
@@ -1871,8 +1908,14 @@ _LAUNCHER_HTML = r"""<!doctype html>
         ? `<button onclick="deleteProc('${p.id}')" class="btn-sm btn-slate ml-1">✕</button>`
         : "";
       const logBtn = `<button onclick="openLog('${p.id}','${esc(p.name)}')" class="btn-sm btn-indigo ml-1">📋 ログ</button>`;
+      // [Unreleased]: swap badge — marks processes SwapManager spawned
+      // on demand, distinct from manually-started ones. Title shows the
+      // catalog model name when the backend supplied it.
+      const swapBadge = p.swap_managed
+        ? `<span class="badge-swap" title="${esc(p.swap_model ? "swap model: " + p.swap_model : "swap-managed")}">swap</span>`
+        : "";
       return `<tr>
-        <td class="py-2 pr-3 font-medium">${esc(p.name)}</td>
+        <td class="py-2 pr-3 font-medium">${esc(p.name)}${swapBadge}</td>
         <td class="py-2 pr-3 text-slate-400">${esc(p.backend)}</td>
         <td class="py-2 pr-3 text-slate-400 truncate max-w-[10rem]" title="${esc(p.model_path)}">${esc(modelName)}</td>
         <td class="py-2 pr-3 text-right">${p.port}</td>
@@ -1912,6 +1955,11 @@ _LAUNCHER_HTML = r"""<!doctype html>
     if (!selectedLogId) return;
     try {
       const r = await fetch(`/api/launcher/logs/${selectedLogId}?n=200`);
+      // [Unreleased] 404-loop fix: the id is gone from the registry —
+      // stop polling instead of retrying (and 404-spamming the serve
+      // log) every POLL_MS forever. The server keeps answering 404 for
+      // unknown ids (correct); the client just has to take the hint.
+      if (r.status === 404) { markLogGone(); return; }
       const d = await r.json();
       const box = document.getElementById("log-box");
       box.textContent = d.logs.join("\n") || "(ログなし)";
@@ -1919,6 +1967,15 @@ _LAUNCHER_HTML = r"""<!doctype html>
     } catch (e) {
       document.getElementById("log-box").textContent = "ログ取得失敗: " + e.message;
     }
+  };
+
+  // [Unreleased] 404-loop fix: the process we were tailing no longer
+  // exists server-side. Clear selectedLogId (which is what stops both
+  // poll()'s refreshLogs call and any manual ↻) but keep the panel open
+  // with a terminal message so the user sees WHY the logs stopped.
+  const markLogGone = () => {
+    selectedLogId = null;
+    document.getElementById("log-box").textContent = "(process removed)";
   };
 
   window.closeLog = () => {

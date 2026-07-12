@@ -1518,10 +1518,25 @@ class SwapModelSpec(BaseModel):
         le=65535,
         description=(
             "Fixed port (recommended — §10 Q2). When unset, the swap "
-            "manager picks an OS-assigned ephemeral port and retries "
-            "once on a different port if the backend fails to become "
-            "ready. Best-effort only — no strong TOCTOU guarantee "
-            "(§6.6 known-trap #4)."
+            "manager picks an OS-assigned ephemeral port and retries, "
+            "each time on a freshly picked port, up to "
+            "``LauncherSwapConfig.port_retry_attempts`` additional "
+            "times if the backend fails to become ready. Best-effort "
+            "only — no strong TOCTOU guarantee (§6.6 known-trap #4)."
+        ),
+    )
+    ttl_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "[Unreleased] Per-model override of "
+            "``LauncherSwapConfig.ttl_seconds``. ``None`` (default) = "
+            "use the global value. ``0`` = unload as soon as the last "
+            "in-flight lease for THIS model releases — same meaning as "
+            "the global field's ``0``, just scoped to one catalog "
+            "entry. Lets a large/expensive model unload sooner (or "
+            "stay resident longer) than the rest of the catalog "
+            "without changing the global default."
         ),
     )
     option_profile: str | None = Field(
@@ -1611,8 +1626,10 @@ class LauncherSwapConfig(BaseModel):
             "Seconds of no in-flight requests after which an idle swap "
             "process is auto-stopped. None = TTL disabled (runs until "
             "explicitly stopped). 0 = unload as soon as the last "
-            "in-flight lease releases. §10 Q1: one GLOBAL value for "
-            "Phase 1 — no per-model override yet."
+            "in-flight lease releases. §10 Q1: this is the GLOBAL "
+            "default; a catalog entry's ``SwapModelSpec.ttl_seconds`` "
+            "overrides it for that one model when set "
+            "([Unreleased] per-model TTL override)."
         ),
     )
     readiness_timeout_s: float = Field(
@@ -1630,6 +1647,24 @@ class LauncherSwapConfig(BaseModel):
         ge=1.0,
         le=600.0,
         description="How often the TTL sweeper background task scans for idle processes.",
+    )
+    port_retry_attempts: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description=(
+            "[Unreleased] Number of ADDITIONAL spawn attempts (each on a "
+            "freshly picked ephemeral port) after the first, used only "
+            "when a catalog entry's ``port`` is unset and the previous "
+            "attempt fails to become ready. 0 = no retry. Ignored when "
+            "``port`` is set — a fixed port never retries (a second "
+            "attempt would just collide on the same port again). This "
+            "does not close the pick-then-bind TOCTOU window (see "
+            "``coderouter.launcher_swap._pick_ephemeral_port``); it only "
+            "bounds how many times the swap manager re-rolls the dice. "
+            "A fixed ``port`` remains the recommended way to eliminate "
+            "the race entirely (§10 Q2)."
+        ),
     )
     inject_auto_router_rules: bool = Field(
         default=True,

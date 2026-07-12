@@ -110,10 +110,17 @@ class _FakeSpawner:
         draft_model_path: str | None = None,
         mtp_mode: str = "auto",
         swap_managed: bool = False,
+        swap_model: str | None = None,
     ) -> ManagedProcess:
         self._n += 1
         self.spawn_calls.append(
-            {"name": name, "port": port, "n": self._n, "swap_managed": swap_managed}
+            {
+                "name": name,
+                "port": port,
+                "n": self._n,
+                "swap_managed": swap_managed,
+                "swap_model": swap_model,
+            }
         )
         behavior = self._next_behavior()
         if behavior == "raise":
@@ -128,6 +135,7 @@ class _FakeSpawner:
             extra_args=extra_args,
             status="loading",
             swap_managed=swap_managed,
+            swap_model=swap_model,
         )
         _registry_for_app(app).add(proc)
         if behavior == "ok":
@@ -152,6 +160,7 @@ def _make_manager(
     *,
     ttl_seconds: float | None = None,
     readiness_timeout_s: float = 2.0,
+    port_retry_attempts: int | None = None,
     models: list[SwapModelSpec] | None = None,
 ) -> tuple[launcher_swap.SwapManager, _FakeSpawner, _FakeEngine]:
     fake = _FakeSpawner()
@@ -164,6 +173,11 @@ def _make_manager(
         ttl_seconds=ttl_seconds,
         readiness_timeout_s=readiness_timeout_s,
         sweep_interval_s=600.0,
+        **(
+            {}
+            if port_retry_attempts is None
+            else {"port_retry_attempts": port_retry_attempts}
+        ),
         models=models
         or [
             SwapModelSpec(
@@ -280,6 +294,104 @@ async def test_u6b_after_release_and_ttl_expiry_next_request_respawns(
     await manager.release_lease(lease2)
 
 
+# ---------------------------------------------------------------------------
+# [Unreleased]: per-model TTL override (SwapModelSpec.ttl_seconds)
+# ---------------------------------------------------------------------------
+
+
+async def test_ttl_override_spec_wins_over_global(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A catalog entry's own ``ttl_seconds`` takes priority over the global
+    value — here the global TTL is far too long to ever fire in this test,
+    but the per-model override of 0 makes the model unload immediately."""
+    manager, fake, _engine = _make_manager(
+        monkeypatch,
+        ttl_seconds=100000.0,
+        models=[
+            SwapModelSpec(
+                name="m1",
+                backend="llama.cpp",
+                model_path="/tmp/m1.gguf",
+                port=19300,
+                ttl_seconds=0.0,
+            )
+        ],
+    )
+    lease = await manager.ensure_loaded("m1")
+    await manager.release_lease(lease)
+
+    await manager.sweep_once()
+
+    assert manager._states["m1"].status == "idle"
+    assert len(fake.stop_calls) == 1
+
+
+async def test_ttl_override_unset_falls_back_to_global(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A catalog entry that leaves ``ttl_seconds`` unset (``None``, the
+    default) is governed by the global value, exactly as before this
+    feature existed."""
+    manager, fake, _engine = _make_manager(
+        monkeypatch,
+        ttl_seconds=0.0,
+        models=[
+            SwapModelSpec(
+                name="m1",
+                backend="llama.cpp",
+                model_path="/tmp/m1.gguf",
+                port=19300,
+                ttl_seconds=None,
+            )
+        ],
+    )
+    lease = await manager.ensure_loaded("m1")
+    await manager.release_lease(lease)
+
+    await manager.sweep_once()
+
+    assert manager._states["m1"].status == "idle"
+    assert len(fake.stop_calls) == 1
+
+
+async def test_ttl_override_zero_unloads_even_when_global_ttl_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``ttl_seconds: 0`` on a catalog entry means the exact same thing as
+    the global field's ``0`` (unload as soon as the last lease releases) —
+    scoped to just that model, and effective even when the global TTL is
+    disabled (``None``) entirely. Also proves the sweeper actually starts
+    in this case, since ``start()`` used to gate solely on the global
+    value being non-None."""
+    manager, fake, _engine = _make_manager(
+        monkeypatch,
+        ttl_seconds=None,
+        models=[
+            SwapModelSpec(
+                name="m1",
+                backend="llama.cpp",
+                model_path="/tmp/m1.gguf",
+                port=19300,
+                ttl_seconds=0.0,
+            )
+        ],
+    )
+    assert manager._any_ttl_configured is True
+    await manager.start()
+    try:
+        assert manager._sweeper_task is not None
+    finally:
+        await manager.stop()
+
+    lease = await manager.ensure_loaded("m1")
+    await manager.release_lease(lease)
+    await manager.sweep_once()
+
+    assert manager._states["m1"].status == "idle"
+    assert len(fake.stop_calls) == 1
+
+
 async def test_u7_lease_lifecycle_in_flight_counter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -323,10 +435,12 @@ async def test_ensure_loaded_unknown_model_raises_key_error(
         await manager.ensure_loaded("not-in-catalog")
 
 
-async def test_port_none_retries_once_on_readiness_failure(
+async def test_port_none_retries_default_port_retry_attempts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """§10 Q2: unset port -> one retry with a fresh ephemeral port."""
+    """§10 Q2 / [Unreleased] port_retry_attempts: default is 2 additional
+    retries (3 attempts total) when ``port`` is unset, each on a freshly
+    picked ephemeral port."""
     manager, fake, _engine = _make_manager(
         monkeypatch,
         readiness_timeout_s=1.0,
@@ -336,13 +450,56 @@ async def test_port_none_retries_once_on_readiness_failure(
             )
         ],
     )
-    fake.script = ["hang", "ok"]
+    assert manager._config.port_retry_attempts == 2  # documented default
+    fake.script = ["hang", "hang", "ok"]
     lease = await manager.ensure_loaded("m1")
     assert lease.model == "m1"
-    assert len(fake.spawn_calls) == 2
-    # Retried on a different port than the first (ephemeral) attempt.
-    assert fake.spawn_calls[0]["port"] != fake.spawn_calls[1]["port"]
+    assert len(fake.spawn_calls) == 3
+    # Every attempt picked a fresh ephemeral port.
+    ports = [c["port"] for c in fake.spawn_calls]
+    assert len(set(ports)) == 3
     await manager.release_lease(lease)
+
+
+async def test_port_retry_attempts_exhausted_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All 1 + port_retry_attempts attempts failing -> retryable AdapterError,
+    not an infinite loop or a silent extra attempt."""
+    manager, fake, _engine = _make_manager(
+        monkeypatch,
+        readiness_timeout_s=1.0,
+        models=[
+            SwapModelSpec(
+                name="m1", backend="llama.cpp", model_path="/tmp/m1.gguf", port=None
+            )
+        ],
+    )
+    fake.script = ["hang", "hang", "hang"]
+    with pytest.raises(AdapterError):
+        await manager.ensure_loaded("m1")
+    assert len(fake.spawn_calls) == 3  # 1 initial + 2 retries, then give up
+
+
+async def test_port_retry_attempts_configurable_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """port_retry_attempts=0 -> exactly one attempt, no retry (same shape
+    as a fixed port, but still ephemeral-port-per-attempt in principle)."""
+    manager, fake, _engine = _make_manager(
+        monkeypatch,
+        readiness_timeout_s=1.0,
+        port_retry_attempts=0,
+        models=[
+            SwapModelSpec(
+                name="m1", backend="llama.cpp", model_path="/tmp/m1.gguf", port=None
+            )
+        ],
+    )
+    fake.script = ["hang"]
+    with pytest.raises(AdapterError):
+        await manager.ensure_loaded("m1")
+    assert len(fake.spawn_calls) == 1
 
 
 async def test_fixed_port_never_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -351,6 +508,91 @@ async def test_fixed_port_never_retries(monkeypatch: pytest.MonkeyPatch) -> None
     with pytest.raises(AdapterError):
         await manager.ensure_loaded("m1")
     assert len(fake.spawn_calls) == 1  # fixed port: no second attempt
+
+
+# ---------------------------------------------------------------------------
+# [Unreleased]: registry-litter fix — swap-managed processes never pile up
+# as permanent "stopped" rows in the launcher registry.
+# (Adapted from the review repro /tmp/review93/test_registry_litter.py with
+# assertions inverted: the bug it demonstrated is now fixed.)
+# ---------------------------------------------------------------------------
+
+
+async def test_failed_load_leaves_no_registry_litter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A swap load whose readiness never passes must not leave any
+    "stopped" ManagedProcess in the registry — previously each failed
+    attempt left one forever (1 + port_retry_attempts rows per failed
+    load, all visible in GET /api/launcher/processes and the UI)."""
+    from coderouter.ingress.launcher_routes import _registry_for_app
+
+    for attempts in (0, 2, 5):
+        manager, fake, _engine = _make_manager(
+            monkeypatch,
+            readiness_timeout_s=1.0,
+            port_retry_attempts=attempts,
+            models=[
+                SwapModelSpec(
+                    name="m1", backend="llama.cpp", model_path="/tmp/m1.gguf", port=None
+                )
+            ],
+        )
+        fake.script = ["hang"] * (1 + attempts)
+        with pytest.raises(AdapterError):
+            await manager.ensure_loaded("m1")
+        assert len(fake.spawn_calls) == 1 + attempts  # all attempts made...
+        leftover = _registry_for_app(manager._app).all()
+        assert leftover == [], (
+            f"port_retry_attempts={attempts}: expected an empty registry, "
+            f"got {[(p.id, p.status) for p in leftover]}"
+        )
+
+
+async def test_ttl_unload_removes_registry_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TTL unload removes the swap-managed entry from the registry —
+    previously every load/unload cycle left one "stopped" row behind."""
+    from coderouter.ingress.launcher_routes import _registry_for_app
+
+    manager, fake, _engine = _make_manager(monkeypatch, ttl_seconds=0.0)
+    lease = await manager.ensure_loaded("m1")
+    reg = _registry_for_app(manager._app)
+    assert len(reg.all()) == 1  # loaded and visible
+    await manager.release_lease(lease)
+
+    await manager.sweep_once()
+
+    assert manager._states["m1"].status == "idle"
+    assert reg.all() == []  # ...and gone after the TTL unload
+    assert len(fake.stop_calls) == 1  # still went through stop_process
+
+
+async def test_registry_removal_skips_non_swap_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The swap_managed guard: _remove_from_registry never removes a
+    manually-started process, whose stopped row is deliberate UI history."""
+    manager, _fake, _engine = _make_manager(monkeypatch)
+    from coderouter.ingress.launcher_routes import _registry_for_app
+
+    reg = _registry_for_app(manager._app)
+    manual = ManagedProcess(
+        id="manual-1",
+        name="manual",
+        backend="llama.cpp",
+        model_path="/tmp/m.gguf",
+        port=18080,
+        options={},
+        extra_args="",
+        status="stopped",
+        swap_managed=False,
+    )
+    reg.add(manual)
+    manager._remove_from_registry("manual-1")
+    assert reg.get("manual-1") is manual  # untouched
+    manager._remove_from_registry("no-such-id")  # unknown id: no-op, no raise
 
 
 async def test_sweeper_start_stop_is_idempotent_and_cancellable(
@@ -821,6 +1063,12 @@ def test_i1_on_demand_spawn_reaches_200(
 
         procs = tc.get("/api/launcher/processes").json()["processes"]
         assert any(p["name"] == "launcher-swap-swap-model" for p in procs)
+        # [Unreleased]: GET /api/launcher/processes surfaces swap_managed /
+        # swap_model so the /launcher UI can badge on-demand-spawned
+        # processes and label which catalog model they back.
+        proc = next(p for p in procs if p["name"] == "launcher-swap-swap-model")
+        assert proc["swap_managed"] is True
+        assert proc["swap_model"] == "swap-model"
 
 
 def test_i2_non_swap_routing_bypasses_swap(
@@ -877,14 +1125,35 @@ def test_i3_streaming_survives_sweep_interval(
 
         # After the lease released, the (now idle) sweeper eventually
         # reclaims it — proves TTL=0 isn't permanently defeated either.
+        # [Unreleased] registry-litter fix: a TTL unload now REMOVES the
+        # swap-managed entry from the registry entirely (previously it
+        # lingered forever as a "stopped" row).
         def _unloaded() -> bool:
             procs = tc.get("/api/launcher/processes").json()["processes"]
             entry = next(
                 (p for p in procs if p["name"] == "launcher-swap-swap-model"), None
             )
-            return entry is not None and entry["status"] == "stopped"
+            return entry is None
 
         assert _poll(_unloaded, timeout=5.0)
+
+
+def test_logs_unknown_proc_id_is_404(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[Unreleased] pin: GET /api/launcher/logs/<unknown-id> answers 404.
+
+    The /launcher UI's 404-loop fix relies on exactly this response to
+    know a polled process left the registry (server restart under an
+    open tab, delete from another client, or a swap-managed entry
+    removed by the registry-litter fix) and stop polling it — the 404
+    itself is correct behavior and must stay.
+    """
+    script = _write_script(tmp_path / "swap-backend", _SWAP_BACKEND_BODY)
+    cfg = _swap_e2e_config(script, port=19325, ttl_seconds=None)
+    with _client_with_config(cfg, monkeypatch) as tc:
+        resp = tc.get("/api/launcher/logs/no-such-proc-id?n=200")
+        assert resp.status_code == 404, resp.text
 
 
 def test_i4_spawn_failure_falls_back_in_chain(

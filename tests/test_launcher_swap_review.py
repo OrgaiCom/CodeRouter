@@ -419,11 +419,13 @@ def test_h1_ttl_unload_leaves_no_generic_launcher_provider(
         # at spawn (ManagedProcess.swap_managed), not cleaned up later.
         assert not any(p.name == generic_name for p in engine.config.providers)
 
-        # Wait for TTL sweep to unload the swap process.
+        # Wait for TTL sweep to unload the swap process. [Unreleased]
+        # registry-litter fix: the unloaded entry is now removed from the
+        # registry entirely (previously it lingered as "stopped").
         def _unloaded() -> bool:
             procs = tc.get("/api/launcher/processes").json()["processes"]
             e = next((p for p in procs if p["name"] == "launcher-swap-swap-model"), None)
-            return e is not None and e["status"] == "stopped"
+            return e is None
         assert _poll(_unloaded)
 
         # After unload: swap provider deregistered, generic never existed,

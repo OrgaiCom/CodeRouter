@@ -85,9 +85,18 @@ class _ModelState:
 def _pick_ephemeral_port() -> int:
     """Ask the OS for a free port. Best-effort only (§6.6 known-trap #4):
 
-    there is an unavoidable TOCTOU window between this call returning
-    and the child actually binding the port. Fixed ``port:`` in the
-    catalog entry avoids the race entirely (§10 Q2, recommended).
+    there is an unavoidable TOCTOU window between this call's bind+close
+    returning a "free" port and the child actually binding that same
+    port a moment later — nothing stops another process (or another
+    concurrent swap spawn) from grabbing it first. Retrying on a fresh
+    port when the child fails to come up
+    (``LauncherSwapConfig.port_retry_attempts``, default 2 additional
+    attempts) narrows the *impact* of losing that race but does NOT
+    close the window itself — a genuinely race-free allocation would
+    need the OS to hand the child an already-bound socket fd, which the
+    current spawn path (argv ``--port N``) does not support. Fixed
+    ``port:`` in the catalog entry avoids the race entirely (§10 Q2,
+    recommended) and remains the only way to eliminate it outright.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -126,6 +135,13 @@ class SwapManager:
         self._readiness_timeout_s = config.readiness_timeout_s
         self._sweep_interval_s = config.sweep_interval_s
         self._sweeper_task: asyncio.Task[None] | None = None
+        # [Unreleased] per-model TTL override: the sweeper must run
+        # whenever EITHER the global TTL is enabled OR at least one
+        # catalog entry sets its own ``ttl_seconds`` (even if the global
+        # value is None/disabled) — see _effective_ttl / start().
+        self._any_ttl_configured = self._ttl_seconds is not None or any(
+            m.ttl_seconds is not None for m in config.models
+        )
 
     # ------------------------------------------------------------------
     # Catalog matching
@@ -214,24 +230,40 @@ class SwapManager:
         async with state.lock:
             await self._unload_locked(state, spec, reason)
 
+    def _effective_ttl(self, spec: SwapModelSpec) -> float | None:
+        """``spec.ttl_seconds`` if set, else the global ``self._ttl_seconds``.
+
+        [Unreleased] per-model TTL override (docs/backends/launcher.md
+        "launcher.swap fields" table). ``None`` at either level keeps
+        its usual meaning ("TTL disabled") — a spec-level override only
+        takes effect when it's not ``None``.
+        """
+        return spec.ttl_seconds if spec.ttl_seconds is not None else self._ttl_seconds
+
     async def sweep_once(self) -> None:
         """One TTL sweep pass: stop every idle, un-leased, expired model.
 
         Takes each model's own lock independently (never more than one
         per-model lock at a time — §6.6 known-trap #7) so a slow unload
-        for model A never delays the sweep of model B.
+        for model A never delays the sweep of model B. Each model's TTL
+        is resolved individually via :meth:`_effective_ttl` — a model
+        whose global TTL is disabled can still expire on its own
+        override, and vice versa.
         """
-        if self._ttl_seconds is None:
+        if not self._any_ttl_configured:
             return
         now = time.monotonic()
         for spec in list(self._catalog.values()):
+            ttl = self._effective_ttl(spec)
+            if ttl is None:
+                continue
             state = self._states.get(spec.name)
             if state is None:
                 continue
             async with state.lock:
                 if state.status != "ready" or state.in_flight > 0:
                     continue
-                if (now - state.last_used) < self._ttl_seconds:
+                if (now - state.last_used) < ttl:
                     continue
                 await self._unload_locked(state, spec, reason="ttl")
 
@@ -240,8 +272,14 @@ class SwapManager:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the TTL sweeper background task. No-op when TTL is disabled."""
-        if self._ttl_seconds is None or self._sweeper_task is not None:
+        """Start the TTL sweeper background task.
+
+        No-op when TTL is disabled both globally AND on every catalog
+        entry (``self._any_ttl_configured`` — [Unreleased] per-model
+        override means a per-model ``ttl_seconds`` alone is enough to
+        need the sweeper, even with the global TTL off).
+        """
+        if not self._any_ttl_configured or self._sweeper_task is not None:
             return
         self._sweeper_task = asyncio.create_task(self._sweeper_loop())
 
@@ -284,6 +322,35 @@ class SwapManager:
 
     def _engine(self) -> Any | None:
         return getattr(self._app.state, "engine", None)
+
+    def _remove_from_registry(self, proc_id: str) -> None:
+        """Drop a swap-managed ``ManagedProcess`` from the launcher registry.
+
+        [Unreleased] registry-litter fix: ``stop_process`` only sets
+        ``status="stopped"`` — it never removes the entry, because for
+        MANUALLY started processes the stopped row doubles as visible
+        history in the /launcher UI (with logs and an explicit ✕ delete
+        button). Swap-managed processes have no such contract: every
+        failed readiness attempt (times ``1 + port_retry_attempts``) and
+        every TTL unload would otherwise leave a permanent "stopped" row
+        accumulating unboundedly in ``GET /api/launcher/processes``. So
+        SwapManager removes ITS OWN processes right after it stops them,
+        guarded on ``swap_managed`` so a manual process can never be
+        swept up by mistake. Crash leftovers (a swap process that died
+        on its own, status "error"/"stopped" without SwapManager
+        stopping it) are deliberately NOT removed here — their log tail
+        is the only crash forensics an operator has; the ✕ button still
+        applies.
+        """
+        reg = _registry_for_app(self._app)
+        try:
+            proc = reg.get(proc_id)
+        except KeyError:
+            return
+        if not proc.swap_managed:
+            return
+        with contextlib.suppress(KeyError):
+            reg.remove(proc_id)
 
     def _resolve_options(self, spec: SwapModelSpec) -> dict[str, Any]:
         """Resolve ``spec.option_profile`` into the launcher options dict."""
@@ -346,11 +413,20 @@ class SwapManager:
     async def _spawn_with_retry(
         self, spec: SwapModelSpec
     ) -> tuple[ManagedProcess | None, Exception | None]:
-        """Spawn + wait for readiness. §10 Q2: one retry on a fresh ephemeral
-        port when ``spec.port`` is unset and the first attempt doesn't come
-        up (fixed ports never retry — a second attempt would collide again).
+        """Spawn + wait for readiness.
+
+        §10 Q2: when ``spec.port`` is unset, up to
+        ``1 + LauncherSwapConfig.port_retry_attempts`` attempts total
+        (default: 1 initial + 2 retries = 3), each on a freshly picked
+        ephemeral port via :func:`_pick_ephemeral_port` — see that
+        function's docstring for the residual pick-then-bind TOCTOU
+        window this does NOT close, only bounds the impact of. Fixed
+        ports never retry — a second attempt on the same port would
+        just collide again.
         """
-        attempts = 1 if spec.port is not None else 2
+        attempts = (
+            1 if spec.port is not None else 1 + self._config.port_retry_attempts
+        )
         last_exc: Exception | None = None
         for _attempt in range(attempts):
             port = spec.port if spec.port is not None else _pick_ephemeral_port()
@@ -368,6 +444,10 @@ class SwapManager:
             )
             with contextlib.suppress(Exception):
                 await stop_process(self._app, proc.id)
+            # [Unreleased] registry-litter fix: without this, every failed
+            # readiness attempt leaves one "stopped" row in the registry
+            # forever (1 + port_retry_attempts rows per failed load).
+            self._remove_from_registry(proc.id)
         return None, last_exc
 
     async def _spawn(self, spec: SwapModelSpec, port: int) -> ManagedProcess:
@@ -394,6 +474,10 @@ class SwapManager:
             # provider). H-2: exempt from launcher auto-restart (crash
             # recovery = next-request re-spawn under the per-model lock).
             swap_managed=True,
+            # [Unreleased]: catalog model name, surfaced by
+            # GET /api/launcher/processes as "swap_model" so the /launcher
+            # UI can show which swap catalog entry a process backs.
+            swap_model=spec.name,
         )
 
     async def _await_ready(self, proc: ManagedProcess) -> bool:
@@ -457,6 +541,10 @@ class SwapManager:
             with contextlib.suppress(Exception):
                 await stop_process(self._app, proc_id)
             await self._deregister(spec)
+            # [Unreleased] registry-litter fix: a TTL-unloaded swap process
+            # is not "history" the way a manually stopped one is — leaving
+            # it would grow the registry by one row per load/unload cycle.
+            self._remove_from_registry(proc_id)
         logger.info(
             "swap-unload",
             extra={"model": spec.name, "reason": reason, "proc_id": proc_id},
