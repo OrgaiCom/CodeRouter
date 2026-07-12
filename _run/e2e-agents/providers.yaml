@@ -1,0 +1,186 @@
+# ============================================================
+# CodeRouter E2E テスト — サブエージェント/オーケストレータ × agent_cli 4種
+#   Claude Code (orchestrator) → CodeRouter → claude / codex / grok / agy
+#
+# run_e2e.sh から --config で読み込まれる前提 (port は run_e2e.sh 側で指定)。
+# 前提: coderouter-plugin-agents インストール済み + 4 CLI ログイン済み。
+# ============================================================
+
+allow_paid: false
+default_profile: auto          # auto_router (model_pattern) を有効化
+display_timezone: Asia/Tokyo
+
+plugins:
+  enabled: [agents]            # v2.9.0+ で kind: agent_cli を使うため必須
+
+providers:
+  # ---- MAIN: Claude Code 本体ループ用 ----
+  # orchestrator は Task ツールを呼ぶために tool 対応 backend が必須。
+  # agent_cli (tools:false) は main には使えないため、ローカル LLM を充てる。
+  # qwen3-coder:30b が無い場合は手元の tool 対応モデル名に書き換えること。
+  # 9B化 (v2 更新): main チェーンの先頭候補。小型・高速なツール対応モデルを
+  # 試し、失敗時 (未pull → Ollama 404) は下の main-ollama (30b) へ自動フォール
+  # スルーする (404 は coderouter.adapters.anthropic_native._RETRYABLE_STATUSES
+  # に含まれるため、chain 内の次プロバイダへ安全に retry される。config load /
+  # serve 起動自体はプロバイダ未pullでも失敗しない — schemas.py の
+  # _check_profile_providers_exist はプロバイダ「名」の存在のみを静的検証し、
+  # 実モデルの疎通は行わないため)。
+  #   候補1: hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M
+  #   候補2: hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q6_K
+  # 手元で `ollama pull <候補タグ>` の後、`ollama show <候補タグ>` の
+  # Capabilities に "tools" が含まれることを確認してから本採用すること
+  # (tools 非対応モデルだと Task ツール駆動の main ループが機能しない)。
+  - name: main-ollama-9b
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M   # 候補1 (要 pull)
+    paid: false
+    timeout_s: 300
+
+  # 既存の main ループ用 30B モデル。main-ollama-9b が未pull/未対応でも
+  # ここへ自動フォールバックするため、名前は変更せずそのまま維持する
+  # (他プロファイル・外部ドキュメントからの参照を壊さないため)。
+  - name: main-ollama
+    kind: anthropic            # Ollama v0.23.1+ の /v1/messages passthrough
+    base_url: http://localhost:11434
+    model: qwen3-coder:30b
+    paid: false
+    timeout_s: 300
+
+  # (代替) Anthropic API 従量課金を main に使う場合はこちらを有効化し、
+  # 上の main プロファイルを差し替え、ALLOW_PAID=true で serve を起動する。
+  # - name: main-anthropic-api
+  #   kind: anthropic
+  #   base_url: https://api.anthropic.com
+  #   model: claude-sonnet-4-6
+  #   paid: true
+  #   api_key_env: ANTHROPIC_API_KEY
+
+  # ---- 外部エージェント CLI 4種 (すべて read-only / サブスク OAuth) ----
+  - name: agent-claude
+    kind: agent_cli
+    model: sonnet              # クォータ節約のため sonnet。opus に変更可
+    paid: false
+    capabilities: { streaming: false, tools: false }
+    agent_cli:
+      agent: claude
+      workdir: ~/.coderouter/agents/claude   # 既存キャッシュを再利用
+      exec_timeout_s: 300
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8
+
+  - name: agent-codex
+    kind: agent_cli
+    model: gpt-5.5
+    paid: false
+    capabilities: { streaming: false, tools: false }
+    agent_cli:
+      agent: codex
+      workdir: ~/.coderouter/agents/codex
+      exec_timeout_s: 300
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8             # codex では無視される (フラグ非対応)
+
+  - name: agent-grok
+    kind: agent_cli
+    model: grok-4.5
+    paid: false
+    capabilities: { streaming: false, tools: false }
+    agent_cli:
+      agent: grok
+      workdir: ~/.coderouter/agents/grok
+      exec_timeout_s: 300
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8
+
+  - name: agent-antigravity
+    kind: agent_cli
+    model: "Gemini 3.5 Flash (Low)"   # 表示名文字列 (`agy models` で確認)
+    paid: false
+    capabilities: { streaming: false, tools: false }
+    agent_cli:
+      agent: antigravity       # command 既定 "agy"
+      workdir: ~/.coderouter/agents/antigravity
+      exec_timeout_s: 300
+      allow_file_writes: false
+      sandbox_mode: read_only
+      max_turns: 8             # antigravity では無視される (フラグ非対応)
+
+profiles:
+  - name: main
+    # 9B化: main-ollama-9b (未pull環境では自動フォールスルー) → main-ollama (30b)
+    providers: [main-ollama-9b, main-ollama]
+    # ⑧ empty-response guard: ローカル backend が 200 + 空/thinking-onlyな
+    # 応答を返した場合、次プロバイダへ再ディスパッチする (schemas.py:1021)。
+    empty_response_action: "fallback"
+    # L3 tool-loop guard: 直近5件の assistant tool_use を見て、同一ツール+
+    # 同一引数呼び出しが3回連続したら「別アプローチを試すよう」system
+    # メッセージを注入する (schemas.py:601-633)。値は同スキーマの default と
+    # 同一だが、明示することで意図を残す。
+    tool_loop_window: 5
+    tool_loop_threshold: 3
+    tool_loop_action: "inject"
+  - name: claude-agent
+    providers: [agent-claude]
+  - name: codex
+    providers: [agent-codex]
+  - name: grok
+    # agent-grok が retryable AdapterError(空応答) を投げた場合のフォールバック
+    # として main-ollama を保険に追加 (FAIL①: grok 空応答は plugin側 commit
+    # c6096ed で修正済みだが、config 側にも保険を張っておく)。
+    providers: [agent-grok, main-ollama]
+  - name: antigravity
+    providers: [agent-antigravity]
+
+# ------------------------------------------------------------
+# auto_router — サブエージェント振り分けの本命 (チャネル①)
+# .claude/agents/*.md の frontmatter model (e2e-*) を fullmatch で拾う。
+# 一致しないもの (main ループの sonnet、Claude Code の背景リクエスト等)
+# はすべて default_rule_profile: main に落ちる。
+# ------------------------------------------------------------
+auto_router:
+  default_rule_profile: main
+  rules:
+    - id: e2e:claude
+      profile: claude-agent
+      match: { model_pattern: "e2e-claude.*" }
+    - id: e2e:codex
+      profile: codex
+      match: { model_pattern: "e2e-codex.*" }
+    - id: e2e:grok
+      profile: grok
+      match: { model_pattern: "e2e-grok.*" }
+    - id: e2e:agy
+      profile: antigravity
+      match: { model_pattern: "e2e-agy.*" }
+
+# ------------------------------------------------------------
+# プランB — Claude Code が frontmatter のカスタム model 名 (e2e-*) を
+# 拒否した場合に使う。.claude/agents/*.md 側の model をエイリアスに
+# 書き換えた上で、上の rules を以下に差し替える (docs/guides/
+# subagent-routing.md §7 の UNCONFIRMED 事項: 届く model 名の形は
+# 実測で確認すること — serve ログの auto-router-resolved の
+# signals.model を見る)。
+#
+#   ext-claude.md → model: opus   / ext-codex.md → model: haiku
+#   ext-grok.md   → model: fable  / ext-agy.md   → model: claude-agy-e2e
+#
+# auto_router:
+#   default_rule_profile: main
+#   rules:
+#     - id: e2e:claude
+#       profile: claude-agent
+#       match: { model_pattern: "(claude-)?opus.*" }
+#     - id: e2e:codex
+#       profile: codex
+#       match: { model_pattern: "(claude-.*)?haiku.*" }
+#     - id: e2e:grok
+#       profile: grok
+#       match: { model_pattern: "(claude-)?fable.*" }
+#     - id: e2e:agy
+#       profile: antigravity
+#       match: { model_pattern: "claude-agy-e2e.*" }
+# ------------------------------------------------------------

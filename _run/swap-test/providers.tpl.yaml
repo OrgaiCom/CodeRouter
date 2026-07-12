@@ -1,0 +1,31 @@
+# swap-test 用 providers.yaml (run_swap_test.sh が変数を差し込んで生成する)
+# @GGUF_PATH@ / @MODEL_DIR@ / @LLAMA_SERVER@ / @MODEL_PORT@ / @TTL@ は実行時に置換される
+
+default_profile: auto
+
+# swap プロファイルは自動生成されるので providers/profiles は不要(v2.9.2〜)。
+# カタログ外 model 名のフォールスルー先も swap プロファイルに向ける
+# (= M-3 修正の「カタログ非一致 model でもリース保護される」経路のテストを兼ねる)
+auto_router:
+  default_rule_profile: launcher-swap-swap-test-model
+  rules: []
+
+launcher:
+  model_dirs:
+    - "@MODEL_DIR@"
+  backends:
+    llama.cpp:
+      binary: "@LLAMA_SERVER@"
+  swap:
+    enabled: true
+    ttl_seconds: @TTL@
+    sweep_interval_s: 5
+    readiness_timeout_s: 300
+    inject_auto_router_rules: true
+    models:
+      - name: swap-test-model
+        backend: llama.cpp
+        model_path: "@GGUF_PATH@"
+        port: @MODEL_PORT@
+        num_ctx: 4096
+        extra_args: "-ngl 99"
