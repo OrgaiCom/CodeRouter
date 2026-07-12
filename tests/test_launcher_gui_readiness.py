@@ -60,6 +60,15 @@ import queue
 import socket
 import threading
 
+import pytest
+
+# launcher_gui imports tkinter at module level (it IS a Tk app). Every test
+# in this module exercises Tk-free pure helpers, but the import itself still
+# needs the tkinter package to exist. Skip cleanly on pythons built without
+# Tk support (e.g. uv-managed CPython on CI runners) instead of erroring at
+# collection time.
+pytest.importorskip("tkinter", reason="launcher_gui requires the tkinter package (python3-tk)")
+
 import launcher_gui as lg
 
 # ---------------------------------------------------------------------------
