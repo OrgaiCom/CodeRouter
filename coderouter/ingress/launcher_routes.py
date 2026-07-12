@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -116,7 +117,10 @@ class ManagedProcess:
     port: int
     options: dict[str, Any]
     extra_args: str
-    status: str = "starting"   # "starting" | "running" | "stopped" | "error"
+    # "starting" (constructing, pre-spawn) | "loading" (spawned, waiting on
+    # the readiness probe) | "running" (readiness confirmed, provider
+    # registered) | "stopped" | "error"
+    status: str = "starting"
     # MTP / speculative-decoding controls (defaults keep existing call sites
     # working). Recorded for introspection; the resolved flags live in the cmd.
     draft_model_path: str | None = None
@@ -134,6 +138,39 @@ class ManagedProcess:
     mtp_fallback_done: bool = False
     fallback_cmd: list | None = None
     started_at: float = 0.0
+    # The exact argv currently in effect (updated when the MTP fallback
+    # relaunches without spec tokens). Used to respawn on a generic
+    # auto-restart — see ``_attempt_restart``.
+    cmd: list = field(default_factory=list)
+    # Consecutive generic auto-restart attempts since the last healthy
+    # (readiness-confirmed) run. Reset to 0 on success.
+    restart_count: int = 0
+    # Set by api_stop / shutdown_launcher just before signalling the child.
+    # Tells _tail_logs the exit was requested, not a crash, so it neither
+    # auto-restarts nor mislabels a SIGTERM/SIGKILL exit as "error".
+    stopping: bool = False
+    # launcher-model-swap.md §10 Q5: set by _wait_ready_and_register once it
+    # reaches a terminal outcome (registered successfully, or gave up —
+    # timeout / superseded). SwapManager awaits this directly instead of
+    # polling ``status``. Always set exactly once per readiness attempt
+    # (see the try/finally in _wait_ready_and_register), so a waiter never
+    # hangs past its own timeout even on the rare "resolved before the
+    # first probe" bail-out path.
+    ready: asyncio.Event = field(default_factory=asyncio.Event, repr=False, compare=False)
+    # True when this process was spawned by the SwapManager
+    # (coderouter/launcher_swap.py) rather than the manual UI. Two effects:
+    #   * H-1: _wait_ready_and_register skips the GENERIC provider
+    #     registration ('launcher-<backend>-<port>' into the shared
+    #     "launcher" profile). SwapManager does its own registration under
+    #     'launcher-swap-<name>' and its TTL unload can only deregister
+    #     that one — the generic entry would leak a dead-port provider +
+    #     cached adapter on every TTL cycle (unbounded with ephemeral
+    #     ports).
+    #   * H-2: _attempt_restart never touches a swap-managed process —
+    #     crash recovery is SwapManager's job (the next request re-spawns
+    #     under its per-model lock); a launcher auto-restart racing that
+    #     re-spawn would fight over the same fixed port.
+    swap_managed: bool = False
     # asyncio subprocess handle — not serialised
     _proc: Any = field(default=None, repr=False, compare=False)
 
@@ -165,11 +202,23 @@ class LauncherRegistry:
         return list(self._procs.values())
 
 
+def _registry_for_app(app: Any) -> LauncherRegistry:
+    """Get or create the LauncherRegistry on ``app.state``.
+
+    Split out from :func:`_registry` so non-HTTP callers (SwapManager,
+    coderouter/launcher_swap.py) that only hold the FastAPI ``app`` —
+    not a ``Request`` — can reach the same registry that manual
+    ``/api/launcher/start`` launches use. Both paths must land in one
+    registry so swap-managed processes show up in the Launcher UI too.
+    """
+    if not hasattr(app.state, "launcher"):
+        app.state.launcher = LauncherRegistry()
+    return app.state.launcher
+
+
 def _registry(request: Request) -> LauncherRegistry:
     """Get or create the LauncherRegistry on app.state."""
-    if not hasattr(request.app.state, "launcher"):
-        request.app.state.launcher = LauncherRegistry()
-    return request.app.state.launcher
+    return _registry_for_app(request.app)
 
 
 # ---------------------------------------------------------------------------
@@ -544,12 +593,230 @@ def _should_mtp_fallback(proc: ManagedProcess) -> bool:
     )
 
 
-async def _tail_logs(proc: ManagedProcess) -> None:
+# ---------------------------------------------------------------------------
+# Readiness gating — hole #2: a launcher-started backend used to be
+# registered as a routable provider the instant the OS process spawned, well
+# before llama-server / vllm had finished loading the model into memory.
+# Requests routed there during load failed (connection refused before the
+# HTTP listener is up, or a 503 once it is). Backends are now polled for
+# readiness and only registered once they answer, or marked "error" (never
+# registered) if they don't within ``readiness_timeout_s``.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_READINESS_TIMEOUT_S = 300.0
+_DEFAULT_READINESS_POLL_INTERVAL_S = 2.0
+# Per-probe network timeout — deliberately much shorter than the poll
+# interval so a single stuck probe cannot stall the loading→error deadline.
+_READINESS_PROBE_TIMEOUT_S = 3.0
+
+
+async def _backend_ready(backend: str, port: int, *, probe_timeout_s: float) -> bool:
+    """Best-effort single readiness probe. Never raises.
+
+    llama.cpp and vllm both expose ``GET /health`` (200 once the model is
+    loaded and the server is accepting requests; llama.cpp returns 503
+    while still loading). Other backends (mlx — mlx_lm.server has no
+    documented health endpoint) fall back to a bare TCP connect: it can't
+    distinguish "loaded" from "listening", but it is a strict improvement
+    over registering the provider before the port is even open.
+    """
+    if backend in ("llama.cpp", "vllm"):
+        try:
+            async with httpx.AsyncClient(timeout=probe_timeout_s) as client:
+                resp = await client.get(f"http://localhost:{port}/health")
+            return resp.status_code == 200
+        except Exception:
+            return False
+
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=probe_timeout_s
+        )
+    except Exception:
+        return False
+    writer.close()
+    with contextlib.suppress(Exception):
+        await writer.wait_closed()
+    return True
+
+
+def _register_provider(proc: ManagedProcess, app: Any) -> dict[str, Any] | None:
+    """Register ``proc`` as a routable provider once it is confirmed ready.
+
+    Shared by the initial spawn, the MTP fallback relaunch, and generic
+    auto-restart — every path that brings a backend up must go through the
+    same readiness→register sequence. Failure never raises (mirrors the
+    original inline try/except in ``api_start``).
+    """
+    engine = getattr(app.state, "engine", None)
+    if engine is None or not hasattr(engine, "register_provider"):
+        return None
+    try:
+        summary = engine.register_provider(
+            _launcher_provider_config(proc.backend, proc.port)
+        )
+        proc.log_tail.append(
+            "[launcher] provider sync: "
+            f"{summary['provider']} -> profile '{summary['profile']}' (in-memory)"
+        )
+        return summary
+    except Exception as exc:
+        logger.warning(
+            "launcher provider sync failed",
+            extra={"backend": proc.backend, "port": proc.port, "error": str(exc)},
+        )
+        proc.log_tail.append(f"[launcher] provider sync failed: {exc}")
+        return None
+
+
+async def _wait_ready_and_register(
+    proc: ManagedProcess, app: Any, launcher_cfg: Any
+) -> None:
+    """Poll ``proc`` for readiness, then register it — or time out to 'error'.
+
+    Runs as an independent background task per spawn (initial, MTP
+    fallback, or auto-restart). Bails out silently — without touching
+    ``proc.status`` — the moment the process is no longer in a
+    loading-eligible state (crashed, stopped, or already resolved by a
+    concurrent readiness task), so a fast crash never races a stale
+    registration in after the fact.
+
+    launcher-model-swap.md §10 Q5: ``proc.ready`` is cleared on entry
+    (so a respawn — MTP fallback / auto-restart reusing the same
+    ``ManagedProcess`` — starts a fresh readiness cycle instead of
+    reusing a stale "done" signal) and is *always* set exactly once via
+    the ``finally`` below, on every exit path (registered, timed out, or
+    bailed out early). Callers that just want to know "is this attempt
+    over" (e.g. SwapManager) can therefore plain-``await proc.ready.wait()``
+    with their own timeout, no polling of ``proc.status`` needed.
+    """
+    proc.ready.clear()
+    try:
+        timeout_s = getattr(launcher_cfg, "readiness_timeout_s", _DEFAULT_READINESS_TIMEOUT_S)
+        poll_interval_s = getattr(
+            launcher_cfg, "readiness_poll_interval_s", _DEFAULT_READINESS_POLL_INTERVAL_S
+        )
+        deadline = time.monotonic() + timeout_s
+
+        while time.monotonic() < deadline:
+            if proc._proc is None or proc.status not in ("starting", "loading"):
+                return
+            if await _backend_ready(proc.backend, proc.port, probe_timeout_s=_READINESS_PROBE_TIMEOUT_S):
+                if proc.status not in ("starting", "loading"):
+                    return  # crashed / stopped while the last probe was in flight
+                proc.status = "running"
+                proc.restart_count = 0
+                proc.log_tail.append("[launcher] readiness check passed")
+                if proc.swap_managed:
+                    # H-1: a swap-spawned backend must NOT also be
+                    # registered under the generic port-based name into
+                    # the shared "launcher" profile — SwapManager
+                    # registers (and, on TTL unload, deregisters) its own
+                    # 'launcher-swap-<name>' provider; a second, generic
+                    # registration would outlive every unload as a
+                    # dead-port provider. Readiness confirmation and the
+                    # ready-Event signal (finally below) are unchanged.
+                    proc.log_tail.append(
+                        "[launcher] swap-managed: generic provider "
+                        "registration skipped (SwapManager registers its own)"
+                    )
+                else:
+                    _register_provider(proc, app)
+                return
+            await asyncio.sleep(poll_interval_s)
+
+        if proc.status in ("starting", "loading"):
+            proc.status = "error"
+            proc.log_tail.append(
+                f"[launcher] readiness check timed out after {timeout_s:.0f}s "
+                "— process left running but NOT registered as a provider"
+            )
+    finally:
+        proc.ready.set()
+
+
+# ---------------------------------------------------------------------------
+# Generic auto-restart — hole #1: besides the one-shot MTP startup-crash
+# fallback above, a launcher-started backend that crashed was left in
+# status="error" forever with no supervision. Opt-in via
+# ``LauncherConfig.auto_restart`` (see schemas.py for the default rationale).
+# ---------------------------------------------------------------------------
+
+
+async def _attempt_restart(proc: ManagedProcess, launcher_cfg: Any) -> bool:
+    """Respawn ``proc.cmd`` after a crash. Returns True iff the child started.
+
+    Backed off exponentially and capped at ``auto_restart_max_attempts``;
+    the counter is reset to 0 by ``_wait_ready_and_register`` on the next
+    readiness success, so a backend that stabilizes gets a fresh budget.
+    """
+    if proc.swap_managed:
+        # H-2: swap-managed processes are supervised by SwapManager alone —
+        # a crashed one is re-spawned by the NEXT request for its model,
+        # under the manager's per-model lock. A concurrent launcher
+        # auto-restart would race that re-spawn for the same (typically
+        # fixed) port. §10 Q4's single-supervisor rule, extended to the
+        # crash path.
+        return False
+    if not getattr(launcher_cfg, "auto_restart", False):
+        return False
+    max_attempts = getattr(launcher_cfg, "auto_restart_max_attempts", 3)
+    if proc.restart_count >= max_attempts:
+        proc.log_tail.append(
+            f"[launcher] auto-restart exhausted ({proc.restart_count}/{max_attempts} "
+            "attempts); giving up"
+        )
+        return False
+    if not proc.cmd:
+        return False  # nothing to relaunch (should not happen in practice)
+
+    base = getattr(launcher_cfg, "auto_restart_backoff_s", 2.0)
+    cap = getattr(launcher_cfg, "auto_restart_backoff_max_s", 30.0)
+    backoff = min(base * (2**proc.restart_count), cap)
+    proc.restart_count += 1
+    proc.log_tail.append(
+        f"[launcher] auto-restart attempt {proc.restart_count}/{max_attempts} "
+        f"in {backoff:.1f}s"
+    )
+    await asyncio.sleep(backoff)
+
+    if proc.stopping:
+        # Stopped while we were waiting out the backoff — respect it.
+        return False
+
+    try:
+        p = await asyncio.create_subprocess_exec(
+            *proc.cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=_LOG_STREAM_LIMIT,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        proc.log_tail.append(f"[launcher] auto-restart failed: {exc}")
+        proc.status = "error"
+        return False
+
+    proc._proc = p
+    proc.pid = p.pid
+    proc.returncode = None
+    proc.started_at = time.monotonic()
+    proc.log_tail.append(f"[launcher] auto-restart started PID {p.pid}")
+    return True
+
+
+async def _tail_logs(
+    proc: ManagedProcess, *, app: Any = None, launcher_cfg: Any = None
+) -> None:
     """Read stdout+stderr into proc.log_tail until the process exits.
 
     Loops so that a one-shot MTP fallback (relaunch without the auto-detected
-    speculative flags) can be tailed by the same task. The loop exits as soon
-    as no fallback applies.
+    speculative flags) and generic auto-restart can be tailed by the same
+    task. The loop exits once the process is intentionally stopped, exits
+    cleanly, or no further retry applies.
+
+    ``app`` / ``launcher_cfg`` are optional so unit tests can drive this
+    function directly against a fake process without a FastAPI app (the
+    readiness/register and auto-restart machinery is then simply inert).
     """
 
     async def _drain(stream: asyncio.StreamReader | None) -> None:
@@ -576,6 +843,16 @@ async def _tail_logs(proc: ManagedProcess) -> None:
                 break
             proc.log_tail.append(line.decode(errors="replace").rstrip())
 
+    def _spawn_readiness_task() -> None:
+        """Kick off (or re-kick after a respawn) the readiness→register task."""
+        if app is None:
+            return
+        task = asyncio.create_task(_wait_ready_and_register(proc, app, launcher_cfg))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+    _spawn_readiness_task()  # covers the initial spawn done by api_start
+
     while True:
         p = proc._proc
         if p is None:
@@ -585,44 +862,59 @@ async def _tail_logs(proc: ManagedProcess) -> None:
         await p.wait()
         proc.returncode = p.returncode
         proc.pid = None
-        proc.status = "stopped" if (p.returncode or 0) == 0 else "error"
         proc.log_tail.append(
             f"[launcher] process exited with code {p.returncode}"
         )
 
-        if not _should_mtp_fallback(proc):
+        if proc.stopping:
+            # Intentional stop (api_stop / shutdown_launcher). Never a crash
+            # to heal, regardless of the exit code SIGTERM/SIGKILL produced.
+            proc.status = "stopped"
             return
 
-        # Auto-detected MTP crashed during startup — retry ONCE without the
-        # speculative flags. The port is unchanged, so the existing provider
-        # registration still stands (do not re-register).
-        rc = proc.returncode
-        proc.mtp_fallback_done = True
-        proc.log_tail.append(
-            f"[launcher] MTP startup failure detected (exit code {rc}); "
-            "retrying without speculative decoding"
-        )
-        proc.log_tail.append(
-            f"[launcher] cmd: {' '.join(proc.fallback_cmd)}"
-        )
-        try:
-            p = await asyncio.create_subprocess_exec(
-                *proc.fallback_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                limit=_LOG_STREAM_LIMIT,
+        proc.status = "stopped" if (p.returncode or 0) == 0 else "error"
+
+        if _should_mtp_fallback(proc):
+            # Auto-detected MTP crashed during startup — retry ONCE without
+            # the speculative flags. The port is unchanged; readiness is
+            # re-armed below so the relaunch is gated exactly like the
+            # initial spawn before anything routes to it.
+            rc = proc.returncode
+            proc.mtp_fallback_done = True
+            proc.log_tail.append(
+                f"[launcher] MTP startup failure detected (exit code {rc}); "
+                "retrying without speculative decoding"
             )
-        except (FileNotFoundError, OSError) as exc:
-            proc.log_tail.append(f"[launcher] fallback relaunch failed: {exc}")
-            proc.status = "error"
-            return
-        proc._proc = p
-        proc.pid = p.pid
-        proc.status = "running"
-        proc.returncode = None
-        proc.started_at = time.monotonic()
-        proc.log_tail.append(f"[launcher] started PID {p.pid}")
-        # Loop to tail the relaunched process.
+            proc.log_tail.append(
+                f"[launcher] cmd: {' '.join(proc.fallback_cmd)}"
+            )
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    *proc.fallback_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=_LOG_STREAM_LIMIT,
+                )
+            except (FileNotFoundError, OSError) as exc:
+                proc.log_tail.append(f"[launcher] fallback relaunch failed: {exc}")
+                proc.status = "error"
+                return
+            proc.cmd = proc.fallback_cmd  # future auto-restarts reuse this argv
+            proc._proc = p
+            proc.pid = p.pid
+            proc.status = "loading"
+            proc.returncode = None
+            proc.started_at = time.monotonic()
+            proc.log_tail.append(f"[launcher] started PID {p.pid}")
+            _spawn_readiness_task()
+            continue  # tail the relaunched process
+
+        if proc.returncode not in (0, None) and await _attempt_restart(proc, launcher_cfg):
+            proc.status = "loading"
+            _spawn_readiness_task()
+            continue  # tail the restarted process
+
+        return
 
 
 async def shutdown_launcher(app: Any) -> None:
@@ -636,6 +928,9 @@ async def shutdown_launcher(app: Any) -> None:
         return
     procs = reg.all()
     for proc in procs:
+        # Mark intentional before signalling: _tail_logs must not treat a
+        # shutdown-triggered SIGTERM/SIGKILL as a crash to auto-restart.
+        proc.stopping = True
         p = proc._proc
         if p is not None and p.returncode is None:
             with contextlib.suppress(Exception):
@@ -792,76 +1087,75 @@ def _launcher_provider_config(backend: str, port: int) -> Any:
     )
 
 
-@router.post("/api/launcher/start")
-async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
-    """Start a new backend process."""
-    _require_launcher_token(request)
-    # Resolve binary path from providers.yaml launcher.backends
-    cfg = request.app.state.config
-    launcher_cfg = getattr(cfg, "launcher", None)
+async def spawn_process(
+    app: Any,
+    launcher_cfg: Any,
+    *,
+    name: str,
+    backend: str,
+    model_path: str,
+    port: int,
+    options: dict[str, Any] | None = None,
+    extra_args: str = "",
+    draft_model_path: str | None = None,
+    mtp_mode: str = "auto",
+    swap_managed: bool = False,
+) -> ManagedProcess:
+    """Build argv, spawn the child process, and arm readiness/log tailing.
+
+    Extracted from (and still used by) ``POST /api/launcher/start`` so
+    ``SwapManager`` (coderouter/launcher_swap.py, launcher-model-swap.md
+    §4.4) can spawn an on-demand backend through the exact same
+    command-building, model-override guard, and readiness machinery —
+    no parallel spawn path exists that could bypass
+    ``_assert_no_model_override`` / the per-backend argv shape.
+
+    Raises ``ValueError`` on bad input (bad ``mtp_mode``, unbalanced
+    ``extra_args`` quoting, a rejected model-override flag, an unknown
+    backend) and ``FileNotFoundError`` when the resolved binary doesn't
+    exist. Any other exception from ``create_subprocess_exec`` propagates
+    as-is. Callers decide how to surface these (HTTP 400/500 for
+    ``api_start``, a retryable ``AdapterError`` for SwapManager).
+    """
+    options = options if options is not None else {}
     configured_binary: str | None = None
-    if launcher_cfg and launcher_cfg.backends:
-        bc = launcher_cfg.backends.get(req.backend)
+    if launcher_cfg and getattr(launcher_cfg, "backends", None):
+        bc = launcher_cfg.backends.get(backend)
         if bc and bc.binary:
             configured_binary = bc.binary
 
-    # Validate the MTP mode up front (only "auto" / "off" are accepted).
-    if req.mtp_mode not in ("auto", "off"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"mtp_mode must be 'auto' or 'off', got {req.mtp_mode!r}.",
-        )
+    if mtp_mode not in ("auto", "off"):
+        raise ValueError(f"mtp_mode must be 'auto' or 'off', got {mtp_mode!r}.")
 
     # Build the user token list once (options flags + extra_args) so
     # resolve_speculative sees exactly what _build_cmd will emit. shlex.split
-    # can raise on unbalanced quotes → surface as 400 like other bad input.
-    try:
-        user_tokens = _option_tokens(req.options)
-        if req.extra_args.strip():
-            user_tokens += shlex.split(req.extra_args)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # can raise ValueError on unbalanced quotes — let it propagate.
+    user_tokens = _option_tokens(options)
+    if extra_args.strip():
+        user_tokens += shlex.split(extra_args)
 
     # Resolve MTP / speculative-decoding flags (llama.cpp only; no-op elsewhere).
-    try:
-        spec_tokens, spec_notes = resolve_speculative(
-            req.backend,
-            req.model_path,
-            req.draft_model_path,
-            req.mtp_mode,
-            user_tokens,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    spec_tokens, spec_notes = resolve_speculative(
+        backend, model_path, draft_model_path, mtp_mode, user_tokens,
+    )
 
-    try:
-        cmd = _build_cmd(
-            req.backend, req.model_path, req.port,
-            req.options, req.extra_args,
-            binary=configured_binary,
-            spec_tokens=spec_tokens,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    cmd = _build_cmd(
+        backend, model_path, port, options, extra_args,
+        binary=configured_binary, spec_tokens=spec_tokens,
+    )
 
     # Speculative flags qualify for the one-shot startup-crash fallback only
     # when they came from AUTO detection (mtp_mode="auto", no explicit draft
     # model, and detection actually emitted flags). Explicit draft paths and
     # operator-supplied --spec-type are never auto-retried. The fallback cmd
     # is rebuilt from scratch with spec_tokens=None (exact — never spliced).
-    spec_auto = (
-        req.mtp_mode == "auto"
-        and req.draft_model_path is None
-        and bool(spec_tokens)
-    )
+    spec_auto = mtp_mode == "auto" and draft_model_path is None and bool(spec_tokens)
     fallback_cmd: list[str] | None = None
     if spec_auto:
         try:
             fallback_cmd = _build_cmd(
-                req.backend, req.model_path, req.port,
-                req.options, req.extra_args,
-                binary=configured_binary,
-                spec_tokens=None,
+                backend, model_path, port, options, extra_args,
+                binary=configured_binary, spec_tokens=None,
             )
         except ValueError:
             # A failure to rebuild the non-spec command simply disables the
@@ -871,18 +1165,19 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     proc_id = uuid.uuid4().hex[:8]
     proc = ManagedProcess(
         id=proc_id,
-        name=req.name,
-        backend=req.backend,
-        model_path=req.model_path,
-        port=req.port,
-        options=req.options,
-        extra_args=req.extra_args,
-        draft_model_path=req.draft_model_path,
-        mtp_mode=req.mtp_mode,
+        name=name,
+        backend=backend,
+        model_path=model_path,
+        port=port,
+        options=options,
+        extra_args=extra_args,
+        draft_model_path=draft_model_path,
+        mtp_mode=mtp_mode,
         status="starting",
         spec_tokens=spec_tokens,
         spec_auto=spec_auto and fallback_cmd is not None,
         fallback_cmd=fallback_cmd,
+        swap_managed=swap_managed,
     )
     proc.log_tail.append(f"[launcher] cmd: {' '.join(cmd)}")
     for note in spec_notes:
@@ -898,67 +1193,53 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
             limit=_LOG_STREAM_LIMIT,
         )
     except FileNotFoundError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Executable not found: {cmd[0]!r}. Is {req.backend} installed?",
+        raise FileNotFoundError(
+            f"Executable not found: {cmd[0]!r}. Is {backend} installed?"
         ) from None
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     proc._proc = p
     proc.pid = p.pid
-    proc.status = "running"
+    proc.cmd = cmd
+    # H2 (readiness gating): status is "loading", not "running", until the
+    # background readiness probe (armed by _tail_logs below) confirms the
+    # backend is actually serving — see _wait_ready_and_register. Provider
+    # registration happens there too, once ready, instead of synchronously
+    # here (registering before the model finishes loading is exactly the
+    # bug this closes: requests would route to a backend that isn't up yet).
+    proc.status = "loading"
     proc.started_at = time.monotonic()
     proc.log_tail.append(f"[launcher] started PID {p.pid}")
 
-    _registry(request).add(proc)
-    _task = asyncio.create_task(_tail_logs(proc))
+    _registry_for_app(app).add(proc)
+    _task = asyncio.create_task(_tail_logs(proc, app=app, launcher_cfg=launcher_cfg))
     _background_tasks.add(_task)
     _task.add_done_callback(_background_tasks.discard)
 
-    # Provider auto-sync: register the just-started backend as a routable
-    # provider so requests can reach it without hand-editing providers.yaml
-    # (in-memory only — see FallbackEngine.register_provider docstring).
-    # Sync failure must never fail the start itself.
-    provider_sync: dict[str, Any] | None = None
-    engine = getattr(request.app.state, "engine", None)
-    if engine is not None and hasattr(engine, "register_provider"):
-        try:
-            provider_sync = engine.register_provider(
-                _launcher_provider_config(req.backend, req.port)
-            )
-            proc.log_tail.append(
-                "[launcher] provider sync: "
-                f"{provider_sync['provider']} -> profile "
-                f"'{provider_sync['profile']}' (in-memory)"
-            )
-        except Exception as exc:
-            logger.warning(
-                "launcher provider sync failed",
-                extra={"backend": req.backend, "port": req.port, "error": str(exc)},
-            )
-            proc.log_tail.append(f"[launcher] provider sync failed: {exc}")
-
-    return {
-        "id": proc_id,
-        "pid": p.pid,
-        "command": cmd,
-        "provider_sync": provider_sync,
-        "speculative": spec_tokens,
-    }
+    return proc
 
 
-@router.post("/api/launcher/stop/{proc_id}")
-async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
-    """Terminate a running process (SIGTERM, then SIGKILL after 5s)."""
-    _require_launcher_token(request)
-    try:
-        proc = _registry(request).get(proc_id)
-    except KeyError:
-        raise HTTPException(
-            status_code=404, detail=f"Process {proc_id!r} not found.") from None
+async def stop_process(app: Any, proc_id: str) -> ManagedProcess:
+    """Terminate a managed process (SIGTERM, then SIGKILL after 5s).
 
-    if proc._proc and proc.status == "running":
+    Extracted from (and still used by) ``POST /api/launcher/stop/{id}``
+    so SwapManager's TTL sweeper can use the identical stop sequence —
+    including setting ``stopping = True`` first, which is what makes a
+    TTL unload an *intentional* stop that launcher auto-restart (when
+    enabled) never treats as a crash to heal (§10 Q4).
+
+    Raises ``KeyError`` when ``proc_id`` isn't in the registry. Idempotent
+    on an already-stopped process (no-op signal-wise; returns its current
+    status).
+    """
+    proc = _registry_for_app(app).get(proc_id)  # raises KeyError
+
+    # "loading"/"starting": the readiness probe hasn't confirmed the backend
+    # yet, but the OS process is alive and stoppable — must be included here
+    # or a slow-loading model could never be cancelled from the UI.
+    if proc._proc and proc.status in ("running", "loading", "starting"):
+        # Intentional stop: tell _tail_logs so it neither auto-restarts nor
+        # mislabels whatever exit code SIGTERM/SIGKILL produces as "error".
+        proc.stopping = True
         # M14: the child may already be gone (crashed / reaped) between the
         # status check and the signal. terminate()/kill() then raise
         # ProcessLookupError, which previously escaped as a 500. Suppress it
@@ -975,6 +1256,52 @@ async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
         proc.status = "stopped"
         proc.pid = None
 
+    return proc
+
+
+@router.post("/api/launcher/start")
+async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
+    """Start a new backend process."""
+    _require_launcher_token(request)
+    cfg = request.app.state.config
+    launcher_cfg = getattr(cfg, "launcher", None)
+    try:
+        proc = await spawn_process(
+            request.app, launcher_cfg,
+            name=req.name, backend=req.backend, model_path=req.model_path,
+            port=req.port, options=req.options, extra_args=req.extra_args,
+            draft_model_path=req.draft_model_path, mtp_mode=req.mtp_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "id": proc.id,
+        "pid": proc.pid,
+        "command": proc.cmd,
+        # Provider auto-sync now happens asynchronously once the readiness
+        # probe passes (see _wait_ready_and_register) — poll GET
+        # /api/launcher/processes/{id} (status) or /api/launcher/logs/{id}
+        # ("provider sync: ...") for the outcome instead of this response.
+        "provider_sync": None,
+        "speculative": proc.spec_tokens,
+    }
+
+
+@router.post("/api/launcher/stop/{proc_id}")
+async def api_stop(proc_id: str, request: Request) -> dict[str, Any]:
+    """Terminate a running process (SIGTERM, then SIGKILL after 5s)."""
+    _require_launcher_token(request)
+    try:
+        proc = await stop_process(request.app, proc_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Process {proc_id!r} not found.") from None
+
     return {"id": proc_id, "status": proc.status}
 
 
@@ -988,7 +1315,7 @@ async def api_delete(proc_id: str, request: Request) -> dict[str, Any]:
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Process {proc_id!r} not found.") from None
-    if proc.status == "running":
+    if proc.status in ("running", "loading", "starting"):
         raise HTTPException(status_code=400, detail="Stop the process before deleting.")
     reg.remove(proc_id)
     return {"deleted": proc_id}
@@ -1258,7 +1585,8 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
   const statusDot = (status) => {
     const map = {running:"bg-green-500", starting:"bg-yellow-500",
-                 stopped:"bg-slate-500", error:"bg-red-500"};
+                 loading:"bg-yellow-500", stopped:"bg-slate-500",
+                 error:"bg-red-500"};
     return `<span class="dot ${map[status] || "bg-slate-500"} mr-1.5"></span>${esc(status)}`;
   };
 
@@ -1535,10 +1863,11 @@ _LAUNCHER_HTML = r"""<!doctype html>
     }
     tbody.innerHTML = procs.map(p => {
       const modelName = p.model_path.split("/").pop();
-      const stopBtn = p.status === "running"
+      const isActive = p.status === "running" || p.status === "loading" || p.status === "starting";
+      const stopBtn = isActive
         ? `<button onclick="stopProc('${p.id}')" class="btn-sm btn-red">■ 停止</button>`
         : "";
-      const delBtn = p.status !== "running"
+      const delBtn = !isActive
         ? `<button onclick="deleteProc('${p.id}')" class="btn-sm btn-slate ml-1">✕</button>`
         : "";
       const logBtn = `<button onclick="openLog('${p.id}','${esc(p.name)}')" class="btn-sm btn-indigo ml-1">📋 ログ</button>`;

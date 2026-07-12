@@ -25,6 +25,7 @@ Dual entry points (v0.3.x-1):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
@@ -1178,6 +1179,107 @@ class FallbackEngine:
         self._pending_recovery_rearm: dict[str, str] = {}
         # v2.0-K: persistent state store (None = in-memory only).
         self._state_store: StateStore | None = None
+        # launcher-model-swap.md §4.1: optional on-demand swap
+        # coordinator (coderouter.launcher_swap.SwapManager), wired via
+        # attach_swap_manager() from ingress/app.py's lifespan when
+        # ``launcher.swap.enabled``. None (default / legacy engines) —
+        # every dispatch entry point's swap hook is then a cheap no-op.
+        self._swap_manager: Any | None = None
+
+    def attach_swap_manager(self, manager: Any) -> None:
+        """Wire a SwapManager for on-demand model-swap dispatch (Phase 1).
+
+        Optional — omit entirely for deployments that don't use
+        ``launcher.swap``; the dispatch hooks then short-circuit on
+        ``manager is None`` and behave exactly as before. See
+        coderouter/launcher_swap.py and
+        docs/designs/launcher-model-swap.md.
+        """
+        self._swap_manager = manager
+
+    async def _swap_ensure_loaded(self, request: Any) -> Any | None:
+        """Phase 1 on-demand swap dispatch hook — see each call site's
+        docstring (generate / stream / generate_anthropic / stream_anthropic).
+
+        Review fix M-2/M-3: keyed on the RESOLVED routing target, not
+        on ``request.model``. By the time the engine runs, the ingress
+        has already applied the full precedence chain (body profile >
+        headers > auto_router — including the injected ``swap:<name>``
+        rules), so ``request.profile or default_profile`` IS the final
+        destination:
+
+        * resolved profile is a swap model's dedicated profile
+          (``launcher-swap-<name>``) → acquire that model's lease,
+          regardless of what the ``model`` field says (M-3: an aliased
+          model name routed here explicitly was previously left
+          lease-less and could be TTL-evicted mid-request);
+        * otherwise, if the resolved chain explicitly lists a swap
+          provider (``launcher-swap-<name>`` wired into a custom chain),
+          acquire that;
+        * otherwise no-op — a request whose model name merely *matches*
+          the catalog but routes elsewhere no longer triggers a wasted
+          spawn (M-2).
+
+        Returns ``None`` (no-op) when no SwapManager is attached or the
+        routing target has no swap involvement — the common case,
+        costing one ``getattr`` + one dict lookup. Otherwise spawns (or
+        waits for a concurrent spawn of) the backend and returns the
+        :class:`~coderouter.launcher_swap.Lease` the caller must release
+        via :meth:`_swap_release`.
+        """
+        # getattr (not self._swap_manager directly): some legacy tests
+        # construct the engine via ``FallbackEngine.__new__``, bypassing
+        # __init__ entirely (same rationale as the ``_adaptive`` /
+        # ``_budget`` lazy properties above).
+        manager = getattr(self, "_swap_manager", None)
+        if manager is None:
+            return None
+        chosen = request.profile or self.config.default_profile
+        spec = manager.spec_for_profile(chosen)
+        if spec is None:
+            try:
+                chain = self.config.profile_by_name(chosen)
+            except KeyError:
+                return None  # unknown / "auto" sentinel — nothing to swap
+            for prov_name in chain.providers:
+                spec = manager.spec_for_provider(prov_name)
+                if spec is not None:
+                    break
+            if spec is None:
+                return None
+        return await manager.ensure_loaded(spec.name)
+
+    async def _swap_ensure_loaded_or_raise(self, request: Any) -> Any | None:
+        """``_swap_ensure_loaded`` wrapper that fails the SAME way an
+        exhausted provider chain does.
+
+        The swap hook runs *before* chain resolution, so a spawn/
+        readiness failure here can't be caught by ``_generate_impl``'s
+        own per-provider ``except AdapterError`` loop (there's no chain
+        yet). Converting it to :class:`NoProvidersAvailableError` here
+        keeps the observable failure mode identical either way — a 502
+        with the per-provider error trail — instead of leaking an
+        unhandled 500 out through the ingress. §6.4's "never poison"
+        guarantee is unaffected: the next request re-tries ``idle`` from
+        scratch regardless of which exception type carried the failure.
+        """
+        try:
+            return await self._swap_ensure_loaded(request)
+        except AdapterError as exc:
+            profile = request.profile or self.config.default_profile
+            raise NoProvidersAvailableError(profile=profile, errors=[exc]) from exc
+
+    async def _swap_release(self, lease: Any) -> None:
+        """Release a swap lease acquired by :meth:`_swap_ensure_loaded`.
+
+        Never raises — a release failure must not mask the (already
+        complete) response, and the TTL sweeper degrades gracefully
+        (worst case: the model just doesn't idle-unload this cycle).
+        """
+        manager = getattr(self, "_swap_manager", None)
+        if manager is not None:
+            with contextlib.suppress(Exception):
+                await manager.release_lease(lease)
 
     def register_provider(
         self, provider: ProviderConfig, profile_name: str = "launcher"
@@ -1252,6 +1354,46 @@ class FallbackEngine:
             "replaced": replaced,
             "persisted": False,  # in-memory only, by design (see docstring)
         }
+
+    async def deregister_provider(
+        self, provider_name: str, profile_name: str = "launcher"
+    ) -> bool:
+        """Remove a provider previously added by :meth:`register_provider`.
+
+        The counterpart :meth:`register_provider` never needed — until
+        the on-demand swap TTL sweeper (SwapManager, §6.6 known-trap
+        #5) needs to unwind a launcher-started backend after it ages
+        out: leaving it in the chain would route requests to a port
+        that no longer answers. In-memory only, same as
+        ``register_provider`` (no providers.yaml rewrite).
+
+        Idempotent — removing an already-absent provider / chain entry
+        is a silent no-op (returns False) rather than an error, since a
+        sweeper race (two code paths tearing down the same model) must
+        never raise.
+        """
+        removed = False
+        with contextlib.suppress(KeyError):
+            chain = self.config.profile_by_name(profile_name)
+            if provider_name in chain.providers:
+                chain.providers.remove(provider_name)
+                removed = True
+        self.config.providers = [
+            p for p in self.config.providers if p.name != provider_name
+        ]
+        adapter = self._adapters.pop(provider_name, None)
+        if adapter is not None:
+            removed = True
+            with contextlib.suppress(Exception):
+                await adapter.aclose()
+        if removed:
+            logger.info(
+                "launcher provider sync: deregistered %s (profile %r)",
+                provider_name,
+                profile_name,
+                extra={"provider": provider_name, "profile": profile_name},
+            )
+        return removed
 
     @property
     def plugins(self) -> PluginRegistry:
@@ -2219,7 +2361,23 @@ class FallbackEngine:
     async def generate(self, request: ChatRequest) -> ChatResponse:
         """Non-streaming OpenAI-shaped generation with sequential fallback.
 
-        Walks the chain in order, returning the first provider's response.
+        launcher-model-swap.md §4.1: the on-demand swap dispatch hook
+        runs first — when the resolved profile (or its chain) targets a
+        swap model it spawns/awaits the backend (or waits for a
+        concurrent spawn) before chain resolution, so ``_generate_impl``
+        always sees an already-loaded backend. A no-op (cheap ``is
+        None`` check) when no SwapManager is attached.
+        """
+        lease = await self._swap_ensure_loaded_or_raise(request)
+        try:
+            return await self._generate_impl(request)
+        finally:
+            if lease is not None:
+                await self._swap_release(lease)
+
+    async def _generate_impl(self, request: ChatRequest) -> ChatResponse:
+        """Walks the chain in order, returning the first provider's response.
+
         On retryable :class:`AdapterError` (transport failure, rate
         limit, upstream 5xx, etc.) the loop advances; on non-retryable
         errors it breaks immediately. When every provider has been tried
@@ -2295,7 +2453,23 @@ class FallbackEngine:
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
         """Stream from the first provider that successfully starts streaming.
 
-        Important: once we begin yielding chunks from an adapter, we cannot
+        launcher-model-swap.md §4.1 / §6.6 known-trap #1: the swap lease
+        (if any) is held across the *entire* generator — including every
+        yielded chunk — and released in ``finally`` so it survives client
+        disconnect / cancellation (``GeneratorExit`` still runs the
+        ``finally``) without ever leaking an ``in_flight`` count that
+        would block the TTL sweeper forever.
+        """
+        lease = await self._swap_ensure_loaded_or_raise(request)
+        try:
+            async for chunk in self._stream_impl(request):
+                yield chunk
+        finally:
+            if lease is not None:
+                await self._swap_release(lease)
+
+    async def _stream_impl(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+        """Important: once we begin yielding chunks from an adapter, we cannot
         fall back mid-stream (the client has already received partial content).
         We only fall through if the *initial* response is an error.
         """
@@ -2591,6 +2765,30 @@ class FallbackEngine:
             )
 
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
+        """Non-streaming Anthropic request, per-provider dispatch.
+
+        launcher-model-swap.md §4.1: the swap dispatch hook runs first,
+        keyed on the resolved profile (see ``_swap_ensure_loaded``).
+        When it fires (spawns or waits for a
+        just-loaded swap backend), the M11 ingress-prepared dispatch
+        (``apply_context_budget``, which resolves the chain *before*
+        this method — and therefore before the swap process/provider
+        existed) is deliberately bypassed so ``_generate_anthropic_impl``
+        re-resolves the chain fresh and actually finds the newly
+        registered provider.
+        """
+        lease = await self._swap_ensure_loaded_or_raise(request)
+        try:
+            return await self._generate_anthropic_impl(
+                request, skip_prepared_dispatch=lease is not None
+            )
+        finally:
+            if lease is not None:
+                await self._swap_release(lease)
+
+    async def _generate_anthropic_impl(
+        self, request: AnthropicRequest, *, skip_prepared_dispatch: bool = False
+    ) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
         # v1.9-E (L3): tool-loop guard runs before chain dispatch so the
         # `inject` action's mutated request flows into the chain
@@ -2609,7 +2807,9 @@ class FallbackEngine:
         # guard nor the input filters replaced the request object (the
         # common no-plugin path). This avoids a second chain resolution
         # (incl. adaptive/drift reorder) and a second full token estimate.
-        prepared = self._take_prepared_dispatch(request)
+        # ``skip_prepared_dispatch`` (swap) forces a fresh resolution —
+        # see ``generate_anthropic``'s docstring.
+        prepared = None if skip_prepared_dispatch else self._take_prepared_dispatch(request)
         if prepared is not None:
             chain = prepared.chain
             request = prepared.request
@@ -2879,7 +3079,26 @@ class FallbackEngine:
     ) -> AsyncIterator[AnthropicStreamEvent]:
         """Streaming Anthropic request, per-provider dispatch.
 
-        For non-native providers with tools declared, we use the v0.3-D
+        launcher-model-swap.md §4.1 / §6.6 known-trap #1: same swap
+        lease treatment as :meth:`stream` — held across the whole
+        generator, released in ``finally``. See :meth:`generate_anthropic`
+        for why the M11 prepared-dispatch cache is bypassed when swap
+        fires.
+        """
+        lease = await self._swap_ensure_loaded_or_raise(request)
+        try:
+            async for ev in self._stream_anthropic_impl(
+                request, skip_prepared_dispatch=lease is not None
+            ):
+                yield ev
+        finally:
+            if lease is not None:
+                await self._swap_release(lease)
+
+    async def _stream_anthropic_impl(
+        self, request: AnthropicRequest, *, skip_prepared_dispatch: bool = False
+    ) -> AsyncIterator[AnthropicStreamEvent]:
+        """For non-native providers with tools declared, we use the v0.3-D
         downgrade path (run the request non-streaming internally, repair
         tool calls, then synthesize an Anthropic SSE event sequence) —
         the same logic that used to live in the ingress. Consolidating
@@ -2898,7 +3117,8 @@ class FallbackEngine:
         # M11: reuse the ingress-prepared chain + trimmed request when the
         # guard / filters were no-ops (identity match). Mirrors the
         # non-streaming path — avoids a redundant resolution + estimate.
-        prepared = self._take_prepared_dispatch(request)
+        # ``skip_prepared_dispatch`` (swap) forces a fresh resolution.
+        prepared = None if skip_prepared_dispatch else self._take_prepared_dispatch(request)
         if prepared is not None:
             chain = prepared.chain
             request = prepared.request

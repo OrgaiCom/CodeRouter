@@ -14,6 +14,7 @@ Design notes (see plan.md §2 / §5.4):
 from __future__ import annotations
 
 import re
+import warnings
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -559,7 +560,14 @@ class FallbackChain(BaseModel):
     providers: list[str] = Field(
         ...,
         min_length=1,
-        description="Provider names in fallback order. First success wins.",
+        description=(
+            "Provider names in fallback order. First success wins. "
+            "(The launcher-swap placeholder profiles are the sole "
+            "empty-chain exception; they bypass this validator via "
+            "``model_construct`` in "
+            "``CodeRouterConfig._inject_swap_profiles_and_auto_router_rules`` "
+            "— user-declared chains still fail fast at load when empty.)"
+        ),
     )
     timeout_s: float | None = Field(
         default=None,
@@ -1452,6 +1460,231 @@ class LauncherOptionProfile(BaseModel):
     )
 
 
+class SwapModelSpec(BaseModel):
+    """One entry in ``launcher.swap.models`` (docs/designs/launcher-model-swap.md).
+
+    Security (§7 of the design): this is the ONLY surface through which
+    the on-demand swap manager (``coderouter/launcher_swap.py``) is
+    allowed to start a process. ``model_path`` is static config here —
+    never taken from a request body — and is re-validated against
+    ``launcher.model_dirs`` via ``_resolve_within_model_dirs`` at spawn
+    time, exactly like the manual ``/api/launcher/start`` UI. A
+    request's ``model`` field is purely a catalog lookup key; it can
+    never select an arbitrary path, backend flag, or command.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Logical model name matched against the request body's "
+            "``model`` field. Also becomes the provider name and the "
+            "dedicated single-model profile name "
+            "(``launcher-swap-<name>``, see :attr:`provider_name` / "
+            ":attr:`profile_name`) — the profile is pre-declared at "
+            "config load (empty) so both ingress routes' "
+            "\"profile must exist\" check passes even before the first "
+            "on-demand spawn."
+        ),
+    )
+    model_pattern: str | None = Field(
+        default=None,
+        description=(
+            "Optional additional catalog match: ``re.fullmatch`` against "
+            "the request's ``model`` field, checked when an exact "
+            "``name`` match fails. Compiled at load time, same as "
+            "``AutoRouteRule.model_pattern``. NOTE: the auto-injected "
+            "auto_router rule (§10 Q7) always keys on ``re.escape(name)`` "
+            "— an exact match — regardless of this field; this field "
+            "only widens *catalog* matching for ``SwapManager.match``."
+        ),
+    )
+    backend: Literal["llama.cpp", "vllm", "mlx"] = Field(
+        ..., description="Same backend set as the manual launcher UI / _build_cmd.",
+    )
+    model_path: str = Field(
+        ...,
+        description=(
+            "Absolute or ``~``-relative model file path. Re-validated "
+            "against launcher.model_dirs at spawn time via "
+            "_resolve_within_model_dirs — never taken from a request."
+        ),
+    )
+    port: int | None = Field(
+        default=None,
+        ge=1024,
+        le=65535,
+        description=(
+            "Fixed port (recommended — §10 Q2). When unset, the swap "
+            "manager picks an OS-assigned ephemeral port and retries "
+            "once on a different port if the backend fails to become "
+            "ready. Best-effort only — no strong TOCTOU guarantee "
+            "(§6.6 known-trap #4)."
+        ),
+    )
+    option_profile: str | None = Field(
+        default=None,
+        description=(
+            "Name of a ``launcher.option_profiles[backend]`` preset to "
+            "apply. Must exist — checked at load by "
+            "``LauncherConfig._check_swap_option_profiles_exist``."
+        ),
+    )
+    extra_args: str = Field(
+        default="",
+        description="One-off extra CLI flags (shlex.split; model-override guarded).",
+    )
+    draft_model_path: str | None = Field(
+        default=None, description="MTP/draft gguf companion model (resolve_speculative).",
+    )
+    mtp_mode: Literal["auto", "off"] = Field(default="auto")
+
+    # ---- Phase 2 (schema only for Phase 1 — no eviction/accounting logic
+    #      wired up yet; declared now so the config surface is forward-
+    #      compatible without a second migration) ----
+    group: Literal["swap", "persistent", "exclusive"] = Field(
+        default="swap",
+        description=(
+            "llama-swap groups equivalent (§10 Q3: 3 fixed values). "
+            "Not consulted by Phase 1 (every model is treated as 'swap')."
+        ),
+    )
+    est_weights_gb: float | None = Field(default=None, ge=0.0)
+    num_ctx: int = Field(default=8192, ge=256)
+
+    @property
+    def provider_name(self) -> str:
+        """Runtime ``ProviderConfig.name`` this model registers under."""
+        return f"launcher-swap-{self.name}"
+
+    @property
+    def profile_name(self) -> str:
+        """Dedicated single-model profile name (pre-declared at load).
+
+        Deliberately identical to :attr:`provider_name` — each swap
+        model gets its OWN single-provider chain rather than sharing one
+        "swap" profile across models (a shared chain would let requests
+        for model A route to whichever model was registered most
+        recently, since ``register_provider`` only reorders providers
+        within one chain — see the design-deviation note in
+        docs/designs/launcher-model-swap.md's implementation report).
+        """
+        return f"launcher-swap-{self.name}"
+
+    @model_validator(mode="after")
+    def _compile_model_pattern(self) -> SwapModelSpec:
+        """Fail fast on a bad ``model_pattern`` regex (load time, not first request)."""
+        if self.model_pattern is not None:
+            try:
+                re.compile(self.model_pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"swap model {self.name!r}: invalid model_pattern "
+                    f"{self.model_pattern!r}: {exc}"
+                ) from exc
+        return self
+
+
+class LauncherSwapConfig(BaseModel):
+    """The ``launcher.swap`` block — Phase 1 on-demand model swap.
+
+    See docs/designs/launcher-model-swap.md. Disabled by default
+    (``enabled: false``); existing manual-launcher deployments are
+    unaffected until an operator opts in.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable on-demand swap. False (default): Launcher behaves "
+            "exactly as before (manual start/stop only)."
+        ),
+    )
+    ttl_seconds: float | None = Field(
+        default=1800.0,
+        ge=0.0,
+        description=(
+            "Seconds of no in-flight requests after which an idle swap "
+            "process is auto-stopped. None = TTL disabled (runs until "
+            "explicitly stopped). 0 = unload as soon as the last "
+            "in-flight lease releases. §10 Q1: one GLOBAL value for "
+            "Phase 1 — no per-model override yet."
+        ),
+    )
+    readiness_timeout_s: float = Field(
+        default=120.0,
+        ge=1.0,
+        le=1800.0,
+        description=(
+            "Upper bound (seconds) a request will wait for an on-demand "
+            "spawn to become ready before the dispatch hook raises a "
+            "retryable AdapterError."
+        ),
+    )
+    sweep_interval_s: float = Field(
+        default=15.0,
+        ge=1.0,
+        le=600.0,
+        description="How often the TTL sweeper background task scans for idle processes.",
+    )
+    inject_auto_router_rules: bool = Field(
+        default=True,
+        description=(
+            "§10 Q7: auto-generate one auto_router rule per catalog "
+            "model (id ``swap:<name>``, ``model_pattern=re.escape(name)``) "
+            "so a request naming the model reaches it without any "
+            "manual profile/header wiring. Inserted after any "
+            "user-declared auto_router.rules (first-match-wins keeps "
+            "hand-written rules authoritative) and only consulted when "
+            "``default_profile: auto`` (existing auto_router constraint, "
+            "unchanged). Set False to wire routing yourself (e.g. "
+            "X-CodeRouter-Profile: launcher-swap-<name>)."
+        ),
+    )
+    # ---- Phase 2 (schema only) ----
+    memory_budget_gb: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Phase 2: explicit combined-memory budget override (GB). Not used by Phase 1.",
+    )
+    max_loaded: int | None = Field(
+        default=None,
+        ge=1,
+        description="Phase 2: cap on simultaneously loaded swap models. Not used by Phase 1.",
+    )
+    models: list[SwapModelSpec] = Field(
+        default_factory=list,
+        description="The static swap catalog. Only models listed here can ever be spawned on demand.",
+    )
+
+    @model_validator(mode="after")
+    def _check_models(self) -> LauncherSwapConfig:
+        """Fail fast on duplicate names / ports; warn on a useless enable."""
+        names = [m.name for m in self.models]
+        dupe_names = sorted({n for n in names if names.count(n) > 1})
+        if dupe_names:
+            raise ValueError(
+                f"launcher.swap.models: duplicate name(s): {dupe_names}"
+            )
+        ports = [m.port for m in self.models if m.port is not None]
+        dupe_ports = sorted({p for p in ports if ports.count(p) > 1})
+        if dupe_ports:
+            raise ValueError(
+                f"launcher.swap.models: duplicate port(s): {dupe_ports}"
+            )
+        if self.enabled and not self.models:
+            warnings.warn(
+                "launcher.swap.enabled is True but launcher.swap.models "
+                "is empty — swap has nothing to serve.",
+                stacklevel=2,
+            )
+        return self
+
+
 class LauncherConfig(BaseModel):
     """The ``launcher:`` block in providers.yaml.
 
@@ -1507,6 +1740,160 @@ class LauncherConfig(BaseModel):
             "for one-off overrides without touching this config."
         ),
     )
+    # --- readiness gating (fixes: launcher registered a provider the
+    #     instant the child process spawned, before llama-server / vllm had
+    #     actually finished loading the model into memory — requests routed
+    #     there during load returned connection-refused / 503) ---------------
+    readiness_timeout_s: float = Field(
+        default=300.0,
+        ge=5.0,
+        le=3600.0,
+        description=(
+            "Maximum seconds to wait for a launched backend to become "
+            "ready (llama.cpp / vllm: GET /health returns 200; other "
+            "backends: a bare TCP connect succeeds) before registering it "
+            "as a routable provider. Default 5 min accounts for large "
+            "GGUF model loads. The process is left running but the "
+            "provider is never registered and status becomes 'error' if "
+            "the deadline is exceeded — see ``ManagedProcess.status``."
+        ),
+    )
+    readiness_poll_interval_s: float = Field(
+        default=2.0,
+        ge=0.2,
+        le=60.0,
+        description=(
+            "Seconds between readiness probes while a launched backend's "
+            "status is 'loading'."
+        ),
+    )
+    # --- auto-restart (fixes: a crashed launcher process was left in
+    #     status='error' forever — only the one-shot MTP startup-crash
+    #     retry existed, and it does not apply to ordinary crashes) --------
+    auto_restart: bool = Field(
+        default=False,
+        description=(
+            "When True, a launcher-managed backend that crashes (non-zero "
+            "exit, after any MTP startup-crash fallback has already been "
+            "tried) is automatically relaunched with the same command, "
+            "up to ``auto_restart_max_attempts`` times with exponential "
+            "backoff. An intentional stop (the UI's Stop button, or "
+            "server shutdown) is never treated as a crash. Default False: "
+            "unlike ``readiness_timeout_s`` above (a pure bugfix with no "
+            "new side effect), automatically re-spawning a process is a "
+            "new side effect — a backend that crashes because it is "
+            "genuinely misconfigured (bad flags, missing model file) "
+            "would otherwise be silently re-spawned every few seconds "
+            "until the attempt budget is exhausted, burning CPU/ports "
+            "without the operator noticing. Mirrors the opt-in posture of "
+            "``ProviderConfig.restart_command`` in the self-healing "
+            "guard (v2.0-J) — set this to True once the launch config is "
+            "known-stable."
+        ),
+    )
+    auto_restart_max_attempts: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description=(
+            "Maximum consecutive auto-restart attempts before giving up "
+            "and leaving the process in status='error'. Resets to 0 once "
+            "a restarted process passes its readiness check. Ignored "
+            "when ``auto_restart`` is False."
+        ),
+    )
+    auto_restart_backoff_s: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=300.0,
+        description=(
+            "Initial backoff (seconds) before the first auto-restart "
+            "attempt. Doubles on each subsequent attempt up to "
+            "``auto_restart_backoff_max_s``."
+        ),
+    )
+    auto_restart_backoff_max_s: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=600.0,
+        description=(
+            "Cap (seconds) on the exponential auto-restart backoff."
+        ),
+    )
+    swap: LauncherSwapConfig | None = Field(
+        default=None,
+        description=(
+            "Phase 1 on-demand model swap (docs/designs/launcher-model-"
+            "swap.md). None (default) = disabled, identical to pre-swap "
+            "behavior."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_auto_restart_backoff_ordered(self) -> LauncherConfig:
+        """Fail fast when the backoff floor exceeds its own ceiling.
+
+        Same fast-fail philosophy as
+        ``FallbackChain._check_recovery_probe_interval_ordered``.
+        """
+        if self.auto_restart_backoff_s > self.auto_restart_backoff_max_s:
+            raise ValueError(
+                "launcher: auto_restart_backoff_s "
+                f"({self.auto_restart_backoff_s}) must be <= "
+                f"auto_restart_backoff_max_s ({self.auto_restart_backoff_max_s})."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_swap_option_profiles_exist(self) -> LauncherConfig:
+        """§5.4 #2: a swap model's ``option_profile`` must be a real preset."""
+        if self.swap is None:
+            return self
+        for spec in self.swap.models:
+            if spec.option_profile is None:
+                continue
+            profiles = self.option_profiles.get(spec.backend, [])
+            if not any(p.name == spec.option_profile for p in profiles):
+                raise ValueError(
+                    f"launcher.swap.models[{spec.name!r}]: option_profile "
+                    f"{spec.option_profile!r} not found in "
+                    f"launcher.option_profiles[{spec.backend!r}]."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_swap_model_paths_within_model_dirs(self) -> LauncherConfig:
+        """Review fix L-1: fail fast on a swap ``model_path`` outside model_dirs.
+
+        The spawn path re-validates via ``_resolve_within_model_dirs``
+        (defense in depth, M14 traversal guard), but that only surfaces
+        at the first request for the model — as a retryable 502. A
+        static catalog entry is fully checkable at load, so check it
+        here with the same containment rule (resolve ``~`` / symlinks /
+        ``..`` on both sides, then require the path to be the dir or
+        under it). Only enforced when swap is enabled — a disabled swap
+        block stays zero-impact.
+        """
+        if self.swap is None or not self.swap.enabled or not self.swap.models:
+            return self
+        from pathlib import Path
+
+        if not self.model_dirs:
+            raise ValueError(
+                "launcher.swap is enabled but launcher.model_dirs is empty — "
+                "swap model_path values cannot be validated (and spawn would "
+                "refuse them at request time). Configure model_dirs."
+            )
+        bases = [Path(d).expanduser().resolve() for d in self.model_dirs]
+        for spec in self.swap.models:
+            candidate = Path(spec.model_path).expanduser().resolve()
+            if not any(candidate == b or b in candidate.parents for b in bases):
+                raise ValueError(
+                    f"launcher.swap.models[{spec.name!r}]: model_path "
+                    f"{spec.model_path!r} is not under any configured "
+                    f"launcher.model_dirs {self.model_dirs!r}."
+                )
+        return self
 
 
 class PluginsConfig(BaseModel):
@@ -1770,6 +2157,141 @@ class CodeRouterConfig(BaseModel):
                     "Rename this profile to something else, e.g. "
                     "'auto-route' or 'smart'."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _inject_swap_profiles_and_auto_router_rules(self) -> CodeRouterConfig:
+        """§10 Q7 + design-deviation: bootstrap swap's dedicated profiles.
+
+        For every ``launcher.swap.models[*]`` entry (when
+        ``launcher.swap.enabled``), pre-declares an EMPTY placeholder
+        profile named ``SwapModelSpec.profile_name``
+        (``launcher-swap-<name>``) so both ingress routes'
+        "profile must already exist" pre-dispatch check passes even on
+        the very first (cold-start) request for that model — the
+        on-demand spawn itself only happens later, inside
+        ``FallbackEngine``'s dispatch entry points, which run AFTER that
+        check. ``SwapManager.register_provider`` fills the chain in on
+        first spawn (mirrors the existing lazy-profile-creation path in
+        ``FallbackEngine.register_provider``).
+
+        Deliberately ONE profile PER model (not a single shared "swap"
+        profile as sketched in the design's §5.5 YAML example): a
+        shared chain would make ``register_provider``'s "insert at
+        front" behavior route a request for model A to whichever model
+        was registered most recently, since chain dispatch never
+        cross-checks the request's ``model`` against the provider it
+        picks. See the implementation report for the full rationale.
+
+        When ``inject_auto_router_rules`` is True (default), also
+        generates one ``AutoRouteRule`` per model (id ``swap:<name>``,
+        ``model_pattern=re.escape(name)`` — an exact match, independent
+        of the catalog's own broader ``model_pattern`` field) targeting
+        that profile, appended AFTER any user-declared
+        ``auto_router.rules`` (first-match-wins keeps hand-written rules
+        authoritative).
+
+        Review fix C-1: when NO ``auto_router:`` block was declared and
+        ``default_profile == "auto"``, the operator was relying on the
+        BUNDLED ruleset — synthesizing a swap-only block here would
+        silently replace it (image → multi and code-fence → coding
+        classification would vanish the moment swap was enabled). The
+        synthesized block therefore carries
+        ``[*BUNDLED_RULES, *swap_rules]`` with the bundled fallthrough
+        profile preserved, so enabling swap is purely additive. Outside
+        the ``default_profile: auto`` case the bundled rules never
+        applied anyway, so the block holds only the swap rules and
+        falls through to ``default_profile`` itself. Runs before
+        :meth:`_check_auto_router_profiles_exist` so the injected rules
+        are validated too, and before
+        :meth:`_check_bundled_auto_router_requirements` so injecting a
+        swap-only auto_router doesn't spuriously demand the bundled
+        trio (multi/coding/writing) for non-auto deployments.
+        """
+        swap_cfg = self.launcher.swap if self.launcher is not None else None
+        if swap_cfg is None or not swap_cfg.enabled or not swap_cfg.models:
+            return self
+
+        provider_names = {p.name for p in self.providers}
+        collisions = sorted(
+            {
+                spec.provider_name
+                for spec in swap_cfg.models
+                if spec.provider_name in provider_names
+            }
+        )
+        if collisions:
+            raise ValueError(
+                "launcher.swap.models produce provider name(s) that "
+                f"collide with statically-declared providers: {collisions}. "
+                "Rename the swap model (or the conflicting provider)."
+            )
+
+        existing_profiles = {p.name for p in self.profiles}
+        for spec in swap_cfg.models:
+            if spec.profile_name not in existing_profiles:
+                self.profiles.append(
+                    FallbackChain.model_construct(
+                        name=spec.profile_name, providers=[]
+                    )
+                )
+                existing_profiles.add(spec.profile_name)
+
+        if not swap_cfg.inject_auto_router_rules:
+            return self
+
+        swap_rules = [
+            AutoRouteRule(
+                id=f"swap:{spec.name}",
+                profile=spec.profile_name,
+                match=RuleMatcher(model_pattern=re.escape(spec.name)),
+            )
+            for spec in swap_cfg.models
+        ]
+        if self.auto_router is None:
+            if self.default_profile == "auto":
+                # C-1: the operator is on the bundled ruleset. Merge it
+                # into the synthesized block and keep the bundled
+                # fallthrough profile, so enabling swap never silently
+                # disables image/code-fence classification. SWAP RULES
+                # FIRST (coordinator-reviewed order): a swap rule is an
+                # ``re.escape`` exact model-name match, firing only when
+                # the client explicitly named that model — a stronger
+                # signal than the bundled content heuristics. Bundled-
+                # first would let a code-fence-dense body hijack an
+                # explicitly-named swap model over to 'coding'; swap-
+                # first cannot affect any request that doesn't name a
+                # swap model (exact match). User-declared auto_router
+                # blocks keep append-after semantics below (operators
+                # control their own ordering there).
+                # Function-local import: routing.auto_router imports
+                # this module at ITS module level, so schemas must not
+                # import it at module level (cycle). By the time any
+                # CodeRouterConfig is constructed both modules are
+                # importable, so the runtime import here is safe.
+                from coderouter.routing.auto_router import (
+                    BUNDLED_DEFAULT_RULE_PROFILE,
+                    BUNDLED_RULES,
+                )
+
+                self.auto_router = AutoRouterConfig(
+                    rules=[*swap_rules, *BUNDLED_RULES],
+                    default_rule_profile=BUNDLED_DEFAULT_RULE_PROFILE,
+                )
+            else:
+                # Non-auto deployments never consulted the bundled rules
+                # (classify() only fires under ``default_profile: auto``),
+                # so the block holds only the swap rules and falls
+                # through to ``default_profile`` itself (guaranteed to
+                # exist per ``_check_default_profile_exists``, which
+                # already ran) — enabling swap never forces an unrelated
+                # static-profile deployment to declare a "writing"
+                # profile it has no other use for.
+                self.auto_router = AutoRouterConfig(
+                    rules=swap_rules, default_rule_profile=self.default_profile
+                )
+        else:
+            self.auto_router.rules = [*self.auto_router.rules, *swap_rules]
         return self
 
     @model_validator(mode="after")

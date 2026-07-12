@@ -305,6 +305,13 @@ def create_app(config_path: str | None = None) -> FastAPI:
                 },
             )
 
+        # launcher-model-swap.md §6.6 known-trap #9: the TTL sweeper is a
+        # background task like continuous-probe above — start it once the
+        # event loop is actually running, not at app-construction time.
+        swap_manager = getattr(app.state, "swap", None)
+        if swap_manager is not None:
+            await swap_manager.start()
+
         yield
 
         # Graceful shutdown of probe task
@@ -312,6 +319,14 @@ def create_app(config_path: str | None = None) -> FastAPI:
             shutdown_event.set()
             with contextlib.suppress(Exception):
                 await probe_task
+
+        # Cancel the swap TTL sweeper *before* shutdown_launcher tears down
+        # every ManagedProcess below — shutdown_launcher already stops
+        # swap-spawned processes too (they're in the same registry), so
+        # this only needs to stop the sweeper loop itself, not race it.
+        if swap_manager is not None:
+            with contextlib.suppress(Exception):
+                await swap_manager.stop()
 
         # Launcher: stop child llama.cpp / vllm processes so they don't orphan.
         from coderouter.ingress.launcher_routes import shutdown_launcher
@@ -370,6 +385,20 @@ def create_app(config_path: str | None = None) -> FastAPI:
     # Inject engine + config so route handlers can reach them via app.state
     app.state.engine = engine
     app.state.config = config
+
+    # Phase 1 on-demand model swap (docs/designs/launcher-model-swap.md).
+    # None (default) leaves the engine's swap dispatch hooks as cheap
+    # no-ops — zero behavior change for deployments that don't opt in.
+    # Constructed here (needs the real ``app`` for app.state.launcher /
+    # app.state.engine) but the TTL sweeper task itself is only started
+    # from the lifespan below, once the event loop is actually running.
+    swap_cfg = config.launcher.swap if config.launcher is not None else None
+    if swap_cfg is not None and swap_cfg.enabled:
+        from coderouter.launcher_swap import SwapManager
+
+        swap_manager = SwapManager(app, swap_cfg, config.launcher)
+        app.state.swap = swap_manager
+        engine.attach_swap_manager(swap_manager)
 
     # H8: DNS-rebinding protection. Applied to every route so a hostname an
     # attacker controls cannot be pointed at loopback and used to drive the
