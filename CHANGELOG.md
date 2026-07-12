@@ -9,6 +9,97 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.9.1] — 2026-07-12 (launcher model swap Phase 1 — llama-swap-style on-demand models)
+
+**New: `launcher.swap`** — an opt-in, dependency-free equivalent of
+[llama-swap](https://github.com/mostlygeek/llama-swap)'s core loop, built on
+the existing embedded Launcher. Declare a static model catalog and CodeRouter
+will **spawn the backing `llama-server` on demand** when a request names the
+model, **hold the request until the backend passes its readiness probe**, and
+**auto-unload the process after an idle TTL** (`swap-unload`, memory returns
+to zero). Only cataloged models can ever be spawned; `model_path` is resolved
+against `launcher.model_dirs` both at config load (fail-fast) and again at
+spawn (defense in depth). Design + as-built record:
+`docs/designs/launcher-model-swap.md`. Sample: `examples/providers.swap.yaml`.
+Verified end-to-end on macOS (M3 Max, Metal): cold spawn → warm reuse →
+catalog-miss fallthrough → TTL unload → respawn, all green
+(`_run/swap-test/` kit).
+
+### Added
+
+- **`launcher.swap` config block** (`LauncherSwapConfig` / `SwapModelSpec`):
+  `enabled` (default `false` — zero impact until opted in), global
+  `ttl_seconds` (default 1800; `null` = never, `0` = unload at last release),
+  `readiness_timeout_s`, `sweep_interval_s`, `inject_auto_router_rules`, and
+  the static `models:` catalog (`name` / `backend` / `model_path` / fixed
+  `port` recommended / `num_ctx` / `extra_args` / speculative fields). Phase 2
+  fields (`group`, `est_weights_gb`, `memory_budget_gb`, `max_loaded`) are
+  schema-declared but not yet acted on.
+- **`SwapManager`** (`coderouter/launcher_swap.py`): per-model
+  `asyncio.Lock` + lease accounting — concurrent requests for the same model
+  trigger exactly one spawn; streaming responses hold a lease for their whole
+  lifetime (a mid-stream process is never TTL-evicted); a failed spawn resets
+  to idle (no poisoning) and the next request retries.
+- **Auto-generated routing**: with `default_profile: auto` and no explicit
+  `auto_router:` block, one exact-match rule per catalog model
+  (`id: swap:<name>`, `model_pattern = re.escape(name)`) is merged **ahead of
+  the bundled heuristics** (an explicitly named swap model beats
+  code-fence/image heuristics) while keeping the bundled rules and their
+  fallthrough intact. A user-declared `auto_router:` block keeps its full-
+  replacement semantics — swap rules are appended after user rules.
+- **`FallbackEngine.deregister_provider`** — the long-missing inverse of
+  `register_provider`; TTL unload now removes the provider from its chain,
+  drops the cached adapter (closing its HTTP client), and leaves no dead-port
+  entries behind.
+- **Launcher readiness gating** — spawned processes now report a new
+  `"loading"` status and are only registered as providers **after** the
+  backend passes a readiness probe (`GET /health` for llama.cpp/vllm, TCP
+  connect fallback otherwise; `launcher.readiness_timeout_s`, default 300 s).
+  Requests can no longer race a model that is still loading.
+  *Behavior change*: `POST /api/launcher/start` no longer performs the
+  provider sync synchronously (`provider_sync` in the response is always
+  `null`); watch `/api/launcher/processes` or the `provider sync:` log line.
+- **Launcher auto-restart (opt-in)** — `launcher.auto_restart: true` enables
+  crash recovery with exponential backoff (`auto_restart_max_attempts`,
+  default 3); intentional stops (Stop button, shutdown, TTL unload) are
+  marked via `ManagedProcess.stopping` and never trigger a restart. Default
+  **off**, matching the opt-in stance of `restart_command`. Swap-managed
+  processes are excluded — `SwapManager` is their sole supervisor.
+- Tests: `tests/test_launcher_readiness_restart.py` (21),
+  `tests/test_launcher_swap.py` (31), `tests/test_launcher_swap_review.py`
+  (15 regression tests from the adversarial review). Full suite: 1725 passed.
+
+### Fixed
+
+- **Launcher-spawned providers were registered before the model finished
+  loading**, so early requests failed against a half-up backend (readiness
+  gating above).
+- **Crashed launcher processes stayed `status="error"` forever** with no
+  recovery path other than manual restart (auto-restart above).
+- Adversarial-review fixes folded into the initial swap release: enabling
+  swap no longer silently discards the bundled auto-router rules; TTL unload
+  no longer leaks the generic `launcher-<backend>-<port>` provider (generic
+  registration is suppressed for swap-managed processes); swap processes are
+  exempt from launcher auto-restart (no dueling supervisors on a fixed
+  port); on-demand spawn keys off the **resolved profile**, not the raw
+  model string (no wasted spawns when routing goes elsewhere, and
+  catalog-mismatched model names hitting a swap profile still take a lease
+  so they cannot be unloaded mid-flight).
+
+### Docs
+
+- `docs/guides/subagent-routing.md` / `.en.md` — §6.1 measured-verification
+  results updated against the 2026-07-11/12 E2E artifacts (3/4 sub-agent
+  round trip + rerun evidence, `c6096ed` grok-fix reference, expected-log
+  notes), new §5(e) on running the main orchestrator on a 9B-class local
+  model (tool-support prerequisite, 9b→30b fallback chain, autocompact
+  caveat), §7 UNCONFIRMED items resolved as measured.
+- `docs/designs/launcher-model-swap.md` — full design (phases, concurrency
+  model, security posture, §10 review decisions, §10.5 as-built record).
+- `examples/providers.swap.yaml` + `examples/README.md` index row.
+
+---
+
 ## [v2.9.0] — 2026-07-11 (agent_cli extraction Phase 2c — in-core adapter removed)
 
 **PR #73**. **BREAKING.** Phase 2c of the agent_cli plugin extraction
