@@ -225,6 +225,88 @@ All of these are **estimates** — they don't account for other processes' memor
 
 ---
 
+## Automatic model swap (launcher.swap) — v2.9.1+
+
+An equivalent of [llama-swap](https://github.com/mostlygeek/llama-swap)'s core loop, built into CodeRouter itself with no extra dependencies. Opt-in and disabled by default (`enabled: false`).
+
+- Watches the request's `model` name and **starts the backing backend on demand** if it isn't already running
+- **Holds the request** until the model finishes loading — the response is only returned once the process passes its readiness check (no connection-refused / 503 against a still-loading model)
+- **Automatically unloads** an idle process (no in-flight requests) after `ttl_seconds`, freeing memory
+
+### Minimal configuration
+
+```yaml
+# ~/.coderouter/providers.yaml
+default_profile: auto
+
+auto_router:
+  default_rule_profile: launcher-swap-ornith-9b
+  rules: []
+
+launcher:
+  model_dirs:
+    - ~/models
+
+  swap:
+    enabled: true
+    ttl_seconds: 1800
+    readiness_timeout_s: 180
+
+    models:
+      - name: ornith-9b
+        backend: llama.cpp
+        model_path: ~/models/Ornith-1.0-9B-Q4_K_M.gguf
+        port: 18081
+        num_ctx: 32768
+        extra_args: "-ngl 99"
+
+      - name: qwen3-coder-30b
+        backend: llama.cpp
+        model_path: ~/models/Qwen3-Coder-30B-Q4_K_M.gguf
+        port: 18082
+        num_ctx: 32768
+```
+
+Note there's no `providers:` / `profiles:` at all here. **As of v2.9.2**, when `launcher.swap.enabled: true` and `launcher.swap.models` has at least one entry, the top-level `providers` / `profiles` lists can be omitted (or left empty, `[]`) — a `launcher-swap-<name>` profile for each catalog model is auto-injected at config load, and its backing provider is registered at runtime on first on-demand spawn. **Through v2.9.1**, this relaxation didn't exist, so you had to write an unreachable dummy `providers` / `profiles` entry (e.g. `base_url: http://127.0.0.1:9`).
+
+For a more realistic example that mixes swap with an always-on backend like Ollama, see [`examples/providers.swap.yaml`](../../examples/providers.swap.yaml).
+
+### `launcher.swap` fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable on-demand swap. `false` preserves manual-only startup exactly as before (no impact on existing deployments) |
+| `ttl_seconds` | float \| null | `1800.0` | Seconds of no in-flight requests after which the process is auto-stopped. `null` = disabled (runs until explicitly stopped), `0` = unload as soon as the last request completes. Phase 1 has a single global value only — no per-model override |
+| `readiness_timeout_s` | float | `120.0` (1–1800) | Upper bound (seconds) a **request** will wait for an on-demand spawn to become ready before the dispatch hook raises a retryable `AdapterError`. **Distinct from `launcher.readiness_timeout_s` below (default 300s)** — this one bounds "how long one request waits," that one bounds "the general readiness-monitoring window for a process" |
+| `sweep_interval_s` | float | `15.0` (1–600) | How often the TTL sweeper background task scans for idle processes |
+| `inject_auto_router_rules` | bool | `true` | Whether to auto-generate an `auto_router` rule per catalog model (`id: swap:<name>`, `model_pattern` is an exact match on the name). Set `false` to wire routing yourself (e.g. via the `X-CodeRouter-Profile` header) |
+| `models[].name` | str (required) | — | Logical name matched against the request's `model` field. The provider name and dedicated profile name are automatically `launcher-swap-<name>` |
+| `models[].backend` | `"llama.cpp" \| "vllm" \| "mlx"` (required) | — | Same backend set as the manual Launcher UI |
+| `models[].model_path` | str (required) | — | Absolute or `~`-relative model file path. Must be **under `launcher.model_dirs`** — re-validated both at config load and at spawn time (defense against path traversal) |
+| `models[].port` | int \| null | `null` | Fixed port recommended. When unset, an OS-assigned ephemeral port is used, with one retry on a different port if startup fails (best-effort — no strong TOCTOU guarantee) |
+| `models[].option_profile` | str \| null | `null` | Name of an existing preset in `launcher.option_profiles[backend]`. A name that doesn't exist is a config-load error |
+| `models[].num_ctx` | int | `8192` (≥256) | Baseline used for KV estimation / launch parameters |
+| `models[].extra_args` | str | `""` | One-off extra CLI flags (a single string, parsed with `shlex`; re-specifying the model/draft model is rejected) |
+| `models[].draft_model_path` | str \| null | `null` | Explicit MTP/draft companion gguf |
+| `models[].mtp_mode` | `"auto" \| "off"` | `"auto"` | Same meaning as the manual Launcher UI's **MTP** field |
+| `models[].model_pattern` | str \| null | `null` | Additional regex (`re.fullmatch`) accepted alongside an exact match on `name`. Only affects catalog matching (`SwapManager.match`) — the auto-injected auto_router rule always uses an exact match (`re.escape`) on `name` |
+
+> **Phase 2 fields (schema-declared only, not implemented)**: `models[].group` (`"swap" | "persistent" | "exclusive"`), `models[].est_weights_gb`, `launcher.swap.memory_budget_gb`, and `launcher.swap.max_loaded` exist in the schema but are never consulted by Phase 1 (as of v2.9.1) logic.
+
+### Behavioral notes
+
+- **Swap-managed processes are excluded from `launcher.auto_restart`.** Crash recovery is handled by SwapManager's own re-spawn on the next request, rather than the generic auto-restart supervisor — avoiding two supervisors fighting over the same fixed port
+- **Streaming responses are never TTL-evicted mid-stream.** A "lease" is held until the final chunk is reached, so a process is never killed while it's still generating
+- **A request whose `model` name doesn't match the catalog** falls through to `auto_router.default_rule_profile` (or ordinary profile resolution) — it never reaches a swap-dedicated profile
+- **There's no cap on how many models can be loaded simultaneously** (Phase 1) — as many models as fit in memory can run at once. Budgeting and eviction-based exclusive swap are planned for Phase 2
+- **Omitting `providers` / `profiles` is available as of v2.9.2** (see "Minimal configuration" above). Earlier versions required an unreachable dummy provider/profile
+
+Measured end-to-end (macOS, M3 Max, Metal, ~350MB-class GGUF): the `_run/swap-test/` automated test kit reported ALL PASS across cold spawn (~2s) → warm reuse (~0s, no re-spawn) → catalog-miss fallthrough → TTL unload → respawn. See the design doc's implementation record (§10.5) for details.
+
+For the full design — concurrency model, security considerations, and review decisions — see [`docs/designs/launcher-model-swap.md`](../designs/launcher-model-swap.md).
+
+---
+
 ## Configuration reference
 
 The MODELS list, option profiles, and binary paths are all loaded from the `launcher:` block in `~/.coderouter/providers.yaml`. **Shared between the desktop and Web editions**.
@@ -295,6 +377,23 @@ option_profiles:
 | `int` / `float` / `str` | 2 tokens: `--flag value` |
 | `bool: true` | `--flag` only (no value) |
 | `bool: false` | this flag is omitted |
+
+### Readiness gating and auto-restart (v2.9.1+)
+
+These fields can be added directly under the `launcher:` block (same level as `model_dirs` / `backends`). They apply to both manual starts and swap's on-demand starts.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `readiness_timeout_s` | float | `300.0` (5–3600) | Maximum seconds to wait for a launched backend to become "ready." For llama.cpp / vllm, that means `GET /health` returns 200; other backends use a bare TCP connect. If the deadline is exceeded, the process is left running but never registered as a provider, and its status becomes `error`. The 5-minute default accounts for large GGUF load times |
+| `readiness_poll_interval_s` | float | `2.0` (0.2–60) | Seconds between readiness probes while a launched backend's status is `loading` |
+| `auto_restart` | bool | `false` | When `true`, a backend that crashes (non-zero exit — after the one-shot MTP startup-crash fallback, if applicable, has already been tried) is automatically relaunched, up to `auto_restart_max_attempts` times with exponential backoff. An intentional stop (the Stop button, or server shutdown) is never treated as a crash. Default `false`, matching the opt-in stance of `ProviderConfig.restart_command`. **Swap-managed processes are excluded** — SwapManager is their sole supervisor |
+| `auto_restart_max_attempts` | int | `3` (0–20) | Maximum consecutive auto-restart attempts before giving up. Resets to 0 once a restarted process passes its readiness check. Ignored when `auto_restart` is `false` |
+| `auto_restart_backoff_s` | float | `2.0` (0.1–300) | Initial backoff (seconds) before the first auto-restart attempt. Doubles on each subsequent attempt, capped at `auto_restart_backoff_max_s` |
+| `auto_restart_backoff_max_s` | float | `30.0` (1–600) | Cap (seconds) on the exponential auto-restart backoff |
+
+**New process status `loading`** — a launched process that's still waiting on its readiness check, alongside `starting` / `running` / `stopped` / `error` in the PROCESSES table. Once readiness passes, it transitions to `running`, and only then is it registered as a provider (previously it was registered the instant the process spawned, so requests could race a model that was still loading and get connection-refused / 503).
+
+> **Behavior change (v2.9.1)**: `POST /api/launcher/start` no longer performs provider sync synchronously — the response's `provider_sync` is always `null`. Check `/api/launcher/processes` or the `provider sync:` log line for the sync result.
 
 ### Extra options (free-form input)
 
@@ -404,3 +503,4 @@ Restarting CodeRouter reflects it in the UI. `launcher_profiles.yaml.example` is
 - [Architecture details — Launcher section](../concepts/architecture.en.md#launcher--llamacpp--vllm-プロセス管理-v250)
 - [Usage Guide](../guides/usage-guide.md)
 - [llama.cpp direct connection guide](./llamacpp-direct.en.md)
+- [Model auto-swap design doc](../designs/launcher-model-swap.md) — `launcher.swap`'s concurrency model, security considerations, and review decisions

@@ -225,6 +225,88 @@ MODELS 一覧の各モデルには、CodeRouter を動かしているマシン�
 
 ---
 
+## モデル自動スワップ (launcher.swap) — v2.9.1+
+
+[llama-swap](https://github.com/mostlygeek/llama-swap) 相当の機能を、追加の依存なしで CodeRouter 単体に組み込んだものです。既定は無効(`enabled: false`)の opt-in 機能です。
+
+- リクエストの `model` 名を見て、まだ起動していない backend を**オンデマンドで起動**します
+- モデルのロードが完了するまでリクエストは**保留**され、readiness を通過して初めて応答が返ります(ロード未完了への connection-refused / 503 は起きません)
+- 進行中リクエストが無い状態(アイドル)が `ttl_seconds` 続くと**自動アンロード**してメモリを解放します
+
+### 最小構成
+
+```yaml
+# ~/.coderouter/providers.yaml
+default_profile: auto
+
+auto_router:
+  default_rule_profile: launcher-swap-ornith-9b
+  rules: []
+
+launcher:
+  model_dirs:
+    - ~/models
+
+  swap:
+    enabled: true
+    ttl_seconds: 1800
+    readiness_timeout_s: 180
+
+    models:
+      - name: ornith-9b
+        backend: llama.cpp
+        model_path: ~/models/Ornith-1.0-9B-Q4_K_M.gguf
+        port: 18081
+        num_ctx: 32768
+        extra_args: "-ngl 99"
+
+      - name: qwen3-coder-30b
+        backend: llama.cpp
+        model_path: ~/models/Qwen3-Coder-30B-Q4_K_M.gguf
+        port: 18082
+        num_ctx: 32768
+```
+
+上記は `providers:` / `profiles:` を一切書いていません。**v2.9.2 以降**、`launcher.swap.enabled: true` かつ `launcher.swap.models` が1件以上あれば、トップレベルの `providers` / `profiles` は省略(または空リスト `[]`)で構いません — カタログの各モデルに対応する `launcher-swap-<name>` プロファイルが設定ロード時に自動注入され、対応する provider は初回のオンデマンド起動時にランタイム登録されます。**v2.9.1 まで**はこの緩和が無く、`providers` / `profiles` に到達不能なダミーエントリ(例: `base_url: http://127.0.0.1:9`)を書く必要がありました。
+
+Ollama など常用の backend と併用する、より実運用寄りの設定例は [`examples/providers.swap.yaml`](../../examples/providers.swap.yaml) を参照してください。
+
+### `launcher.swap` フィールド
+
+| フィールド | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `enabled` | bool | `false` | オンデマンドスワップを有効化。`false` ならこれまで通り手動起動のみ(既存デプロイに影響なし) |
+| `ttl_seconds` | float \| null | `1800.0` | 進行中リクエストが無い状態がこの秒数続くとプロセスを自動停止。`null` = 無効(明示停止まで起動し続ける)、`0` = 最後のリクエスト完了で即アンロード。Phase 1 はグローバル1値のみ(モデル毎の上書きは未対応) |
+| `readiness_timeout_s` | float | `120.0`(1〜1800) | オンデマンド起動したモデルの準備完了を**リクエスト側が待つ**上限秒数。超えると dispatch フックが retryable な `AdapterError` を送出する。**下記の `launcher.readiness_timeout_s`(既定 300s)とは別物** — こちらは「1リクエストが待つ上限」、あちらは「プロセスの readiness 監視全般の上限」 |
+| `sweep_interval_s` | float | `15.0`(1〜600) | TTL 監視(sweeper)がアイドルプロセスを走査する間隔 |
+| `inject_auto_router_rules` | bool | `true` | カタログの各モデル名ごとに `auto_router` ルール(`id: swap:<name>`、`model_pattern` は名前の完全一致)を自動生成するか。`false` にした場合は `X-CodeRouter-Profile` ヘッダ等で自分でルーティングを配線する |
+| `models[].name` | str(必須) | — | リクエストの `model` フィールドと照合される論理名。provider 名・専用プロファイル名は自動的に `launcher-swap-<name>` になる |
+| `models[].backend` | `"llama.cpp" \| "vllm" \| "mlx"`(必須) | — | 手動 Launcher UI と同じバックエンド種別 |
+| `models[].model_path` | str(必須) | — | モデルファイルの絶対または `~` 相対パス。**必ず `launcher.model_dirs` の配下**である必要があり、設定ロード時と起動時の2回検証される(パストラバーサル対策) |
+| `models[].port` | int \| null | `null` | 固定ポート推奨。省略時は OS 割当のエフェメラルポートを使い、起動失敗時に別ポートで1回だけリトライする(best-effort、強い TOCTOU 保証はない) |
+| `models[].option_profile` | str \| null | `null` | `launcher.option_profiles[backend]` の既存プリセット名。存在しない名前を指定すると設定ロード時にエラーになる |
+| `models[].num_ctx` | int | `8192`(≥256) | KV 見積り・起動パラメータの基準値 |
+| `models[].extra_args` | str | `""` | 追加 CLI フラグ(1本の文字列。`shlex` でパース。モデル/draft モデルの再指定は不可) |
+| `models[].draft_model_path` | str \| null | `null` | MTP/draft companion gguf の明示指定 |
+| `models[].mtp_mode` | `"auto" \| "off"` | `"auto"` | 手動 Launcher UI の **MTP** 欄と同じ意味 |
+| `models[].model_pattern` | str \| null | `null` | `name` の完全一致に加えて許容する正規表現(`re.fullmatch`)。カタログ内マッチング(`SwapManager.match`)のみに影響し、自動注入される auto_router ルールは常に `name` の完全一致(`re.escape`)を使う |
+
+> **Phase 2 フィールド(スキーマ宣言のみ・未実装)**: `models[].group`(`"swap" | "persistent" | "exclusive"`)、`models[].est_weights_gb`、`launcher.swap.memory_budget_gb`、`launcher.swap.max_loaded` はスキーマ上は存在しますが、Phase 1(v2.9.1時点)ではロジックから一切参照されません。
+
+### 挙動に関する注記
+
+- **swap プロセスは `launcher.auto_restart` の対象外**です。クラッシュ時の一次的な回復は次のリクエストによる SwapManager 自身の再 spawn に委ねられ、汎用の auto-restart 監督とは重複しません(同じ固定ポートを2つの監督者が取り合う事態を避けるため)
+- **ストリーミング応答中はTTLアンロードされません**。応答の最終チャンクに到達するまで「リース」を保持するため、生成途中でプロセスが停止されることはありません
+- **カタログに一致しない `model` 名**のリクエストは、`auto_router.default_rule_profile`(または通常のプロファイル解決)へフォールスルーします。swap 側の専用プロファイルには到達しません
+- **同時ロード数に上限はありません**(Phase 1)。メモリに載る範囲で複数モデルを同時に起動できます。予算管理・退避を伴う排他 swap は Phase 2 で予定
+- **`providers` / `profiles` の省略は v2.9.2 から**です(上記「最小構成」参照)。それ以前のバージョンでは到達不能なダミーの provider/profile を用意する必要がありました
+
+実機検証(macOS / M3 Max / Metal、350MB級 GGUF): `_run/swap-test/` の自動テストキットで cold spawn(約2秒)→ warm reuse(約0秒、再 spawn なし)→ catalog-miss フォールスルー → TTL unload → respawn の一連が ALL PASS。詳細は設計書の実装記録(§10.5)を参照してください。
+
+並行性モデル・セキュリティ考慮・レビュー決定事項などの設計の詳細は [`docs/designs/launcher-model-swap.md`](../designs/launcher-model-swap.md) を参照してください。
+
+---
+
 ## 設定リファレンス
 
 MODELS 一覧・オプションプロファイル・バイナリパスは `~/.coderouter/providers.yaml` の `launcher:` ブロックから読み込まれます。**デスクトップ版・Web版で共通**です。
@@ -295,6 +377,23 @@ option_profiles:
 | `int` / `float` / `str` | `--flag value` の 2 引数 |
 | `bool: true` | `--flag` のみ(値なし) |
 | `bool: false` | このフラグを省略 |
+
+### readiness ゲーティングと自動再起動(v2.9.1+)
+
+`launcher:` ブロック直下(`model_dirs` / `backends` と同じ階層)に以下のフィールドを追加できます。手動起動・swap によるオンデマンド起動の両方が対象です。
+
+| フィールド | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `readiness_timeout_s` | float | `300.0`(5〜3600) | 起動した backend が「準備完了」になるまで待つ最大秒数。llama.cpp / vllm は `GET /health` が 200 を返すこと、それ以外の backend は TCP 接続成功をもって判定する。期限を超えるとプロセスは動かしたまま provider 登録はされず、status が `error` になる。既定 5 分は大きな GGUF のロード時間を見込んだ値 |
+| `readiness_poll_interval_s` | float | `2.0`(0.2〜60) | status が `loading` の間、readiness を再確認する間隔(秒) |
+| `auto_restart` | bool | `false` | `true` にすると、クラッシュ(0 以外の終了コード。MTP起動クラッシュの1回限りの自動フォールバックは別途優先して実行される)した backend を、`auto_restart_max_attempts` 回まで指数バックオフで自動再起動する。Stop ボタンによる意図的停止やサーバーシャットダウンはクラッシュ扱いにならない。既定 `false`(`ProviderConfig.restart_command` と同じ opt-in 方針)。**swap が管理するプロセスは対象外**(SwapManager が唯一の監督者) |
+| `auto_restart_max_attempts` | int | `3`(0〜20) | 自動再起動の最大連続試行回数。再起動したプロセスが readiness を通過すると 0 にリセットされる。`auto_restart: false` のときは無視される |
+| `auto_restart_backoff_s` | float | `2.0`(0.1〜300) | 最初の自動再起動までの初期バックオフ秒数。試行のたびに倍増し `auto_restart_backoff_max_s` で頭打ちになる |
+| `auto_restart_backoff_max_s` | float | `30.0`(1〜600) | 自動再起動バックオフの上限秒数 |
+
+**新しいプロセス status `loading`** — 起動直後で readiness 待ち中の状態です。`starting` / `running` / `stopped` / `error` に加えて PROCESSES テーブルに表示されます。readiness を通過すると `running` に遷移し、そこで初めて provider として登録されます(以前は spawn 直後に登録していたため、ロード未完了へのリクエストが connection-refused / 503 になる不具合がありました)。
+
+> **動作変更(v2.9.1)**: `POST /api/launcher/start` は provider 同期を同期的に行わなくなりました。レスポンスの `provider_sync` は常に `null` です。同期結果は `/api/launcher/processes` またはログの `provider sync:` 行で確認してください。
 
 ### 追加オプション(自由入力)
 
@@ -404,3 +503,4 @@ CodeRouter を再起動すると UI に反映されます。`launcher_profiles.y
 - [アーキテクチャ詳細 — Launcher セクション](../concepts/architecture.md#launcher--llamacpp--vllm-プロセス管理-v250)
 - [利用ガイド](../guides/usage-guide.md)
 - [llama.cpp 直接接続ガイド](./llamacpp-direct.md)
+- [モデル自動スワップ 設計ドキュメント](../designs/launcher-model-swap.md) — `launcher.swap` の並行性モデル・セキュリティ考慮・レビュー決定事項

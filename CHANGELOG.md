@@ -30,6 +30,19 @@ are kept verbatim where the Japanese text itself is the subject).
   (`test_swap_only_config_loads_with_omitted_providers_and_profiles` and
   neighbors) for the minimal swap-only config shape.
 
+### Docs
+
+- `docs/backends/launcher.md` / `.en.md` — added the `launcher.swap` (v2.9.1+)
+  reference: what it does, a minimal swap-only config (no `providers` /
+  `profiles`, verified against the real loader), a `launcher.swap.models[]`
+  field table, the Phase 2 schema-only fields, and behavioral notes
+  (auto-restart exclusion, streaming lease protection, catalog-miss
+  fallthrough, no simultaneous-load cap). Also documented the `launcher:`-level
+  `readiness_timeout_s` / `readiness_poll_interval_s` / `auto_restart*` fields
+  and the new `loading` process status in the configuration reference
+  section, and linked `docs/designs/launcher-model-swap.md` from "Related
+  docs" — closing the "残課題" noted in that design doc's §10.5.
+
 ---
 
 ## [v2.9.1] — 2026-07-12 (launcher model swap Phase 1 — llama-swap-style on-demand models)
