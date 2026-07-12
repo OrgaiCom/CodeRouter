@@ -1951,8 +1951,16 @@ class CodeRouterConfig(BaseModel):
         description="Master switch. ALLOW_PAID=false blocks all paid providers (plan.md §2.3).",
     )
     default_profile: str = Field(default="default")
-    providers: list[ProviderConfig] = Field(..., min_length=1)
-    profiles: list[FallbackChain] = Field(..., min_length=1)
+    # [Unreleased]: relaxed from ``Field(..., min_length=1)`` so a
+    # swap-only deployment (``launcher.swap.enabled`` with a non-empty
+    # ``models`` catalog) can omit both fields entirely instead of
+    # writing an unreachable dummy provider/profile just to satisfy the
+    # schema. The "at least one" invariant is NOT dropped — it moves to
+    # ``_check_providers_and_profiles_nonempty`` below, which still
+    # fail-fasts at load for every other deployment shape (same
+    # philosophy as the min_length constraint it replaces).
+    providers: list[ProviderConfig] = Field(default_factory=list)
+    profiles: list[FallbackChain] = Field(default_factory=list)
     mode_aliases: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -2157,6 +2165,52 @@ class CodeRouterConfig(BaseModel):
                     "Rename this profile to something else, e.g. "
                     "'auto-route' or 'smart'."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_providers_and_profiles_nonempty(self) -> CodeRouterConfig:
+        """[Unreleased]: enforce "at least one" unless launcher.swap covers it.
+
+        ``providers`` / ``profiles`` were relaxed from ``min_length=1`` to
+        ``default_factory=list`` (see the field comments above) so a
+        swap-only deployment can omit them — every request in that shape
+        is routed through a ``launcher-swap-<name>`` profile that
+        :meth:`_inject_swap_profiles_and_auto_router_rules` synthesizes
+        below, and its backing provider is registered at runtime on first
+        spawn (``SwapManager.register_provider``), so there is genuinely
+        nothing to declare statically.
+
+        Runs BEFORE the swap injection (which only ever *adds* profiles,
+        never providers) so it observes the operator's raw, undecorated
+        input rather than the post-injection state — the injected
+        profiles are not a substitute for a real provider declaration in
+        every other deployment shape, only in the swap-only one this
+        validator carves out.
+
+        Outside that carve-out, an empty ``providers`` or ``profiles``
+        list has always been a load-time error (there would be nothing to
+        route to); this validator keeps that fail-fast guarantee instead
+        of silently trading it away when the ``min_length=1`` field
+        constraint was dropped.
+        """
+        swap_cfg = self.launcher.swap if self.launcher is not None else None
+        swap_covers_empty = (
+            swap_cfg is not None and swap_cfg.enabled and bool(swap_cfg.models)
+        )
+        if swap_covers_empty:
+            return self
+        if not self.providers:
+            raise ValueError(
+                "providers: at least one entry is required (empty/omitted "
+                "is only allowed when launcher.swap.enabled=true and "
+                "launcher.swap.models has at least one entry)."
+            )
+        if not self.profiles:
+            raise ValueError(
+                "profiles: at least one entry is required (empty/omitted "
+                "is only allowed when launcher.swap.enabled=true and "
+                "launcher.swap.models has at least one entry)."
+            )
         return self
 
     @model_validator(mode="after")

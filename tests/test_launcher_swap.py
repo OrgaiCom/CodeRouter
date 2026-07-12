@@ -442,15 +442,30 @@ def test_swap_model_provider_and_profile_names() -> None:
 
 
 def _base_config_kwargs(swap_cfg: LauncherSwapConfig) -> dict[str, Any]:
+    """Swap-only config kwargs — ``providers``/``profiles`` start empty.
+
+    [Unreleased]: demonstrates the relaxed ``CodeRouterConfig`` schema
+    (``_check_providers_and_profiles_nonempty``) instead of the old
+    ``min_length=1``-driven dummy ``local`` provider / ``default``
+    profile placeholder that earlier revisions of this fixture carried
+    purely to satisfy the schema — a genuinely swap-only deployment
+    needs neither. ``default_profile`` is ``"auto"`` (the only value
+    exempt from the pre-injection default_profile-exists check) paired
+    with an explicit, empty-rules ``auto_router`` pointed at the first
+    swap model's to-be-injected profile — this sidesteps the bundled
+    ruleset merge path (which would otherwise demand unrelated
+    multi/coding/writing profiles), exactly like the documented
+    swap-only example config.
+    """
+    from coderouter.config.schemas import AutoRouterConfig
+
+    target_profile = swap_cfg.models[0].profile_name if swap_cfg.models else "default"
     return dict(
         allow_paid=False,
-        default_profile="default",
-        providers=[
-            ProviderConfig(
-                name="local", base_url="http://localhost:8080/v1", model="qwen"
-            )
-        ],
-        profiles=[FallbackChain(name="default", providers=["local"])],
+        default_profile="auto",
+        providers=[],
+        profiles=[],
+        auto_router=AutoRouterConfig(rules=[], default_rule_profile=target_profile),
         launcher=LauncherConfig(model_dirs=["/tmp"], swap=swap_cfg),
     )
 
@@ -473,6 +488,9 @@ def test_swap_injects_placeholder_profile_and_auto_router_rule() -> None:
     swap_cfg = LauncherSwapConfig(enabled=True, models=[_spec(name="qwen-coder-14b")])
     cfg = CodeRouterConfig(**_base_config_kwargs(swap_cfg))
 
+    # No static provider/profile was declared at all — swap alone fills
+    # both in (the provider is registered at runtime on first spawn).
+    assert cfg.providers == []
     profile = cfg.profile_by_name("launcher-swap-qwen-coder-14b")
     assert profile.providers == []
 
@@ -485,12 +503,31 @@ def test_swap_injects_placeholder_profile_and_auto_router_rule() -> None:
 
 
 def test_swap_rule_injection_disabled_by_flag() -> None:
+    """Needs a real ``default`` profile (unlike ``_base_config_kwargs``):
+
+    with ``inject_auto_router_rules=False`` swap never builds an
+    ``auto_router`` block, so ``default_profile: auto`` without one would
+    fall onto the *bundled* ruleset's multi/coding/writing requirement —
+    an unrelated concern this test isn't exercising. A normal static
+    profile sidesteps that, independent of the omission feature under
+    test elsewhere in this module.
+    """
     swap_cfg = LauncherSwapConfig(
         enabled=True,
         inject_auto_router_rules=False,
         models=[_spec(name="qwen-coder-14b")],
     )
-    cfg = CodeRouterConfig(**_base_config_kwargs(swap_cfg))
+    cfg = CodeRouterConfig(
+        allow_paid=False,
+        default_profile="default",
+        providers=[
+            ProviderConfig(
+                name="local", base_url="http://localhost:8080/v1", model="qwen"
+            )
+        ],
+        profiles=[FallbackChain(name="default", providers=["local"])],
+        launcher=LauncherConfig(model_dirs=["/tmp"], swap=swap_cfg),
+    )
     # Profile still pre-declared (needed for manual routing)...
     cfg.profile_by_name("launcher-swap-qwen-coder-14b")
     # ...but no rule was generated.
@@ -498,22 +535,144 @@ def test_swap_rule_injection_disabled_by_flag() -> None:
 
 
 def test_swap_rules_appended_after_user_auto_router_rules() -> None:
+    """Needs a real ``default`` profile (unlike ``_base_config_kwargs``):
+
+    the test asserts the user-supplied ``default_rule_profile: "default"``
+    passes through untouched, which requires ``"default"`` to actually be
+    a declared profile (``_check_auto_router_profiles_exist`` would
+    otherwise reject it) — independent of the omission feature under
+    test elsewhere in this module.
+    """
     from coderouter.config.schemas import AutoRouterConfig, AutoRouteRule, RuleMatcher
 
     swap_cfg = LauncherSwapConfig(enabled=True, models=[_spec(name="qwen-coder-14b")])
-    kwargs = _base_config_kwargs(swap_cfg)
-    kwargs["auto_router"] = AutoRouterConfig(
-        rules=[
-            AutoRouteRule(
-                id="user:my-rule", profile="default", match=RuleMatcher(has_image=True)
+    cfg = CodeRouterConfig(
+        allow_paid=False,
+        default_profile="default",
+        providers=[
+            ProviderConfig(
+                name="local", base_url="http://localhost:8080/v1", model="qwen"
             )
         ],
-        default_rule_profile="default",
+        profiles=[FallbackChain(name="default", providers=["local"])],
+        auto_router=AutoRouterConfig(
+            rules=[
+                AutoRouteRule(
+                    id="user:my-rule", profile="default", match=RuleMatcher(has_image=True)
+                )
+            ],
+            default_rule_profile="default",
+        ),
+        launcher=LauncherConfig(model_dirs=["/tmp"], swap=swap_cfg),
     )
-    cfg = CodeRouterConfig(**kwargs)
     ids = [r.id for r in cfg.auto_router.rules]
     assert ids == ["user:my-rule", "swap:qwen-coder-14b"]
     assert cfg.auto_router.default_rule_profile == "default"  # left untouched
+
+
+# ---------------------------------------------------------------------------
+# B2. [Unreleased]: swap-only minimal config — no dummy providers/profiles
+# ---------------------------------------------------------------------------
+
+
+def _write_swap_only_yaml(tmp_path: Path, *, include_empty_lists: bool) -> Path:
+    """The documented swap-only minimal config (top-level ``providers``/
+    ``profiles`` entirely omitted, or present-but-empty — both must load).
+    """
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "a.gguf").touch()
+    empty_lists = "providers: []\nprofiles: []\n" if include_empty_lists else ""
+    content = f"""\
+default_profile: auto
+{empty_lists}auto_router:
+  default_rule_profile: launcher-swap-m1
+  rules: []
+launcher:
+  model_dirs: ["{model_dir}"]
+  swap:
+    enabled: true
+    models:
+      - name: m1
+        backend: llama.cpp
+        model_path: {model_dir / "a.gguf"}
+        port: 18081
+"""
+    cfg_path = tmp_path / "providers.yaml"
+    cfg_path.write_text(content)
+    return cfg_path
+
+
+def test_swap_only_config_loads_with_omitted_providers_and_profiles(
+    tmp_path: Path,
+) -> None:
+    """[Unreleased]: providers/profiles can be left out of the YAML entirely
+    for a swap-only deployment — no unreachable dummy entry required."""
+    from coderouter.config.loader import load_config
+
+    cfg = load_config(_write_swap_only_yaml(tmp_path, include_empty_lists=False))
+    assert cfg.providers == []
+    assert cfg.profile_by_name("launcher-swap-m1").providers == []
+    assert cfg.auto_router is not None
+    assert cfg.auto_router.default_rule_profile == "launcher-swap-m1"
+
+
+def test_swap_only_config_loads_with_explicit_empty_lists(tmp_path: Path) -> None:
+    """Same minimal config, but with ``providers: []`` / ``profiles: []``
+    spelled out explicitly — identical result to omitting them."""
+    from coderouter.config.loader import load_config
+
+    cfg = load_config(_write_swap_only_yaml(tmp_path, include_empty_lists=True))
+    assert cfg.providers == []
+    assert cfg.profile_by_name("launcher-swap-m1").providers == []
+    assert cfg.auto_router is not None
+    assert cfg.auto_router.default_rule_profile == "launcher-swap-m1"
+
+
+def test_empty_providers_without_swap_still_rejected() -> None:
+    """Regression: swap disabled + empty providers -> still a load-time
+    ValidationError (the min_length=1 fail-fast guarantee is preserved,
+    just moved into ``_check_providers_and_profiles_nonempty``)."""
+    with pytest.raises(ValidationError, match="providers"):
+        CodeRouterConfig(
+            allow_paid=False,
+            default_profile="auto",
+            providers=[],
+            profiles=[FallbackChain(name="default", providers=["local"])],
+            auto_router=None,
+        )
+
+
+def test_empty_profiles_without_swap_still_rejected() -> None:
+    """Regression: swap disabled + empty profiles -> still a load-time
+    ValidationError."""
+    with pytest.raises(ValidationError, match="profiles"):
+        CodeRouterConfig(
+            allow_paid=False,
+            default_profile="default",
+            providers=[
+                ProviderConfig(
+                    name="local", base_url="http://localhost:8080/v1", model="qwen"
+                )
+            ],
+            profiles=[],
+        )
+
+
+def test_empty_providers_and_profiles_rejected_when_swap_models_empty() -> None:
+    """Regression: swap enabled but its catalog is empty -> the relaxation
+    does not kick in (matches spec: models must have >=1 entry)."""
+    with pytest.raises(ValidationError, match="providers"):
+        CodeRouterConfig(
+            allow_paid=False,
+            default_profile="auto",
+            providers=[],
+            profiles=[],
+            auto_router=None,
+            launcher=LauncherConfig(
+                model_dirs=["/tmp"], swap=LauncherSwapConfig(enabled=True, models=[])
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
