@@ -1,0 +1,121 @@
+# ============================================================
+# CodeRouter providers.yaml — モデル自動スワップ (launcher.swap) サンプル
+# 【カテゴリ】 llama.cpp 直 + オンデマンド起動/TTLアンロード(Ollama 不要)
+#
+# llama-swap 相当の機能を CodeRouter 単体で使う最小構成です:
+#   - リクエストの model 名を見て、未起動の llama-server を自動起動
+#   - モデルのロード完了までリクエストは保留(readiness 待ち)
+#   - アイドル ttl_seconds 経過で自動アンロード(メモリ解放)
+#   - カタログ(launcher.swap.models)に列挙したモデルしか起動できない
+#
+# 使い方:
+#   1. cp examples/providers.swap.yaml ~/.coderouter/providers.yaml
+#   2. model_dirs / model_path / binary を手元の環境に合わせて編集
+#   3. coderouter serve --port 8088
+#   4. 動作確認(初回はモデルロードの数秒〜数十秒待ちが入る):
+#        curl http://localhost:8088/v1/chat/completions \
+#          -H 'Content-Type: application/json' \
+#          -d '{"model":"ornith-9b","messages":[{"role":"user","content":"hi"}]}'
+#   5. serve ログで swap の起動/アンロードイベントを確認。ttl_seconds 経過後に
+#      プロセスが自動停止することも見ておく
+#
+# 設計書: docs/designs/launcher-model-swap.md (§10 に確定仕様)
+# ============================================================
+
+# swap の自動ルーティング(model 名 → 自動生成ルール)は auto_router 経由なので
+# default_profile は "auto" にする。auto にしない場合でも
+# 「X-CodeRouter-Profile: launcher-swap-<name>」ヘッダ指定なら常に届く。
+default_profile: auto
+
+# ── プロバイダ定義 ────────────────────────────────────────────────
+# swap カタログのモデルは provider を書かなくてよい(launcher-swap-<name> という
+# provider/profile が自動生成される)。ここには swap 以外の普段使いの backend を書く。
+
+providers:
+  # 保険/常用: Ollama (別途起動している場合)。不要なら削除可
+  - name: main-ollama
+    kind: anthropic            # Ollama v0.23.1+ の /v1/messages passthrough
+    base_url: http://localhost:11434
+    model: qwen3-coder:30b
+    timeout_s: 300
+
+# ── プロファイル定義 ──────────────────────────────────────────────
+
+profiles:
+  # auto_router のフォールスルー先(swap モデル名に一致しない通常リクエスト)
+  - name: main
+    providers: [main-ollama]
+
+auto_router:
+  default_rule_profile: main
+  # ここに自分のルールを書いた場合、swap の自動生成ルール(id: swap:<name>)は
+  # この後ろに追記される(先着一致なので手書きルールが常に優先)。
+  rules: []
+
+# ── Launcher + swap 設定 ─────────────────────────────────────────
+
+launcher:
+  # モデル(GGUF)を置くディレクトリ。swap の model_path はこの中に無いと
+  # 設定ロード時にエラーになる(パストラバーサル防止の fail-fast)
+  model_dirs:
+    - ~/models
+
+  backends:
+    llama.cpp:
+      # 自前ビルドの llama-server を使う場合はパスを指定。
+      # PATH に llama-server が通っていれば省略可
+      binary: ~/llm/apps/llama.cpp/build/bin/llama-server
+
+  swap:
+    enabled: true
+
+    # アイドル(進行中リクエスト無し)がこの秒数続いたら自動アンロード。
+    # null = アンロードしない / 0 = 最後のリクエスト完了で即アンロード
+    ttl_seconds: 300
+
+    # オンデマンド起動時、モデルのロード完了をリクエストが待つ上限(秒)。
+    # 大きい GGUF ほど長めに(30B級なら 300 程度を推奨)
+    readiness_timeout_s: 180
+
+    # TTL 監視の走査間隔(秒)。既定 15
+    sweep_interval_s: 15
+
+    # true(既定): カタログの model 名ごとに auto_router ルールを自動生成。
+    # false にした場合は X-CodeRouter-Profile ヘッダ等で自分で配線する
+    inject_auto_router_rules: true
+
+    # ---- 静的カタログ: ここに列挙したモデルだけが自動起動できる ----
+    # ポートは固定推奨(省略すると自動割当 + 失敗時リトライ1回の best-effort)
+    models:
+      # 軽量オーケストレータ/日常用 9B (例: Ornith-1.0-9B)
+      - name: ornith-9b            # ← リクエストの "model" にこの名前を書く
+        backend: llama.cpp
+        model_path: ~/models/Ornith-1.0-9B-Q4_K_M.gguf
+        port: 18081
+        num_ctx: 32768             # KV 見積り/起動パラメータの基準 (既定 8192)
+        extra_args: "-ngl 99"      # 追加 CLI フラグはここに(文字列1本)
+
+      # 重量級コーダー 30B (使う時だけロード、TTL で自動解放)
+      - name: qwen3-coder-30b-gguf
+        backend: llama.cpp
+        model_path: ~/models/Qwen3-Coder-30B-Q4_K_M.gguf
+        port: 18082
+        num_ctx: 32768
+        # option_profile: "..."    # launcher.option_profiles を定義していれば指定可
+        # draft_model_path: ...    # speculative decoding 用 draft を使う場合
+        # mtp_mode: auto           # MTP 自動判定 (既定 auto / off)
+
+      # --- Phase 2 (未実装) のフィールドはスキーマ宣言のみ ---
+      # group: swap | persistent | exclusive   ← 排他/常駐制御 (Phase 2)
+      # est_weights_gb: 6.5                    ← メモリ会計用 (Phase 2)
+
+# ============================================================
+# 運用メモ
+# - 自動生成される profile/provider 名は launcher-swap-<name>
+#   (例: launcher-swap-ornith-9b)。ヘッダ指定で直接叩くことも可能:
+#     curl ... -H 'X-CodeRouter-Profile: launcher-swap-ornith-9b'
+# - swap 対象プロセスは launcher.auto_restart の対象外(SwapManager が管理)。
+#   クラッシュ時は次のリクエストで自動再起動される
+# - 同じモデル名に複数リクエストが同時到達しても起動は1回(内部で直列化)
+# - Streaming 中(応答生成中)は TTL アンロードされない
+# ============================================================

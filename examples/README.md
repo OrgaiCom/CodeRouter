@@ -22,6 +22,7 @@ coderouter serve --port 8088
 | Ollama で、**振り分けルールを自分で**書きたい | `providers.ollama-auto-custom.yaml` | Ollama 通常（上級） |
 | Ollama で、**ローカル→無料クラウド**だけで完結させたい | `providers.ollama-free-chain.yaml` | Ollama 通常 |
 | **Ollama を使わず**、手元の GGUF を llama.cpp / vLLM で | `providers.llamacpp-vllm.yaml` | llama.cpp / vLLM |
+| 手元の GGUF を **model 名で自動起動・自動アンロード**したい（llama-swap 相当） | `providers.swap.yaml` | llama.cpp / vLLM |
 | 無料の高品質クラウド（**NVIDIA NIM**）を足したい | `providers.nvidia-nim.yaml` | クラウド無料枠 |
 | **Raspberry Pi** など小型 SBC で動かしたい | `providers.raspberrypi.yaml` | 特殊ハード |
 | （開発者向け）Context Budget の検証をしたい | `providers.context-budget-test.yaml` | 内部検証用 |
@@ -47,6 +48,7 @@ coderouter serve --port 8088
 ### 🟨 llama.cpp / vLLM — Ollama を使わない
 
 - **`providers.llamacpp-vllm.yaml`** … 手元の `.gguf` を **llama.cpp** で、または **vLLM** で動かす最小構成。Launcher（`/launcher`）で起動したサーバーを provider として登録する形。**Ollama を入れたくない / DL 済み GGUF をそのまま使いたい人向け**（詳細は連作 note 第 22 話、`docs/backends/launcher.md`）。
+- **`providers.swap.yaml`** … **モデル自動スワップ**（`launcher.swap`）。リクエストの model 名を見て llama-server をオンデマンド起動し、ロード完了まで保留、アイドル TTL で自動アンロードする llama-swap 相当の構成。カタログに列挙したモデルだけが起動可能（詳細は `docs/designs/launcher-model-swap.md`）。
 
 ### 🟧 特殊 — 環境・用途が限定的
 
