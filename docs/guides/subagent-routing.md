@@ -54,6 +54,8 @@ body.profile  >  X-CodeRouter-Profile ヘッダ  >  X-CodeRouter-Mode ヘッダ 
 
 出典: <https://code.claude.com/docs/en/sub-agents>(frontmatter 表・"Choose a model" 節)。
 
+**実測 (2026-07-11, Claude Code 2.1.206–207 + カスタム `ANTHROPIC_BASE_URL`; 2.1.206 は本 run の実測値 `report.md:5`、2.1.207 は深夜の再実行トランスクリプト `codex-debug.jsonl` の `init` イベントで確認)**: 上記の公式仕様に加え、`model: e2e-codex` のような**任意のカスタム文字列も受理され、エイリアス展開されずそのまま wire の `model` フィールドに載る**ことを確認した。つまりサブエージェント種別ごとに衝突しない専用のカスタム名を振り、CodeRouter 側の `model_pattern` でそれを直接拾う構成が成立する(検証の詳細は [§6.1](#61-実測検証結果-coderouter-v290--claude-code-21206207-2026-07-11))。
+
 例:
 
 ```markdown
@@ -311,6 +313,31 @@ auto_router:
       match: { content_token_count_min: 32000 }   # 長文脈を planner へ
 ```
 
+### (e) main オーケストレータを 9B 級に落とす場合
+
+main(オーケストレータ)を 30B 級から 9B 級ローカルへ落として省リソース運用したい場合、CodeRouter の振り分けは同じだが、**main に据えるモデルの選定条件**に注意が必要になる。以下は 30B(qwen3-coder:30b)での実測(§6.1)からの敷衍であり、9B 級固有の閾値は未実測(要検証)。
+
+- **main は tool 対応が必須**: サブエージェント起動は Task ツールの `tool_use` に依存する。main のリクエストは常に `tools[]` を伴う(実測: report.md の main 由来リクエストは `has_tools: true`)ため、tool 非対応モデルや `capabilities.tools: false` の provider を main profile に据えるとサブエージェント起動自体が成立しない。9B 級を選ぶ際は**まず tool calling 対応が前提条件**(Ollama なら `ollama show <tag>` の Capabilities に `tools` があること)。
+- **弱いモデルは Task 呼び出しの信頼性が下がる**: Claude Code 2.1.20x の Task ツールはサブエージェントを background 起動し、main は完了通知を待つ(§6.1)。9B 級は `tool_use` フォーマットの遵守と非同期待ち処理が不安定になりやすく、「エージェントに到達できない」誤申告(§6.1 参照。30B + codex 経路でも実測で発生)の頻度が上がると見込まれる。**採用前に §6 の手順でサブエージェント疎通を必ず実測**すること。
+- **推奨構成: fallback chain で 9b→30b**: main profile を単独ではなく `[<9b-tool-model>, <30b-tool-model>]` の逐次フェイルオーバーで組み、9B が `tool_use` を正しく出せない/空応答を返した場合に 30B へ落ちる保険を敷く(`empty_response_action: "fallback"` の併用を推奨)。候補例(筆者ベンチ 2026-06〜07 実測): **Ornith-1.0-9B(Q4_K_M)は 2026-07-12 の E2E 再実行で実測確認済み** — Ollama 上で tools 対応、30B へのフォールバック無しで PhaseC 4/4 を各1回目で通過し、run 全体の所要は 30B 比で約半分だった(`results-20260712-103615`)。Qwythos-9B-v2(Q6_K)は次点候補(こちらは Ollama 上の tools 対応が未実測・要確認)。
+
+```yaml
+providers:
+  - name: main-9b
+    kind: anthropic                 # Ollama passthrough 等、tool calling 対応が必須
+    base_url: http://localhost:11434
+    model: <9b-tool-model>          # 例: hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M (2026-07-12 実測確認済み)
+  - name: main-30b
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: qwen3-coder:30b          # 実績のある保険
+profiles:
+  - name: main
+    providers: [main-9b, main-30b]  # 9B 優先 → 失敗時は 30B へ
+```
+
+- **cache 非対応ローカルは autocompact スラッシングを併発**: 9B でも `cache_read_input_tokens` が常に 0 のローカル backend を main に据えると §6.1 の auto-compact 空転(`rapid_refill_breaker` 強制終了)が起きる。auto-compact 無効化か prompt cache の効く backend の併用を検討すること。
+
 ## 6. 動作確認
 
 1. **起動時**: `coderouter serve` の起動ログで `plugin-loaded`(agent_cli を使う場合)や設定読み込みエラーが無いことを確認する。
@@ -326,12 +353,32 @@ auto_router:
 
 4. **意図した profile に着地しているか**: `resolved_profile` が狙った profile 名(`planner` / `reviewer-audit` 等)になっているかを確認する。想定と違えば `model_pattern` の `fullmatch` 漏れ(末尾 `.*` 忘れ等)を疑う。
 
+### 6.1 実測検証結果 (CodeRouter v2.9.0 × Claude Code 2.1.206–207, 2026-07-11)
+
+本ガイドの構成そのもの — 「frontmatter `model`(カスタム名) → auto_router `model_pattern` → profile → `agent_cli`」 — を、claude / codex / grok / antigravity(agy) の4バックエンドで E2E 検証した(出典: `_run/e2e-agents/results-20260711-232732/report.md` および再実行トランスクリプト `_run/e2e-agents/codex-debug.jsonl`。Claude Code バージョンは 2.1.206 が本 run: `report.md:5`、2.1.207 が深夜の再実行: `codex-debug.jsonl` の `init` イベントで確認)。orchestrator 本体は Ollama qwen3-coder:30b(`kind: anthropic` passthrough)、サブエージェント4種は `.claude/agents/ext-*.md` の frontmatter で `model: e2e-claude` / `e2e-codex` / `e2e-grok` / `e2e-agy` に固定した。
+
+確認できたこと:
+
+- **チャネル②(`X-CodeRouter-Profile` ヘッダ)**: 4/4 疎通(OpenAI ingress)。
+- **チャネル①(`model_pattern`)**: 4/4 でルール発火。`auto-router-resolved` の `signals.model` にカスタム名が**そのまま**出現した(Anthropic ingress)。
+- **サブエージェント E2E**: 本run(results-20260711-232732)では **claude / grok / antigravity の 3/4** で Task ツール → CodeRouter → 外部 CLI → orchestrator への応答還流を確認(report.md:18,20,21)。**codex は同 run では flaky 失敗**(report.md:19。orchestrator が Task の非同期完了待ちを誤り「no agent named 'ext-codex' is reachable」と誤申告 — 下記の既知失敗モード)し、深夜の再実行で成功した。再実行トランスクリプト(`_run/e2e-agents/codex-debug.jsonl` 行16,54)では、ext-codex 応答の `model` フィールドに上流の実モデル(`gpt-5.5`)が返ることも確認した。
+- **届く model 名の形(旧 UNCONFIRMED)**: サブエージェント(frontmatter 由来)は**カスタム名がそのまま**届く(出典: report.md:26-29 の `signals.model`)。一方 `--model sonnet` で起動した main 会話は **`claude-sonnet-5` にフル ID 展開**されて届いた(出典: serve.log の `auto-router-fallthrough` イベント `"model":"claude-sonnet-5"`)。エイリアスを `model_pattern` で拾う場合は `(claude-)?sonnet.*` のように展開形も含めること。
+
+運用上の注意(実測で遭遇した非ルーティング起因の失敗モード):
+
+- **Task は非同期起動**: Claude Code 2.1.20x の Task ツールはサブエージェントを background 起動し、orchestrator は完了通知を待つ。弱いローカル orchestrator はこの待ち処理を誤り、「エージェントに到達できない」と*誤申告*することがある。serve ログに `auto-router-resolved` が無ければ障害はクライアント側であり、ルーティング障害と混同しないこと。
+- **autocompact スラッシング**: Ollama 系 main は `cache_read_input_tokens` が常に 0 のため、毎ターン3万トークン級の再 prefill が「新規入力」として報告され、Claude Code の自動コンパクトが数ターンごとに空転して `rapid_refill_breaker` で強制終了することがある。長い orchestration では auto-compact を無効化するか、prompt cache の効くバックエンドを main に据える。
+- **grok の空応答**: grok CLI が exit 0 かつ `text: ""` を返すケースが実測で確認された。coderouter-plugin-agents の `c6096ed`(fix(grok): treat empty 'text' in grok JSON output as retryable AdapterError, 2026-07-11)以降で**修正済み** — 空/空白のみの `text` は retryable AdapterError となり、フォールバックチェーンが次のプロバイダへ進む(それ以前の版では空応答がそのままクライアントへ素通りする)。
+- **serve ログに毎回出る2種の警告は想定内(ルーティング障害ではない)**: (1) `normalized-nonspec-message-roles`(hint: client is likely Claude Code CLI >= 2.1.154 (known regression))は Claude Code 側の既知 regression をアダプタが吸収した記録で無害。(2) tools[] 付きサブエージェントリクエストで出る `capability-degraded`(dropped:["cache_control"], reason:"translation-lossy")は tools 非対応 backend への変換で cache_control を落とした記録で想定内(report.md:52,60,80)。いずれも後続に `provider-ok` があれば正常。
+
+再現用テストキット(providers.yaml / サブエージェント定義 / 検証スクリプト)はリポジトリの `_run/e2e-agents/` に置いてある。
+
 ## 7. 制限と既知の課題
 
 - **1 ルール = 1 matcher(AND 不可)**: `RuleMatcher` は複合条件を書けない。「CJK かつ長文なら…」のような AND 合成は現状できない(G1)。回避するには、優先させたい条件を先に並べたルールを複数用意し、先着一致に任せる。
 - **明示的サブエージェント指定チャネルは無い(検討中)**: 「これはサブエージェントで種別は X」を運ぶ専用チャネルは現時点で存在しない。実用上の答えは本ガイドの通り「model 名を振り分けキーに使う」こと。将来案として、system prompt や先頭メッセージに埋め込んだタグを検出する最優先ルールを auto_router の前段に足す構想はあるが、未着手である。
 - **ccr(claude-code-router)のタグ方式との違い**: CodeRouter は wire 上のメタデータ(model 名・ヘッダ)を能動的に読んで振り分けるのに対し、ccr はプロンプト本文に埋め込まれたタグを検出・抽出して受動的に振り分ける方式を採る。どちらも「Anthropic wire にネイティブなサブエージェント識別子が無い」という同じ制約への異なる解法である。
-- **UNCONFIRMED — 届く model 名の形**: Claude Code のサブエージェントが送るモデル名文字列が、エイリアス(`opus` 等)のまま届くかフル ID(`claude-opus-4-8` 等)に展開されるかは環境・バージョン依存であり、本ガイド執筆時点では未検証。`model_pattern` ルールを書いたら、必ず [§6 動作確認](#6-動作確認) の手順でログの `signals.model` を見て実値を確認すること。
+- **実測済み — 届く model 名の形 (2026-07-11 確定)**: サブエージェント(frontmatter 由来)の model はカスタム文字列(`e2e-codex` 等)を含め**そのまま届き、フル ID 展開されない**。一方、`--model sonnet` で起動した main 会話は **`claude-sonnet-5` にフル ID 展開**されて届く(serve.log の `auto-router-fallthrough` で確認)([§6.1](#61-実測検証結果-coderouter-v290--claude-code-21206207-2026-07-11) 参照)。将来の Claude Code バージョンで挙動が変わる可能性は残るため、`model_pattern` ルールを書いたら [§6 動作確認](#6-動作確認) の手順で `signals.model` の実値を確認する運用は引き続き推奨する。
 
 ## 8. 関連ドキュメント
 

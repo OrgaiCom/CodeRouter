@@ -54,6 +54,8 @@ A sub-agent definition lives at `.claude/agents/*.md` (project) or `~/.claude/ag
 
 Source: <https://code.claude.com/docs/en/sub-agents> (the frontmatter table and the "Choose a model" section).
 
+**Measured (2026-07-11, Claude Code 2.1.206–207 with a custom `ANTHROPIC_BASE_URL`; 2.1.206 is this run's measured value, `report.md:5`, and 2.1.207 is from the late-night rerun transcript `codex-debug.jsonl`'s `init` event)**: in addition to the official spec above, **arbitrary custom strings such as `model: e2e-codex` are accepted and arrive verbatim in the wire-level `model` field, with no alias expansion**. This means you can assign each sub-agent type its own non-colliding custom name and route on it directly with `model_pattern` on the CodeRouter side (see [§6.1](#61-measured-verification-results-coderouter-v290--claude-code-21206207-2026-07-11) for details).
+
 Example:
 
 ```markdown
@@ -311,6 +313,31 @@ auto_router:
       match: { content_token_count_min: 32000 }   # send long-context turns to planner
 ```
 
+### (e) Dropping the main orchestrator to a 9B-class model
+
+If you want to run the main orchestrator on a 9B-class local model instead of a 30B one to save resources, the routing is unchanged, but the **selection criteria for the model behind the `main` profile** need care. The following extrapolates from the 30B (qwen3-coder:30b) measurements in §6.1; 9B-specific thresholds are unverified.
+
+- **The main model must support tools**: sub-agent launches depend on the Task tool's `tool_use`. Main requests always carry `tools[]` (measured: main-originated requests show `has_tools: true` in report.md), so a non-tool-capable model — or a provider with `capabilities.tools: false` — behind the `main` profile makes sub-agent launch impossible. Tool-calling support is the first prerequisite when picking a 9B model (with Ollama, check that `ollama show <tag>` lists `tools` under Capabilities).
+- **Weaker models are less reliable at Task calls**: in Claude Code 2.1.20x the Task tool launches sub-agents in the background and main waits for completion (§6.1). 9B-class models are more prone to `tool_use` format slips and mishandled async waits, so the false "agent unreachable" report (§6.1; observed even with 30B on the codex path) is expected to grow more frequent. Always verify sub-agent reachability with the §6 procedure before adopting one.
+- **Recommended: a 9b→30b fallback chain**: build the `main` profile as a sequential failover `[<9b-tool-model>, <30b-tool-model>]` rather than a single provider, so a 9B that fails to emit correct `tool_use` (or returns an empty response) falls through to the 30B (pair with `empty_response_action: "fallback"`). Candidate examples (author's 2026-06/07 benches): **Ornith-1.0-9B (Q4_K_M) was verified in the 2026-07-12 E2E rerun** — tools-capable on Ollama, passed Phase C 4/4 on the first attempt each with no fallback to the 30B, and roughly halved the total run time vs the 30B (`results-20260712-103615`). Qwythos-9B-v2 (Q6_K) is the runner-up (its tools support on Ollama is still unverified — confirm first).
+
+```yaml
+providers:
+  - name: main-9b
+    kind: anthropic                 # e.g. Ollama passthrough; tool calling support is required
+    base_url: http://localhost:11434
+    model: <9b-tool-model>          # e.g. hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M (verified 2026-07-12)
+  - name: main-30b
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: qwen3-coder:30b          # proven fallback
+profiles:
+  - name: main
+    providers: [main-9b, main-30b]  # 9B first, falls back to 30B on failure
+```
+
+- **Cache-less local backends also trigger autocompact thrashing**: even at 9B, a main backend whose `cache_read_input_tokens` is always 0 hits the §6.1 auto-compact spin (`rapid_refill_breaker` abort). Consider disabling auto-compact or pairing with a prompt-cache-capable backend.
+
 ## 6. Verifying it works
 
 1. **At startup**: check the `coderouter serve` startup log for `plugin-loaded` (if using agent_cli) and for the absence of config-load errors.
@@ -326,12 +353,32 @@ auto_router:
 
 4. **Confirm the intended profile**: check that `resolved_profile` is the profile name you intended (`planner`, `reviewer-audit`, etc.). If it isn't, suspect a `fullmatch` miss in `model_pattern` (a missing trailing `.*` is the usual culprit).
 
+### 6.1 Measured verification results (CodeRouter v2.9.0 × Claude Code 2.1.206–207, 2026-07-11)
+
+The exact configuration this guide describes — frontmatter `model` (custom name) → auto_router `model_pattern` → profile → `agent_cli` — was verified end-to-end against all four backends: claude / codex / grok / antigravity (agy) (source: `_run/e2e-agents/results-20260711-232732/report.md` and the rerun transcript `_run/e2e-agents/codex-debug.jsonl`; Claude Code version 2.1.206 from this run, `report.md:5`, and 2.1.207 from the late-night rerun's `init` event in `codex-debug.jsonl`). The main orchestrator ran on Ollama qwen3-coder:30b (`kind: anthropic` passthrough); the four sub-agents were pinned via `.claude/agents/ext-*.md` frontmatter to `model: e2e-claude` / `e2e-codex` / `e2e-grok` / `e2e-agy`.
+
+Confirmed:
+
+- **Channel ② (`X-CodeRouter-Profile` header)**: 4/4 reachable (OpenAI ingress).
+- **Channel ① (`model_pattern`)**: 4/4 rules fired; the custom names appeared **verbatim** in `signals.model` of `auto-router-resolved` (Anthropic ingress).
+- **Sub-agent E2E**: in this run (results-20260711-232732), **3/4 (claude / grok / antigravity)** completed the round trip Task tool → CodeRouter → external CLI → answer back to the orchestrator (report.md:18,20,21). **codex flaky-failed in the same run** (report.md:19; the orchestrator mishandled the async Task wait and falsely reported "no agent named 'ext-codex' is reachable" — the known failure mode below) and passed on a late-night rerun. The rerun transcript (`_run/e2e-agents/codex-debug.jsonl`, lines 16, 54) also confirmed the upstream real model (`gpt-5.5`) coming back in the ext-codex response's `model` field.
+- **Shape of the arriving model name (formerly UNCONFIRMED)**: sub-agent (frontmatter-derived) models arrive **as the custom string, unexpanded** (source: `signals.model` in report.md:26-29). The main conversation launched with `--model sonnet` arrived expanded to the **full ID `claude-sonnet-5`** (source: the `auto-router-fallthrough` event in serve.log, `"model":"claude-sonnet-5"`). When matching aliases with `model_pattern`, include the expanded form, e.g. `(claude-)?sonnet.*`.
+
+Operational caveats (non-routing failure modes hit during testing):
+
+- **Task launches asynchronously**: in Claude Code 2.1.20x the Task tool starts sub-agents in the background and the orchestrator waits for a completion notification. A weak local orchestrator can mishandle this wait and *falsely report* "the agent is unreachable". If the serve log has no `auto-router-resolved`, the failure is client-side — do not mistake it for a routing failure.
+- **Autocompact thrashing**: with an Ollama-backed main, `cache_read_input_tokens` is always 0, so each turn re-reports ~30k tokens of prefill as fresh input; Claude Code's auto-compact can spin every few turns and abort via the `rapid_refill_breaker`. For long orchestrations, disable auto-compact or put a prompt-cache-capable backend behind the main profile.
+- **Empty grok responses**: the grok CLI was observed returning exit 0 with `text: ""`. **Fixed** in coderouter-plugin-agents as of `c6096ed` (fix(grok): treat empty 'text' in grok JSON output as retryable AdapterError, 2026-07-11) — an empty/whitespace-only `text` now raises a retryable AdapterError so the fallback chain can advance (older versions pass the empty answer through to the client as a "success").
+- **Two recurring serve-log warnings are expected (not routing failures)**: (1) `normalized-nonspec-message-roles` (hint: client is likely Claude Code CLI >= 2.1.154 (known regression)) records the adapter absorbing a known Claude Code regression and is benign. (2) `capability-degraded` with dropped:["cache_control"], reason:"translation-lossy" on tool-bearing sub-agent requests records cache_control being dropped when translating to a non-tools backend, and is expected (report.md:52,60,80). Both are fine as long as a `provider-ok` follows.
+
+The reproducible test kit (providers.yaml, sub-agent definitions, verification script) lives in the repository under `_run/e2e-agents/`.
+
 ## 7. Limitations and known gaps
 
 - **One matcher per rule (no AND)**: a `RuleMatcher` cannot express compound conditions. "CJK-heavy AND long" isn't expressible as a single rule today (gap G1). Work around it by ordering multiple single-condition rules and letting first-match-wins do the job.
 - **No dedicated sub-agent-declaration channel (under consideration)**: there is currently no channel that carries "this is a sub-agent, and its role is X." In practice, the answer is what this guide describes — route on model name. A future proposal exists (not yet started) to add a top-priority rule ahead of auto_router that detects a tag embedded in the system prompt or first message, but this is not implemented.
 - **How this differs from ccr's (claude-code-router) tag approach**: CodeRouter actively reads wire-level metadata (model name, headers) to route. ccr instead passively detects and extracts a tag embedded in the prompt body. Both are different answers to the same underlying constraint — there is no native sub-agent identifier on the Anthropic wire.
-- **UNCONFIRMED — the shape of the model name that arrives**: whether the model-name string a Claude Code sub-agent sends stays an alias (e.g. `opus`) or expands to a full ID (e.g. `claude-opus-4-8`) is environment- and version-dependent, and was not verified as of this guide's writing. Whenever you write a `model_pattern` rule, confirm the real value via `signals.model` in the log as described in [§6](#6-verifying-it-works).
+- **Measured — the shape of the model name that arrives (confirmed 2026-07-11)**: sub-agent (frontmatter-derived) model names arrive **verbatim, including custom strings like `e2e-codex`, with no full-ID expansion**; the main conversation launched with `--model sonnet` arrives expanded to the **full ID `claude-sonnet-5`** (confirmed via the `auto-router-fallthrough` event in serve.log; see [§6.1](#61-measured-verification-results-coderouter-v290--claude-code-21206207-2026-07-11)). Behavior may still change in future Claude Code versions, so confirming the real value via `signals.model` as described in [§6](#6-verifying-it-works) remains recommended whenever you write a `model_pattern` rule.
 
 ## 8. Related documents
 
