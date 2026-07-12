@@ -1,7 +1,8 @@
 # オーケストレーション・コンパニオン設計書（Ecosystem 層、構想）
 
+> 編集注記（2026-07-12）: リンク整理。`future.md` は現リポジトリに非収録のため、リンクは注記化または現存ドキュメントへの付け替え済み（記述内容自体は変更していない）。
 > ステータス: **構想（Concept）**。実装前。Core/Plugin の変更は伴わない。
-> 正典: [`docs/inside/future.md`](../inside/future.md) §5（2026-06-27 追記）・§1.2（三層モデル）・§2.5（2026-07-11 追記）
+> 正典: `future.md`（当時の内部設計メモ。現リポジトリには未収録）§5（2026-06-27 追記）・§1.2（三層モデル）・§2.5（2026-07-11 追記）。§1.2 の判定基準に相当する記述は [`agent-cli-plugin-extraction.md`](./agent-cli-plugin-extraction.md) §1.3、§2.5 のopusplan構成例・既知の制限(G1/G6)に相当する記述は [`subagent-routing.md`](../guides/subagent-routing.md) §5(a)・§7 に移設されている。
 > 前提: agent_cli Phase 1 完結（v2.7.10、[`external-agents-adapter.md`](./external-agents-adapter.md)）
 > 作成: 2026-07-11 / 出典: 作者方向性指示 `_article/direction-brief-2026-07-11.md`・解析書 `_article/analysis-direction-2026-07.md` D-補足
 
@@ -60,7 +61,7 @@ Voice Bridge と同型で、CodeRouter Plugin SDK は使わない。future.md §
 [推論バックエンド] — agent_cli(claude opus 等) / ローカル / クラウド混在
 ```
 
-`providers.yaml` 側の構成例は future.md §2.5「opusplan 型構成例」を参照（本書では重複させない）。
+`providers.yaml` 側の構成例は [`subagent-routing.md`](../guides/subagent-routing.md) §5(a)「opusplan 型」を参照（本書では重複させない。旧 future.md §2.5「opusplan 型構成例」に相当する記述。future.md は当時の内部設計メモで、現リポジトリには未収録）。
 
 ---
 
@@ -71,10 +72,10 @@ Voice Bridge と同型で、CodeRouter Plugin SDK は使わない。future.md §
 - 役割別 profile 解決、agent_cli backend、fallback、L1〜L6 guards、plugin-memory/compress の透過適用は**すべて既存資産で足りる**。追加実装は不要（future.md §2.5 (1) 確信度 HIGH）。
 - `X-CodeRouter-Profile` ヘッダの precedence 機構は v1.6 以降既存。
 
-**G1/G3（future.md §2.5 (4) のギャップ表）が欲しくなる条件**:
+**G1/G3（当時の内部設計メモ future.md §2.5 (4) のギャップ表より。現リポジトリには未収録。G1 は現存記述として [`subagent-routing.md`](../guides/subagent-routing.md) §7 に対応項目あり）が欲しくなる条件**:
 
-- G1（複合条件マッチャ）: orchestrator が profile ヘッダを明示付与している限り不要。**auto_router の保険ルールを複雑化させたい場合のみ**（例: 「コード密度が高く *かつ* ツール宣言あり」を 1 ルールで表現したい）に欲しくなる。orchestrator 側が常にヘッダを付ける設計なら発生しない。
-- G3（ヘッダ/ツール名ベースのルール条件）: 同上。orchestrator が特定 MCP ツール名に応じて動的に profile を切り替えたい場合に初めて必要になる。
+- G1（複合条件マッチャ）: orchestrator が profile ヘッダを明示付与している限り不要。**auto_router の保険ルールを複雑化させたい場合のみ**（例: 「コード密度が高く *かつ* ツール宣言あり」を 1 ルールで表現したい）に欲しくなる。orchestrator 側が常にヘッダを付ける設計なら発生しない（cf. [`subagent-routing.md`](../guides/subagent-routing.md) §7 の G1 記述）。
+- G3（ヘッダ/ツール名ベースのルール条件）: 同上。orchestrator が特定 MCP ツール名に応じて動的に profile を切り替えたい場合に初めて必要になる（future.md 由来。現リポジトリには対応する記述なし）。
 
 **明確に CodeRouter 側に要求しないもの**: 段階判定（今が Plan か実行かの意味的分類、G2）・深度連動 routing（G4）・並列 fan-out（G5）はすべて orchestrator 側の責務であり、wire 層に持ち込まない。
 
@@ -104,6 +105,6 @@ Voice Bridge と同型で、CodeRouter Plugin SDK は使わない。future.md §
 
 ## 関連ドキュメント
 
-- [`docs/inside/future.md`](../inside/future.md) §5・§1.2・§2.5 — 正典
+- `future.md` §5・§1.2・§2.5 — 正典（当時の内部設計メモ future.md より。現リポジトリには未収録）。§1.2 相当は [`docs/designs/agent-cli-plugin-extraction.md`](./agent-cli-plugin-extraction.md) §1.3、§2.5 の一部（opusplan構成例・G1/G6）相当は [`docs/guides/subagent-routing.md`](../guides/subagent-routing.md) §5(a)・§7 を参照
 - [`docs/designs/external-agents-adapter.md`](./external-agents-adapter.md) — agent_cli backend（本書が利用する CodeRouter 側の対応機能）
-- `_OUTPUTS/04-計画-方向性/multiagent/` — 実機プロトタイプ一式（orchestrator/safe-edit/ベンチ）
+- `_OUTPUTS/04-計画-方向性/multiagent/` — 実機プロトタイプ一式（orchestrator/safe-edit/ベンチ。当時の作業ディレクトリ参照。現リポジトリには未収録）
