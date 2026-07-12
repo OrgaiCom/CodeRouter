@@ -26,13 +26,17 @@ import platform
 import queue
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
+import urllib.error
+import urllib.request
 import uuid
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -93,6 +97,28 @@ _MAX_LINES_PER_TICK = 1500   # _poll 1回で処理する最大行数(残りは�
 # 長く稼働してから落ちたものは通常のクラッシュ扱いで再起動しない。
 _MTP_FALLBACK_WINDOW_SECS = 180.0
 
+# ---------------------------------------------------------------------------
+# Readiness gating / auto-restart defaults
+#
+# Web 版 (coderouter/ingress/launcher_routes.py の _wait_ready_and_register /
+# _attempt_restart) と挙動・既定値を揃える。根拠は
+# coderouter/config/schemas.py の LauncherConfig 該当フィールドの docstring。
+# GUI にはこの launcher: ブロックを pydantic 検証する仕組みが無いため、値は
+# providers.yaml から緩く読み取り、型が壊れていれば既定値にフォールバックする
+# (_load_config の他フィールドと同じ寛容な流儀)。
+# ---------------------------------------------------------------------------
+_DEFAULT_READINESS_TIMEOUT_S = 300.0
+_DEFAULT_READINESS_POLL_INTERVAL_S = 2.0
+# 個々のプローブ用ネットワークタイムアウト。readiness_timeout_s(既定300s)
+# より十分短い固定値にして、1回のプローブが詰まっても loading→error の締切
+# 判定が大きく遅れないようにする(既定の poll interval 2.0s よりは長い点に
+# 注意 — プローブが3秒詰まれば次のポーリングはその分だけ遅れる)。
+_READINESS_PROBE_TIMEOUT_S = 3.0
+_DEFAULT_AUTO_RESTART = False
+_DEFAULT_AUTO_RESTART_MAX_ATTEMPTS = 3
+_DEFAULT_AUTO_RESTART_BACKOFF_S = 2.0
+_DEFAULT_AUTO_RESTART_BACKOFF_MAX_S = 30.0
+
 _CONFIG_SEARCH = [
     Path.cwd() / "providers.yaml",
     Path.home() / ".coderouter" / "providers.yaml",
@@ -115,6 +141,56 @@ class LauncherConfig:
     model_dirs: list[str] = field(default_factory=list)
     backends: dict[str, BackendConfig] = field(default_factory=dict)
     option_profiles: dict[str, list[OptionProfile]] = field(default_factory=dict)
+    # --- readiness gating / auto-restart — see the block comment above
+    #     _DEFAULT_READINESS_TIMEOUT_S for the source of truth (Web版と同一
+    #     既定値)。 swap: は Web 版の SwapManager 専用機能であり、GUI 版では
+    #     意図的に読み込まない。
+    readiness_timeout_s: float = _DEFAULT_READINESS_TIMEOUT_S
+    readiness_poll_interval_s: float = _DEFAULT_READINESS_POLL_INTERVAL_S
+    auto_restart: bool = _DEFAULT_AUTO_RESTART
+    auto_restart_max_attempts: int = _DEFAULT_AUTO_RESTART_MAX_ATTEMPTS
+    auto_restart_backoff_s: float = _DEFAULT_AUTO_RESTART_BACKOFF_S
+    auto_restart_backoff_max_s: float = _DEFAULT_AUTO_RESTART_BACKOFF_MAX_S
+
+
+def _safe_number(raw: dict, key: str, default: float, cast: Callable[[Any], Any]) -> Any:
+    """Read ``raw[key]`` through ``cast``, falling back to ``default``.
+
+    The GUI has no pydantic validation for the ``launcher:`` block (unlike
+    ``coderouter.config.schemas.LauncherConfig``), so a malformed value
+    (wrong type, missing key) must never crash the whole GUI at startup —
+    mirrors the already-lenient parsing of ``model_dirs`` / ``backends``
+    just above.
+    """
+    if key not in raw:
+        return default
+    try:
+        return cast(raw[key])
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_bool(raw: dict, key: str, default: bool) -> bool:
+    """Read a boolean out of ``raw[key]``, falling back to ``default``.
+
+    Deliberately NOT ``bool(...)``: a quoted YAML string like
+    ``auto_restart: "false"`` is a non-empty str, so ``bool("false")`` is
+    True — silently enabling a side-effectful opt-in the user explicitly
+    tried to turn off. Strings "true"/"false" (case-insensitive) are
+    parsed; real bools pass through; anything else falls back.
+    """
+    if key not in raw:
+        return default
+    v = raw[key]
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s == "true":
+            return True
+        if s == "false":
+            return False
+    return default
 
 
 def _load_config(path: str | None) -> LauncherConfig:
@@ -153,10 +229,42 @@ def _load_config(path: str | None) -> LauncherConfig:
                 profs.append(OptionProfile(name=p["name"], args=p.get("args", {}) or {}))
         option_profiles[bk] = profs
 
+    # readiness gating / auto-restart — same keys & defaults as the Web 版
+    # ``launcher:`` block (coderouter/config/schemas.py LauncherConfig).
+    # ``swap:`` is intentionally never read here (see LauncherConfig above).
+    readiness_timeout_s = _safe_number(
+        launcher_raw, "readiness_timeout_s", _DEFAULT_READINESS_TIMEOUT_S, float)
+    readiness_poll_interval_s = _safe_number(
+        launcher_raw, "readiness_poll_interval_s",
+        _DEFAULT_READINESS_POLL_INTERVAL_S, float)
+    auto_restart = _safe_bool(
+        launcher_raw, "auto_restart", _DEFAULT_AUTO_RESTART)
+    auto_restart_max_attempts = _safe_number(
+        launcher_raw, "auto_restart_max_attempts",
+        _DEFAULT_AUTO_RESTART_MAX_ATTEMPTS, int)
+    auto_restart_backoff_s = _safe_number(
+        launcher_raw, "auto_restart_backoff_s",
+        _DEFAULT_AUTO_RESTART_BACKOFF_S, float)
+    auto_restart_backoff_max_s = _safe_number(
+        launcher_raw, "auto_restart_backoff_max_s",
+        _DEFAULT_AUTO_RESTART_BACKOFF_MAX_S, float)
+    if auto_restart_backoff_s > auto_restart_backoff_max_s:
+        # Same fast-fail *intent* as schemas.py's
+        # _check_auto_restart_backoff_ordered validator, but the GUI just
+        # clamps instead of refusing to start — a malformed config must
+        # never block the desktop tool from opening.
+        auto_restart_backoff_max_s = auto_restart_backoff_s
+
     return LauncherConfig(
         model_dirs=model_dirs,
         backends=backends,
         option_profiles=option_profiles,
+        readiness_timeout_s=readiness_timeout_s,
+        readiness_poll_interval_s=readiness_poll_interval_s,
+        auto_restart=auto_restart,
+        auto_restart_max_attempts=auto_restart_max_attempts,
+        auto_restart_backoff_s=auto_restart_backoff_s,
+        auto_restart_backoff_max_s=auto_restart_backoff_max_s,
     )
 
 
@@ -415,13 +523,261 @@ class ManagedProcess:
     model_name: str
     port: int
     cmd: list[str]
-    status: str = "starting"   # starting / running / stopped / error
+    # "starting" (constructing, pre-spawn) | "loading" (Popen succeeded,
+    # waiting on the readiness probe — see _readiness_worker) | "running"
+    # (readiness confirmed) | "stopping" (Stop/Kill requested, transient
+    # display state) | "stopped" | "error"
+    status: str = "starting"
     pid: int | None = None
     returncode: int | None = None
     proc: Any = None
     # 無制限肥大化を防ぐため上限付き deque を使用(古い行から自動破棄)
     log_lines: deque[str] = field(
         default_factory=lambda: deque(maxlen=_MAX_LOG_LINES))
+    # Set by _do_stop / _do_kill just before signalling the child. Tells the
+    # launch worker thread the exit was requested, not a crash, so it never
+    # auto-restarts and never mislabels whatever exit code SIGTERM/SIGKILL
+    # produced as "error" (mirrors ManagedProcess.stopping in
+    # coderouter/ingress/launcher_routes.py).
+    stopping: bool = False
+    # Consecutive generic auto-restart attempts since the last readiness
+    # success. Reset to 0 by _readiness_worker once it confirms "running".
+    restart_count: int = 0
+    started_at: float = 0.0
+    # Bumped on every (re)spawn — initial launch, MTP fallback relaunch, or
+    # generic auto-restart. A readiness worker captures its own generation
+    # at start and aborts once it no longer matches, so a stale worker left
+    # over from a previous spawn attempt can never overwrite the status set
+    # by a newer one (mirrors the supersede-safety of
+    # ManagedProcess.ready.clear() in launcher_routes.py).
+    spawn_gen: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Readiness gating — ported from coderouter/ingress/launcher_routes.py
+# (_backend_ready / _wait_ready_and_register). A backend used to be shown as
+# "running" the instant the OS process spawned, before llama-server / vllm
+# had actually finished loading the model — the GUI would claim success
+# while the model was still loading. Now the launch worker thread stays in
+# "loading" until a poll confirms the backend is actually serving, or the
+# poll deadline is exceeded (status becomes "error"; the process itself is
+# left running so the user can inspect logs / stop it manually).
+# ---------------------------------------------------------------------------
+
+
+def _backend_ready(backend: str, port: int, *, probe_timeout_s: float) -> bool:
+    """Best-effort single readiness probe. Never raises.
+
+    llama.cpp and vllm both expose ``GET /health`` (200 once the model is
+    loaded and the server is accepting requests; llama.cpp returns 503
+    while still loading). Other backends (mlx — mlx_lm.server has no
+    documented health endpoint) fall back to a bare TCP connect: it can't
+    distinguish "loaded" from "listening", but it is a strict improvement
+    over showing "running" before the port is even open.
+    """
+    if backend in ("llama.cpp", "vllm"):
+        try:
+            req = urllib.request.Request(f"http://localhost:{port}/health")
+            with urllib.request.urlopen(req, timeout=probe_timeout_s) as resp:
+                return resp.status == 200
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+            return False
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=probe_timeout_s):
+            return True
+    except OSError:
+        return False
+
+
+def poll_until_ready(
+    *,
+    check: Callable[[], bool],
+    should_abort: Callable[[], bool],
+    timeout_s: float,
+    poll_interval_s: float,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+) -> str:
+    """Generic poll loop, decoupled from Tk / threading / sockets.
+
+    Returns one of:
+      * ``"ready"``   — ``check()`` returned True before the deadline.
+      * ``"timeout"`` — the deadline passed with ``check()`` never True.
+      * ``"aborted"`` — ``should_abort()`` returned True (the caller is no
+        longer in a loading-eligible state: crashed, stopped, or a newer
+        spawn superseded this one) — checked both before every probe and
+        immediately after a successful one, so a fast state change can
+        never race a stale "ready" outcome in.
+
+    Injectable ``sleep`` / ``now`` make this fully unit-testable without
+    real timing. Mirrors the loop shape of
+    ``launcher_routes._wait_ready_and_register``.
+    """
+    deadline = now() + timeout_s
+    while now() < deadline:
+        if should_abort():
+            return "aborted"
+        if check():
+            return "aborted" if should_abort() else "ready"
+        sleep(poll_interval_s)
+    return "timeout"
+
+
+def _readiness_worker(
+    mp: ManagedProcess,
+    cfg: LauncherConfig,
+    log_queue: queue.Queue[tuple[str, str]],
+    gen: int,
+    *,
+    backend_ready: Callable[..., bool] = _backend_ready,
+) -> None:
+    """Poll ``mp`` for readiness, then flip it to "running" — or "error".
+
+    Runs as an independent daemon thread per spawn (initial, MTP fallback,
+    or auto-restart), started right after Popen succeeds. Takes plain data
+    (no ``self``) so it can be driven directly in tests without a live Tk
+    app — mirrors the signature shape of ``_wait_ready_and_register``.
+    """
+
+    def _abort() -> bool:
+        return (
+            mp.spawn_gen != gen
+            or mp.proc is None
+            or mp.stopping
+            or mp.status not in ("starting", "loading")
+        )
+
+    outcome = poll_until_ready(
+        check=lambda: backend_ready(
+            mp.backend, mp.port, probe_timeout_s=_READINESS_PROBE_TIMEOUT_S
+        ),
+        should_abort=_abort,
+        timeout_s=cfg.readiness_timeout_s,
+        poll_interval_s=cfg.readiness_poll_interval_s,
+    )
+
+    if outcome == "ready":
+        # Re-guard IMMEDIATELY before the write. poll_until_ready re-checks
+        # should_abort at the instant it decides "ready", but unlike the Web
+        # 版 (asyncio, single-threaded — check and write are atomic), this
+        # worker runs in a REAL thread: between that decision and this
+        # assignment the launch worker (_run) can crash-handle, consume an
+        # auto-restart attempt, and bump spawn_gen for a respawn. Without
+        # this re-check a stale worker would clobber the newer generation's
+        # status/restart_count.
+        if _abort():
+            return
+        mp.status = "running"
+        mp.restart_count = 0
+        log_queue.put((mp.id, "[launcher] readiness check passed"))
+        log_queue.put((mp.id, f"_READY_:{mp.name}:{mp.port}"))
+    elif outcome == "timeout":
+        if mp.spawn_gen == gen and mp.status in ("starting", "loading"):
+            mp.status = "error"
+            log_queue.put((
+                mp.id,
+                f"[launcher] readiness check timed out after "
+                f"{cfg.readiness_timeout_s:.0f}s — process left running but "
+                "not confirmed ready"
+            ))
+    # "aborted": bail out silently, exactly like the web version — a fast
+    # crash/stop/respawn must never have a stale probe overwrite its status.
+
+
+# ---------------------------------------------------------------------------
+# Generic auto-restart — ported from launcher_routes._attempt_restart.
+# Opt-in via LauncherConfig.auto_restart (default False — see the docstring
+# on that field in coderouter/config/schemas.py for the rationale: silently
+# respawning a genuinely misconfigured backend forever would be worse than
+# just leaving it in status="error").
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RestartPlan:
+    should_restart: bool
+    backoff_s: float = 0.0
+    log_lines: list[str] = field(default_factory=list)
+
+
+def plan_auto_restart(
+    *,
+    auto_restart: bool,
+    restart_count: int,
+    max_attempts: int,
+    backoff_s: float,
+    backoff_max_s: float,
+    has_cmd: bool,
+) -> RestartPlan:
+    """Decide whether/how to auto-restart a crashed backend.
+
+    Pure decision logic — no subprocess spawn, no sleep — mirroring
+    ``launcher_routes._attempt_restart`` minus the actual respawn (which the
+    caller performs after honoring ``mp.stopping`` one more time once the
+    backoff sleep completes, exactly like the web version does).
+    """
+    if not auto_restart:
+        return RestartPlan(should_restart=False)
+    if restart_count >= max_attempts:
+        return RestartPlan(
+            should_restart=False,
+            log_lines=[
+                f"[launcher] auto-restart exhausted "
+                f"({restart_count}/{max_attempts} attempts); giving up"
+            ],
+        )
+    if not has_cmd:
+        return RestartPlan(should_restart=False)  # nothing to relaunch
+
+    backoff = min(backoff_s * (2 ** restart_count), backoff_max_s)
+    return RestartPlan(
+        should_restart=True,
+        backoff_s=backoff,
+        log_lines=[
+            f"[launcher] auto-restart attempt {restart_count + 1}/"
+            f"{max_attempts} in {backoff:.1f}s"
+        ],
+    )
+
+
+def _exit_status(returncode: int | None, stopping: bool) -> str:
+    """Map a subprocess exit to a terminal ManagedProcess.status.
+
+    An intentional stop (Stop/Kill button) is always "stopped", regardless
+    of the exit code SIGTERM/SIGKILL produced (POSIX SIGTERM typically
+    yields a negative returncode) — without this, every deliberate Stop
+    would have been mislabeled "error". Mirrors the ``proc.stopping`` check
+    in ``launcher_routes._tail_logs``.
+    """
+    if stopping:
+        return "stopped"
+    return "stopped" if (returncode or 0) == 0 else "error"
+
+
+def _proc_alive(mp: ManagedProcess) -> bool:
+    """True iff ``mp`` still holds a live OS process.
+
+    Liveness is decided by ``proc.poll()``, never by ``mp.status``: since
+    readiness gating, a readiness-timed-out backend sits in status="error"
+    while the OS process is still very much alive (holding its port and
+    VRAM). Any stop/kill/remove decision keyed on the status set alone
+    would drop such a process un-killed and orphan it — poll() is the only
+    source of truth.
+    """
+    return mp.proc is not None and mp.proc.poll() is None
+
+
+def _kill_for_removal(mp: ManagedProcess) -> None:
+    """Force-kill a live process on behalf of a UI removal.
+
+    ``stopping`` is set BEFORE the signal so the launch worker thread
+    treats the exit as intentional: no auto-restart of a process the UI no
+    longer tracks, and no "error" mislabel from the SIGKILL exit code.
+    """
+    mp.stopping = True
+    with contextlib.suppress(Exception):
+        mp.proc.kill()
 
 
 # ---------------------------------------------------------------------------
@@ -1282,6 +1638,14 @@ class LauncherApp(tk.Tk):
         self._launch_btn.configure(state="disabled", cursor="arrow")
         self._launch_anim_tick(proc_id, 0)
 
+        def _spawn_readiness_worker() -> None:
+            """Kick off (or re-kick after a respawn) the readiness poller."""
+            threading.Thread(
+                target=_readiness_worker,
+                args=(mp, self.cfg, self._log_queue, mp.spawn_gen),
+                daemon=True,
+            ).start()
+
         def _run() -> None:
             mp.log_lines.append(f"[launcher] cmd: {' '.join(cmd)}")
             for note in spec_notes:
@@ -1303,11 +1667,21 @@ class LauncherApp(tk.Tk):
                     return
 
                 started_at = time.monotonic()
+                mp.cmd = run_cmd
                 mp.proc  = p
                 mp.pid   = p.pid
-                mp.status = "running"
+                mp.returncode = None
+                mp.started_at = started_at
+                mp.spawn_gen += 1
+                # H2 (readiness gating, ported from launcher_routes.py): the
+                # status is "loading", not "running", until the readiness
+                # worker below confirms the backend is actually serving —
+                # registering/declaring success before the model finishes
+                # loading is exactly the bug this closes.
+                mp.status = "loading"
+                _spawn_readiness_worker()
                 if first:
-                    self._log_queue.put((proc_id, f"_OK_:{name}:{port}"))
+                    self._log_queue.put((proc_id, f"_SPAWNED_:{name}:{port}"))
                     first = False
 
                 assert p.stdout
@@ -1317,9 +1691,16 @@ class LauncherApp(tk.Tk):
                         self._log_queue.put((proc_id, line))
                 p.wait()
                 mp.returncode = p.returncode
-                mp.status = "stopped" if p.returncode == 0 else "error"
+                mp.pid = None
+                mp.status = _exit_status(p.returncode, mp.stopping)
                 self._log_queue.put(
                     (proc_id, f"[launcher] exited (code {p.returncode})"))
+
+                if mp.stopping:
+                    # Intentional stop (_do_stop / _do_kill). Never a crash
+                    # to heal, regardless of the exit code SIGTERM/SIGKILL
+                    # produced, and never eligible for MTP fallback either.
+                    return
 
                 # MTP startup crash → relaunch ONCE without speculative flags.
                 if (
@@ -1340,6 +1721,26 @@ class LauncherApp(tk.Tk):
                         (proc_id, f"[launcher] cmd: {' '.join(fallback_cmd)}"))
                     run_cmd = fallback_cmd
                     continue
+
+                # Generic auto-restart (opt-in — see LauncherConfig.auto_restart).
+                if p.returncode not in (0, None):
+                    plan = plan_auto_restart(
+                        auto_restart=self.cfg.auto_restart,
+                        restart_count=mp.restart_count,
+                        max_attempts=self.cfg.auto_restart_max_attempts,
+                        backoff_s=self.cfg.auto_restart_backoff_s,
+                        backoff_max_s=self.cfg.auto_restart_backoff_max_s,
+                        has_cmd=bool(run_cmd),
+                    )
+                    for ln in plan.log_lines:
+                        self._log_queue.put((proc_id, ln))
+                    if plan.should_restart:
+                        mp.restart_count += 1
+                        time.sleep(plan.backoff_s)
+                        if mp.stopping:
+                            # Stopped while waiting out the backoff — respect it.
+                            return
+                        continue  # run_cmd unchanged — relaunch same argv
                 return
 
         threading.Thread(target=_run, daemon=True).start()
@@ -1349,7 +1750,13 @@ class LauncherApp(tk.Tk):
         if not pid or pid not in self.processes:
             return
         mp = self.processes[pid]
-        if mp.proc and mp.proc.poll() is None:
+        if _proc_alive(mp):
+            # Set BEFORE signalling — tells the launch worker thread (and any
+            # in-flight readiness worker) this exit was requested, so neither
+            # auto-restarts nor mislabels it "error" (mirrors
+            # launcher_routes.stop_process setting proc.stopping = True
+            # first).
+            mp.stopping = True
             mp.status = "stopping"
             with contextlib.suppress(Exception):
                 mp.proc.terminate()
@@ -1361,7 +1768,8 @@ class LauncherApp(tk.Tk):
         if not pid or pid not in self.processes:
             return
         mp = self.processes[pid]
-        if mp.proc and mp.proc.poll() is None:
+        if _proc_alive(mp):
+            mp.stopping = True  # same rationale as _do_stop
             with contextlib.suppress(Exception):
                 mp.proc.kill()
             mp.log_lines.append("[launcher] SIGKILL sent")
@@ -1372,11 +1780,13 @@ class LauncherApp(tk.Tk):
         if not pid or pid not in self.processes:
             return
         mp = self.processes[pid]
-        if mp.status in ("running", "starting"):
+        # 生存判定は status ではなく poll() で行う — readiness タイムアウト後は
+        # status="error" のままOSプロセスが生きているため、status ベースの
+        # 判定では kill されずにオーファン化する(_proc_alive の docstring 参照)。
+        if _proc_alive(mp):
             if not messagebox.askyesno("確認", f"{mp.name} は実行中です。強制終了して削除しますか?"):
                 return
-            with contextlib.suppress(Exception):
-                mp.proc.kill()
+            _kill_for_removal(mp)
         del self.processes[pid]
         self.selected_proc_id = None
         self._refresh_process_table()
@@ -1428,6 +1838,8 @@ class LauncherApp(tk.Tk):
         self._proc_tree.bind("<<TreeviewSelect>>", self._on_proc_select)
         self._proc_tree.tag_configure("running",  foreground=self.GREEN,  background=self.BG2)
         self._proc_tree.tag_configure("starting", foreground=self.YELLOW, background=self.BG2)
+        self._proc_tree.tag_configure("loading",  foreground=self.YELLOW, background=self.BG2)
+        self._proc_tree.tag_configure("stopping", foreground=self.YELLOW, background=self.BG2)
         self._proc_tree.tag_configure("stopped",  foreground=self.FG2,    background=self.BG2)
         self._proc_tree.tag_configure("error",    foreground=self.RED,    background=self.BG2)
 
@@ -1604,10 +2016,13 @@ class LauncherApp(tk.Tk):
 
             mp = self.processes[proc_id]
 
-            if line.startswith("_OK_:"):
+            if line.startswith("_SPAWNED_:"):
+                # OS プロセスの起動に成功した段階(readiness 未確認)。
+                # フォームは次の起動へ空けるが、mp.status は "loading" の
+                # ままで、実際に "稼働中" になるのは _READY_ 受信時。
                 parts = line.split(":", 2)
                 _, pname, pport = parts
-                self._set_status(f"起動: {pname} (PID {mp.pid})")
+                self._set_status(f"読み込み中: {pname} (PID {mp.pid})")
                 self._port_var.set(str(int(pport) + 1))
                 self._name_var.set("")
                 # アニメーション停止(_launch_anim_tick が次回呼ばれたとき自動停止)
@@ -1615,6 +2030,15 @@ class LauncherApp(tk.Tk):
                 self._launch_btn.configure(
                     text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
                 )
+                changed = True
+                continue
+
+            if line.startswith("_READY_:"):
+                # readiness probe が通り、mp.status は既に "running"。
+                parts = line.split(":", 2)
+                _, pname, _pport = parts
+                if proc_id == self.selected_proc_id:
+                    self._set_status(f"稼働中: {pname} (PID {mp.pid})")
                 changed = True
                 continue
 
@@ -1651,11 +2075,11 @@ class LauncherApp(tk.Tk):
 
         # プロセス終了チェック
         for mp in list(self.processes.values()):
-            if mp.proc and mp.status in ("running", "starting"):
+            if mp.proc and mp.status in ("running", "starting", "loading"):
                 rc = mp.proc.poll()
                 if rc is not None:
                     mp.returncode = rc
-                    mp.status = "stopped" if rc == 0 else "error"
+                    mp.status = _exit_status(rc, mp.stopping)
                     changed = True
 
         if changed:
