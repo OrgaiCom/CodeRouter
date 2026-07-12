@@ -130,7 +130,24 @@ note " coderouter serve 起動 (port $PORT)"
 note "=========================================================="
 ( cd "$REPO_DIR" && $CODEROUTER_CMD serve --config "$GEN" --port "$PORT" --log-level info ) >"$SERVE_LOG" 2>&1 &
 SERVE_PID=$!
-trap 'kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null' EXIT
+# 後始末: $! はサブシェルのPID。coderouter 本体と、swapが起動した
+# llama-server(MODEL_PORT)まで、ポート基準で確実に始末する。
+cleanup_serve() {
+  kill "$SERVE_PID" 2>/dev/null
+  wait "$SERVE_PID" 2>/dev/null
+  local p pids
+  for p in "$PORT" "$MODEL_PORT"; do
+    pids="$(lsof -ti ":$p" 2>/dev/null)"
+    if [ -n "$pids" ]; then
+      kill $pids 2>/dev/null
+      sleep 2
+      pids="$(lsof -ti ":$p" 2>/dev/null)"
+      [ -n "$pids" ] && kill -9 $pids 2>/dev/null
+    fi
+  done
+  return 0
+}
+trap cleanup_serve EXIT
 
 UP=0
 for _ in $(seq 1 30); do

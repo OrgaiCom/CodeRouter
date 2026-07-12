@@ -24,8 +24,23 @@ note() { printf '%s\n' "$*"; }
 
 RUN_DIRS=()
 RUN_SECS=()
+PORT="${PORT:-8189}"
+FAST_FAILS=0
+
+ensure_port_free() {
+  local pids
+  pids="$(lsof -ti ":$PORT" 2>/dev/null)"
+  if [ -n "$pids" ]; then
+    note "[warn] port $PORT に残留プロセス($pids) — 前runの残骸を掃除します"
+    kill $pids 2>/dev/null; sleep 2
+    pids="$(lsof -ti ":$PORT" 2>/dev/null)"
+    [ -n "$pids" ] && kill -9 $pids 2>/dev/null
+    sleep 1
+  fi
+}
 
 for i in $(seq 1 "$RUNS"); do
+  ensure_port_free
   note "=========================================================="
   note " run $i/$RUNS 開始 ($(date +%H:%M:%S))"
   note "=========================================================="
@@ -37,8 +52,16 @@ for i in $(seq 1 "$RUNS"); do
   newdir="$(comm -13 <(printf '%s\n' $before) <(printf '%s\n' $after) | tail -1)"
   if [ -z "$newdir" ] || [ ! -f "$newdir/report.md" ]; then
     note "[warn] run $i の results ディレクトリが見つからない — スキップ"
+    if [ $((t1 - t0)) -lt 60 ]; then
+      FAST_FAILS=$((FAST_FAILS + 1))
+      if [ "$FAST_FAILS" -ge 2 ]; then
+        note "[FATAL] 短時間失敗が連続 — 環境エラーと判断して中断します (preflightのFATALメッセージを確認)"
+        break
+      fi
+    fi
     continue
   fi
+  FAST_FAILS=0
   RUN_DIRS+=("$newdir")
   RUN_SECS+=($((t1 - t0)))
   note " run $i 完了: $(basename "$newdir") ($((t1 - t0))s)"
