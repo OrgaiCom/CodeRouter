@@ -5,6 +5,16 @@ entries appear at the top. Each section records a delta between two
 consecutive snapshots — not a cumulative list of free-tier models.
 For the current list, see `latest.json` in this directory.
 
+## 2026-07-13T00:07:11Z
+
+### Removed (1) ⚠️
+
+- `poolside/laguna-xs.2:free` (was: ctx=262144, prompt=0, completion=0)
+
+### Added (1)
+
+- `tencent/hy3:free` (ctx=262144)
+
 ## 2026-07-06T00:07:28Z
 
 ### Removed (6) ⚠️

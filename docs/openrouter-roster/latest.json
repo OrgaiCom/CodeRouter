@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fetched_at": "2026-07-06T00:07:28Z",
+  "fetched_at": "2026-07-13T00:07:11Z",
   "entries": [
     {
       "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
@@ -141,12 +141,6 @@
       "pricing_completion": "0"
     },
     {
-      "id": "poolside/laguna-xs.2:free",
-      "context_length": 262144,
-      "pricing_prompt": "0",
-      "pricing_completion": "0"
-    },
-    {
       "id": "qwen/qwen3-coder:free",
       "context_length": 1048576,
       "pricing_prompt": "0",
@@ -154,6 +148,12 @@
     },
     {
       "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "tencent/hy3:free",
       "context_length": 262144,
       "pricing_prompt": "0",
       "pricing_completion": "0"
