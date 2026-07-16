@@ -143,9 +143,18 @@ def normalize_message_roles(payload: dict[str, Any]) -> dict[str, Any]:
     (see anthropics/claude-code#63469, vllm-project/vllm#44000).
 
     Policy:
-        - ``role: "system"`` → text content merged into the top-level
-          ``system`` field (appended after any existing system prompt;
-          same join rule as ``convert.to_anthropic_request``).
+        - leading ``role: "system"`` (before any user/assistant turn) →
+          text content merged into the top-level ``system`` field
+          (appended after any existing system prompt; same join rule as
+          ``convert.to_anthropic_request``). This is a genuine system
+          prompt from an OpenAI-style client, and it stays at position 0.
+        - mid-conversation ``role: "system"`` → coerced to ``user`` **in
+          place**, like any other non-spec role. Claude Code's
+          system-reminders are volatile per-turn text; hoisting them to
+          the top-level field moves content that changes every turn ahead
+          of the whole conversation, which invalidates the prefix cache of
+          local backends (llama.cpp / LM Studio) and forces a full prompt
+          reprocess on every request.
         - any other non-spec role (``ctx``, ``msg``, ...) → coerced to
           ``user`` so conversation position is preserved. Anthropic
           merges consecutive same-role turns, so this is safe.
@@ -175,9 +184,21 @@ def normalize_message_roles(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         if role == "system":
             text = _content_as_text(msg.get("content"))
-            if text:
-                system_texts.append(text)
             coerced_roles.append("system")
+            if text:
+                if not messages_out:
+                    # Leading system message — a genuine system prompt from an
+                    # OpenAI-style client. Hoisting to the top-level field is
+                    # correct and prefix-safe (it stays at position 0).
+                    system_texts.append(text)
+                else:
+                    # Mid-conversation system message — volatile per-turn text
+                    # (Claude Code >= 2.1.154 system-reminders). Keep it where
+                    # the client put it. Hoisting moves text that changes every
+                    # turn ahead of the entire conversation, which invalidates
+                    # the prefix cache of local backends (llama.cpp / LM Studio)
+                    # and forces a full prompt reprocess on every request.
+                    messages_out.append({"role": "user", "content": text})
             continue
         # Unknown role (ctx / msg / future surprises): keep its position
         # in the conversation as a user turn; drop if nothing salvageable.
