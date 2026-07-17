@@ -130,6 +130,44 @@ launcher:
           "--parallel": 5         # 同時リクエスト5本を並列処理（ベンチマーク用）
           "--batch-size": 1024
 
+      # ── Gemma 4 専用（空出力 / empty output 対策）────────────────────────
+      #   症状: gemma4:26b(-A4B) 等で patch/tool 生成タスクが
+      #         "empty output" → "patch parse failed" になり quality=0。
+      #   主因は **チャットテンプレート不一致**。llama-server は既定だと
+      #   汎用テンプレートで <start_of_turn>/<end_of_turn> を組み立てるため、
+      #   Gemma のターン境界・tool_code 表現が崩れて本文が空になりやすい。
+      #   → GGUF 埋め込みの Jinja テンプレートを使う "--jinja": true が要。
+      #     (テンプレートが埋め込まれていない GGUF なら
+      #      "--chat-template": "gemma" を代わりに指定)
+      #   サンプリングは構造化出力を安定させる控えめ設定。素の Gemma 推奨
+      #   (temp 1.0 / top-k 64 / top-p 0.95) は自由記述向けで、patch 生成では
+      #   低温+min-p の方が degenerate/空応答を抑えられる。
+      - name: "Gemma 4 (空出力対策)"
+        args:
+          "-ngl": 99
+          "--ctx-size": 32768     # Claude Code / patch タスクの最低ライン
+          "--jinja": true         # ★最重要: 埋め込みチャットテンプレートを使う
+          # "--chat-template": "gemma"  # ↑が効かない(テンプレ未埋め込み)GGUF用の代替
+          "--temp": 0.6           # 構造化出力向けに低め (自由記述は 1.0 でも可)
+          "--top-p": 0.9
+          "--top-k": 40
+          "--min-p": 0.05         # 低確率トークンを切り、空/崩れ応答を抑制
+          "--threads": 6
+
+      # 上と同じ Gemma 4 安定設定を並列ベンチ用にしたもの。
+      # ctx は「並列数 × 各スロット 32768」で確保する点に注意 (4×32768=131072)。
+      - name: "Gemma 4 ベンチ (4並列)"
+        args:
+          "-ngl": 99
+          "--ctx-size": 131072    # 4並列 × 各スロット 32768。VRAM に注意
+          "--parallel": 4
+          "--jinja": true
+          "--temp": 0.6
+          "--top-p": 0.9
+          "--top-k": 40
+          "--min-p": 0.05
+          "--batch-size": 1024
+
     # ── vllm オプションプロファイル ───────────────────────────────────────────
     vllm:
 
