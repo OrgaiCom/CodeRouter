@@ -9,7 +9,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
-## [Unreleased]
+## [v2.9.4] — 2026-07-19 (launcher device selection & bench sweep, cache-stable system prompt)
 
 ### Added
 
@@ -73,6 +73,36 @@ are kept verbatim where the Japanese text itself is the subject).
   and driving the same external bench subprocess model. See
   `tests/test_launcher_config_bench.py` and the new "Bench sweep" section
   in `docs/backends/launcher.md` / `launcher.en.md`.
+
+### Fixed
+
+- **Mid-conversation `role:"system"` messages are no longer hoisted into
+  the top-level `system` field.** (#75, contributed by @firelzrd.)
+  Claude Code CLI ≥ 2.1.154 emits volatile system reminders as
+  `role:"system"` messages *inside* `messages[]`; hoisting them meant the
+  serialized prompt's head changed every turn, so llama.cpp / LM Studio
+  style prefix-matching KV caches were invalidated wholesale (a captured
+  real session measured only 11.8 % reusable prefix between consecutive
+  requests). `normalize_message_roles()` now splits by position: leading
+  system messages (before any emitted turn) are hoisted as before — the
+  legitimate OpenAI-style system prompt — while mid-conversation ones are
+  coerced to `user` in place, keeping `messages` append-only and the
+  prompt head stable as the conversation grows. See
+  `tests/test_role_normalization.py`
+  (`test_leading_system_is_hoisted_but_mid_conversation_is_not`,
+  `test_system_prompt_is_stable_as_conversation_grows`).
+
+### Security
+
+- **Dependency bumps for two fresh advisories** (lockfile-only; both
+  verified with a clean `uv sync --frozen` + full test suite, 1905
+  passed): `click` 8.3.2 → 8.4.2 (PYSEC-2026-2132, fix ≥ 8.3.3;
+  transitive via uvicorn) and `json-repair` 0.59.10 → 0.61.5
+  (GHSA-xf7x-x43h-rpqh, CVSS 7.5, fix ≥ 0.60.1). The `json-repair`
+  floor in `pyproject.toml` was raised from `>=0.30` to `>=0.60.1` so
+  fresh installs can never resolve a vulnerable version; `uv.lock` also
+  records the new lockfile revision 3 format (upload-time metadata)
+  emitted by current uv.
 
 ---
 

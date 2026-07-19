@@ -56,7 +56,7 @@ wheels = [
 
 [[package]]
 name = "coderouter-cli"
-version = "2.9.3"
+version = "2.9.4"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -90,7 +90,7 @@ repair = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "json-repair", marker = "extra == 'repair'", specifier = ">=0.30" },
+    { name = "json-repair", marker = "extra == 'repair'", specifier = ">=0.60.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },

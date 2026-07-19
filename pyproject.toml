@@ -11,7 +11,7 @@
 # in plan.md §11.B; once granted, this name will become an alias and
 # `coderouter` will become the canonical distribution name.
 name = "coderouter-cli"
-version = "2.9.3"
+version = "2.9.4"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -70,7 +70,7 @@ accuracy = [
 # Optional rescue-parsing hardening for malformed tool-call JSON emitted by
 # small models. Lazy-imported; absence falls back to the built-in repair.
 repair = [
-    "json-repair>=0.30",
+    "json-repair>=0.60.1",
 ]
 dev = [
     "pytest>=8.3.0",
