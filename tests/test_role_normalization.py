@@ -41,8 +41,11 @@ def test_claude_code_system_role_in_messages_is_accepted():
             {"role": "assistant", "content": "hi"},
         ]
     )
-    assert [m.role for m in req.messages] == ["user", "assistant"]
-    assert req.system == "injected system reminder"
+    # Mid-conversation system text stays where the client put it, so the
+    # cacheable prefix ahead of it is unchanged.
+    assert [m.role for m in req.messages] == ["user", "user", "assistant"]
+    assert req.messages[1].content == "injected system reminder"
+    assert req.system is None
 
 
 def test_system_role_with_block_list_content():
@@ -58,10 +61,11 @@ def test_system_role_with_block_list_content():
             },
         ]
     )
-    assert req.system == "part one\npart two"
+    assert req.messages[1].content == "part one\npart two"
+    assert req.system is None
 
 
-def test_system_role_appends_to_existing_string_system():
+def test_mid_conversation_system_does_not_touch_existing_system():
     req = _req(
         [
             {"role": "user", "content": "q"},
@@ -69,10 +73,12 @@ def test_system_role_appends_to_existing_string_system():
         ],
         system="original",
     )
-    assert req.system == "original\nextra"
+    # The system prompt — the cache prefix — must not move.
+    assert req.system == "original"
+    assert req.messages[1].content == "extra"
 
 
-def test_system_role_appends_to_existing_block_list_system():
+def test_mid_conversation_system_does_not_touch_block_list_system():
     req = _req(
         [
             {"role": "user", "content": "q"},
@@ -80,13 +86,11 @@ def test_system_role_appends_to_existing_block_list_system():
         ],
         system=[{"type": "text", "text": "original"}],
     )
-    assert req.system == [
-        {"type": "text", "text": "original"},
-        {"type": "text", "text": "extra"},
-    ]
+    assert req.system == [{"type": "text", "text": "original"}]
+    assert req.messages[1].content == "extra"
 
 
-def test_multiple_system_messages_joined_in_order():
+def test_leading_system_is_hoisted_but_mid_conversation_is_not():
     req = _req(
         [
             {"role": "system", "content": "first"},
@@ -94,8 +98,41 @@ def test_multiple_system_messages_joined_in_order():
             {"role": "system", "content": "second"},
         ]
     )
-    assert req.system == "first\nsecond"
-    assert [m.role for m in req.messages] == ["user"]
+    # A leading system message is a genuine system prompt (OpenAI-style
+    # client) and belongs at position 0. A later one is per-turn text.
+    assert req.system == "first"
+    assert [m.role for m in req.messages] == ["user", "user"]
+    assert req.messages[1].content == "second"
+
+
+def test_system_prompt_is_stable_as_conversation_grows():
+    """The regression this guards: Claude Code appends a system-reminder each
+    turn. If those are hoisted, the system prompt — which sits ahead of the
+    whole conversation — changes every request and local backends
+    (llama.cpp / LM Studio) reprocess the entire prompt.
+    """
+    turn1 = _req(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "reminder A"},
+        ],
+        system="STABLE PROMPT",
+    )
+    turn2 = _req(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "reminder A"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+            {"role": "system", "content": "reminder B"},
+        ],
+        system="STABLE PROMPT",
+    )
+    assert turn1.system == turn2.system == "STABLE PROMPT"
+    # turn2's message list extends turn1's — an append-only prefix.
+    assert [(m.role, m.content) for m in turn2.messages][: len(turn1.messages)] == [
+        (m.role, m.content) for m in turn1.messages
+    ]
 
 
 # ------------------------------------------------------------
