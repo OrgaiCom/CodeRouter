@@ -225,6 +225,163 @@ All of these are **estimates** — they don't account for other processes' memor
 
 ---
 
+## Device selection (llama.cpp)
+
+On multi-GPU machines you can pass explicit `--device` / `--tensor-split` flags to `llama-server` to control which GPU(s) a model is offloaded to. Available in both the GUI and Web editions. **llama.cpp only** — vllm/mlx don't have a device-selection field at all.
+
+### Detection
+
+The **🔍 Detect** button on the LAUNCH form runs `{binary} --list-devices` and renders the detected devices as checkboxes (GUI) / cards (Web), each annotated with VRAM (free/total, GB). Real-world sample output:
+
+```
+# CUDA multi-GPU (Linux)
+CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31626 MiB free)
+CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 23800 MiB free)
+
+# macOS / Apple Silicon (Metal + BLAS fallback)
+MTL0: Apple M3 Max (53084 MiB, 53083 MiB free)
+BLAS: Accelerate (0 MiB, 0 MiB free)
+```
+
+The Metal device id on macOS is **`MTL0`**, not `Metal` (matching `llama-server --list-devices`'s actual output). A `0 MiB` device like `BLAS: Accelerate` still shows up in the list but carries no VRAM, so it's excluded from selection and tensor-split suggestions (only excluded from the *selectable* set — it's still reported in the raw detection result).
+
+If detection fails (missing binary, timeout, unparseable output, etc.), the probe comes back as `ok: false` and the UI falls back to a plain text field where you can type comma-separated device ids by hand.
+
+### Selection and tensor-split
+
+- Selecting exactly one device adds only `--device <id>` (no `--tensor-split`)
+- Selecting two or more devices **auto-suggests `--tensor-split` proportional to total VRAM** (e.g. an RTX 5090 + RTX 3090 → `0.57,0.43`). You can override it manually
+- If one or fewer devices are detected (Mac Metal alone, a single CUDA card, etc.), the tensor-split field itself is disabled/hidden — it has no meaning with a single device
+- **Leaving devices unselected means `--device` is never added** — the launch command is byte-for-byte identical to what it was before this feature existed (no impact on existing deployments)
+
+### Multi-backend caveat
+
+On an llama.cpp build that supports both CUDA and Vulkan, **the same physical GPU can be listed twice under different backends** — e.g. as `CUDA0` and `Vulkan1`. Real-world sample output:
+
+```
+CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31610 MiB free)
+CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 23858 MiB free)
+Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 24096 MiB free)
+Vulkan1: NVIDIA GeForce RTX 5090 (32607 MiB, 31610 MiB free)
+```
+
+To handle this duplication safely, tensor-split auto-suggestion and sweep-config auto-generation are grouped **per backend prefix** (`CUDA` / `Vulkan` / `MTL` / `SYCL`, i.e. the device id with its trailing digits stripped). **Mixed configurations that cross backends (e.g. `CUDA0` + `Vulkan1`) are never auto-generated** — that would double-count the same GPU. If you want to try a cross-backend combination anyway, check (or type) the device ids manually.
+
+### API (Web edition)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/launcher/devices` | none | Device detection. `?backend=llama.cpp` (default); `?refresh=1` bypasses the detection cache and re-probes |
+
+`GET /api/launcher/devices` response:
+
+```jsonc
+{
+  "ok": true,
+  "error": null,
+  "devices": [
+    {"id": "CUDA0", "name": "NVIDIA GeForce RTX 5090",
+     "total_mib": 32149, "free_mib": 31626, "total_gb": 31.4, "free_gb": 30.9},
+    {"id": "CUDA1", "name": "NVIDIA GeForce RTX 3090",
+     "total_mib": 24123, "free_mib": 23800, "total_gb": 23.6, "free_gb": 23.2}
+  ],
+  // VRAM-ratio tensor-split suggestion per backend prefix (0 MiB devices
+  // excluded; a key only appears for a backend with 2+ selectable devices)
+  "suggested_tensor_split": {"CUDA": [0.57, 0.43]},
+  // Auto-generated sweep config candidates (one per device + one per
+  // multi-device backend group)
+  "auto_configs": [
+    {"label": "CUDA0 solo", "device_ids": ["CUDA0"], "tensor_split": []},
+    {"label": "CUDA1 solo", "device_ids": ["CUDA1"], "tensor_split": []},
+    {"label": "CUDA x2", "device_ids": ["CUDA0", "CUDA1"], "tensor_split": [0.57, 0.43]}
+  ]
+}
+```
+
+`POST /api/launcher/start` accepts these additional fields (**llama.cpp only**; default is an empty array = nothing selected = the same launch command as before this feature):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `device_ids` | `list[string]` | `[]` | Selected device ids (e.g. `["CUDA0", "CUDA1"]`) |
+| `tensor_split` | `list[float]` | `[]` | Split ratios; only meaningful when `device_ids` has 2 or more entries (e.g. `[0.57, 0.43]`) |
+
+---
+
+## Bench sweep (llama.cpp)
+
+Runs a set of device configurations (e.g. `CUDA0` alone / `CUDA1` alone / `CUDA0,CUDA1` split) **automatically, one after another**: start → wait for readiness → run an external benchmark → stop → move to the next configuration — so you can compare throughput across configurations. Available in both the GUI and Web editions. **llama.cpp only**.
+
+The benchmark itself is expected to be the external tool [llmbench](https://github.com/zephel01/swe-bench) (installed separately — it does not ship with the Launcher).
+
+### Using it (GUI)
+
+The **📊 Bench sweep** button on the LAUNCH form opens a separate window (`SweepWindow`).
+
+1. Fill in model path, port, runs, results_dir, and the bench command (model path/port are pre-filled from the parent form)
+2. Click **🔍 Detect devices → generate configs** to run `--list-devices` and generate config checkboxes using the same auto-generation rules as [device selection](#device-selection-llamacpp) (one per device, plus one per multi-device backend group)
+3. Check the configurations you want to run and click **▶ Start**
+4. The progress table (config / state / exit / tok/s / ttft(ms)) and log update live. **■ Abort** cancels the remaining configurations (the one currently running still runs to completion)
+
+### Using it (Web edition)
+
+From the bench-sweep card on the `/launcher` page, fill in the same config matrix, bench command, runs, and results_dir as the GUI edition, then click **Start**. **Starting/aborting are write operations and require launcher token auth** (the `X-CodeRouter-Token` header, same as other write endpoints). Progress is shown via a 3-second status poll.
+
+### State machine
+
+Each configuration (`SweepStep`) moves through `pending → starting →(readiness passes)→ benching →(bench exits)→ done`.
+
+- A launch failure or readiness timeout → `failed` (the sweep continues to the next configuration)
+- A non-zero bench exit code still counts as `done` (the exit code is recorded for comparison — only a failure to even launch the bench process results in `failed`)
+- On an abort request, the currently running configuration finishes normally; the remaining, not-yet-started configurations become `aborted`
+
+### `launcher.bench` configuration (defaults)
+
+The `launcher.bench:` block in `providers.yaml` lets you set defaults for the sweep (omit it entirely and hard-coded defaults are used instead — fully backward compatible).
+
+```yaml
+launcher:
+  bench:
+    command_template: "llmbench run --model local-openai --runs {runs}"
+    runs: 5
+    results_dir: ~/llmbench-results
+    readiness_timeout_s: 300
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `command_template` | str | `"llmbench run --model local-openai --runs {runs}"` | Template for the external bench command. `{port}` `{config}` `{base_url}` `{results_dir}` `{runs}` are expanded via plain string substitution (not `str.format`, so JSON braces in the command aren't misinterpreted), then split into argv with `shlex`. On Windows, `shlex.split(..., posix=False)` is used so backslash-containing paths survive |
+| `runs` | int | `5` (1–1000) | Number of bench runs per configuration. Expanded into `{runs}` |
+| `results_dir` | str \| null | `null` | Directory `llmbench` writes its results to. A relative path is resolved against the server's CWD. Only when set does each configuration's completion trigger reading the newest JSON in this directory for a comparison summary |
+| `readiness_timeout_s` | float | `300.0` (5–3600) | Maximum seconds to wait for the server to become ready for each configuration in the sweep. The 5-minute default accounts for large GGUF load times |
+
+`{port}` expands to the port fixed for the sweep, `{config}` to the configuration's label (e.g. `CUDA0 solo`), and `{base_url}` to `http://localhost:{port}/v1`. The bench child process also gets the environment variable `OPENAI_BASE_URL=http://localhost:{port}/v1`, so `llmbench` works whether it reads the connection target from the template argument or from the environment.
+
+### Results comparison
+
+When `results_dir` is set, after each configuration's bench run finishes, the Launcher reads the newest `*.json` in that directory (updated at or after the configuration's start time) and best-effort extracts `tokens_per_sec` / `ttft_ms` / `latency_ms` / `runs`, also recognizing common aliases (`tok_s` / `throughput` / `tps`, etc.), then reflects them in the progress table. Parsing is defensive so a change in `llmbench`'s JSON schema doesn't break it — fields that can't be extracted are simply left blank.
+
+### API (Web edition)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/launcher/sweep/start` | **token** | Start a sweep. 409 if one is already running, 400 if `configs` is empty, 400 if the port is in use/unavailable |
+| GET | `/api/launcher/sweep/status` | none | Current (or most recent) sweep status: `{sweep_id, running, current_index, steps: [...]}` |
+| POST | `/api/launcher/sweep/abort` | **token** | Request an abort for the running sweep. 404 if no sweep exists |
+| GET | `/api/launcher/sweep/logs?n=200` | none | Last N lines of sweep progress log: `{logs: [str], total: int}` |
+
+Main fields of the `POST /api/launcher/sweep/start` request body:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `backend` | str | `"llama.cpp"` | Target backend |
+| `model_path` | str (required) | — | Model path shared by all configurations |
+| `port` | int (required) | — | Port reused across all configurations (1024–65535). Each configuration's stop waits for the port to be released before the next one starts |
+| `configs` | `list[{label, device_ids, tensor_split}]` (required, 1+) | — | The configurations to run. Use `/api/launcher/devices`'s `auto_configs` as-is, or assemble them manually |
+| `bench_command` | str \| null | `null` | `null` falls back to `launcher.bench.command_template` (or the hard-coded default if unset) |
+| `runs` / `results_dir` | int \| null / str \| null | `null` | Same fallback to `launcher.bench` defaults |
+
+---
+
 ## Automatic model swap (launcher.swap) — v2.9.1+
 
 An equivalent of [llama-swap](https://github.com/mostlygeek/llama-swap)'s core loop, built into CodeRouter itself with no extra dependencies. Opt-in and disabled by default (`enabled: false`).
@@ -396,6 +553,10 @@ These fields can be added directly under the `launcher:` block (same level as `m
 **New process status `loading`** — a launched process that's still waiting on its readiness check, alongside `starting` / `running` / `stopped` / `error` in the PROCESSES table. Once readiness passes, it transitions to `running`, and only then is it registered as a provider (previously it was registered the instant the process spawned, so requests could race a model that was still loading and get connection-refused / 503).
 
 > **Behavior change (v2.9.1)**: `POST /api/launcher/start` no longer performs provider sync synchronously — the response's `provider_sync` is always `null`. Check `/api/launcher/processes` or the `provider sync:` log line for the sync result.
+
+### `launcher.bench` — bench sweep defaults
+
+Add a `bench:` sub-block directly under `launcher:` to override the [bench sweep](#bench-sweep-llamacpp)'s defaults (bench command, runs, results_dir, readiness timeout). Omit it and the hard-coded defaults apply, so existing `providers.yaml` files keep working unchanged. See the `launcher.bench` field table and sample YAML in the [Bench sweep](#bench-sweep-llamacpp) section.
 
 ### Extra options (free-form input)
 

@@ -71,6 +71,53 @@ except ImportError:
     _HAS_SPECULATIVE = False
 
 # ---------------------------------------------------------------------------
+# Device selection + bench sweep core logic (optional — shared with the web UI)
+# ---------------------------------------------------------------------------
+# The pure logic (device detection / tensor-split suggestion / bench command
+# expansion / results parsing / sweep data structures) lives in the frozen
+# coderouter.launcher_devices module. As with the speculative import above, a
+# standalone GUI run without the coderouter package on sys.path degrades
+# gracefully: the device / sweep UI is simply not built (_HAS_DEVICES False).
+try:
+    from coderouter.launcher_devices import (
+        DeviceProbe,
+        DeviceSelection,
+        LlamaDevice,
+        SweepPlan,
+        SweepState,
+        SweepStep,
+        backend_of,
+        build_auto_sweep_configs,
+        build_sweep_steps,
+        detect_llama_devices,
+        is_port_free,
+        load_latest_results,
+        render_bench_command,
+        selectable_devices,
+        suggest_tensor_split,
+    )
+    _HAS_DEVICES = True
+except ImportError:  # standalone GUI (coderouter package not importable)
+    _HAS_DEVICES = False
+    # Bind the names so annotations (stringized via ``from __future__ import
+    # annotations``) and any guarded references never raise NameError / F821.
+    DeviceProbe = None  # type: ignore
+    DeviceSelection = None  # type: ignore
+    LlamaDevice = None  # type: ignore
+    SweepPlan = None  # type: ignore
+    SweepState = None  # type: ignore
+    SweepStep = None  # type: ignore
+    backend_of = None  # type: ignore
+    build_auto_sweep_configs = None  # type: ignore
+    build_sweep_steps = None  # type: ignore
+    detect_llama_devices = None  # type: ignore
+    is_port_free = None  # type: ignore
+    load_latest_results = None  # type: ignore
+    render_bench_command = None  # type: ignore
+    selectable_devices = None  # type: ignore
+    suggest_tensor_split = None  # type: ignore
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -119,6 +166,13 @@ _DEFAULT_AUTO_RESTART_MAX_ATTEMPTS = 3
 _DEFAULT_AUTO_RESTART_BACKOFF_S = 2.0
 _DEFAULT_AUTO_RESTART_BACKOFF_MAX_S = 30.0
 
+# ── Bench sweep defaults (launcher.bench: block) ──────────────────────────
+# The bench body is the external ``llmbench`` CLI; the sweep drives it once per
+# device configuration. {port}/{config}/{base_url}/{results_dir}/{runs} in the
+# template are substituted by launcher_devices.render_bench_command.
+_DEFAULT_BENCH_COMMAND_TEMPLATE = "llmbench run --model local-openai --runs {runs}"
+_DEFAULT_BENCH_RUNS = 5
+
 _CONFIG_SEARCH = [
     Path.cwd() / "providers.yaml",
     Path.home() / ".coderouter" / "providers.yaml",
@@ -151,6 +205,13 @@ class LauncherConfig:
     auto_restart_max_attempts: int = _DEFAULT_AUTO_RESTART_MAX_ATTEMPTS
     auto_restart_backoff_s: float = _DEFAULT_AUTO_RESTART_BACKOFF_S
     auto_restart_backoff_max_s: float = _DEFAULT_AUTO_RESTART_BACKOFF_MAX_S
+    # --- bench sweep defaults (launcher.bench: block) — read leniently in
+    #     _load_config; absent keys fall back to these hard-coded defaults so a
+    #     providers.yaml with no ``bench:`` block keeps working unchanged.
+    bench_command_template: str = _DEFAULT_BENCH_COMMAND_TEMPLATE
+    bench_runs: int = _DEFAULT_BENCH_RUNS
+    bench_results_dir: str | None = None
+    bench_readiness_timeout_s: float = _DEFAULT_READINESS_TIMEOUT_S
 
 
 def _safe_number(raw: dict, key: str, default: float, cast: Callable[[Any], Any]) -> Any:
@@ -255,6 +316,22 @@ def _load_config(path: str | None) -> LauncherConfig:
         # never block the desktop tool from opening.
         auto_restart_backoff_max_s = auto_restart_backoff_s
 
+    # bench sweep defaults — the ``launcher.bench:`` sub-block. Leniently read
+    # (missing block / keys → hard-coded defaults) exactly like the readiness
+    # fields above; the GUI never writes providers.yaml back.
+    bench_raw = launcher_raw.get("bench", {}) or {}
+    if not isinstance(bench_raw, dict):
+        bench_raw = {}
+    bench_template = bench_raw.get("command_template")
+    if not isinstance(bench_template, str) or not bench_template.strip():
+        bench_template = _DEFAULT_BENCH_COMMAND_TEMPLATE
+    bench_runs = _safe_number(bench_raw, "runs", _DEFAULT_BENCH_RUNS, int)
+    bench_results_dir = bench_raw.get("results_dir")
+    if bench_results_dir is not None and not isinstance(bench_results_dir, str):
+        bench_results_dir = None
+    bench_readiness_timeout_s = _safe_number(
+        bench_raw, "readiness_timeout_s", _DEFAULT_READINESS_TIMEOUT_S, float)
+
     return LauncherConfig(
         model_dirs=model_dirs,
         backends=backends,
@@ -265,6 +342,10 @@ def _load_config(path: str | None) -> LauncherConfig:
         auto_restart_max_attempts=auto_restart_max_attempts,
         auto_restart_backoff_s=auto_restart_backoff_s,
         auto_restart_backoff_max_s=auto_restart_backoff_max_s,
+        bench_command_template=bench_template,
+        bench_runs=bench_runs,
+        bench_results_dir=bench_results_dir,
+        bench_readiness_timeout_s=bench_readiness_timeout_s,
     )
 
 
@@ -306,16 +387,28 @@ def _scan_models(model_dirs: list[str]) -> list[dict[str, Any]]:
 def _build_cmd(backend: str, model_path: str, port: int,
                profile_args: dict[str, Any], extra_args: str,
                binary: str,
-               spec_tokens: list[str] | None = None) -> list[str]:
+               spec_tokens: list[str] | None = None,
+               device_args: list[str] | None = None) -> list[str]:
     """Assemble the backend launch command.
 
     ``spec_tokens`` are pre-resolved MTP / speculative-decoding flags (from
     :func:`coderouter.launcher_speculative.resolve_speculative`). For
     llama.cpp they are inserted right after the port args, before the profile
     / extra args.
+
+    ``device_args`` are pre-rendered llama.cpp device-selection flags (from
+    :meth:`coderouter.launcher_devices.DeviceSelection.to_cli_args` —
+    ``--device CUDA0,CUDA1`` / ``--tensor-split 0.57,0.43``). They are a
+    trailing keyword argument defaulting to ``None`` so every existing
+    positional/keyword call site (tests included) is unaffected, and when no
+    device is selected the argv is byte-for-byte identical to before — the
+    absolute backward-compatibility requirement. Only llama.cpp consumes them
+    (vllm / mlx ignore device_args entirely).
     """
     if backend == "llama.cpp":
         cmd = [binary, "-m", model_path, "--port", str(port)]
+        if device_args:
+            cmd.extend(device_args)
         if spec_tokens:
             cmd.extend(spec_tokens)
     elif backend == "vllm":
@@ -338,6 +431,56 @@ def _build_cmd(backend: str, model_path: str, port: int,
         cmd.extend(shlex.split(extra_args))
 
     return cmd
+
+
+# ---------------------------------------------------------------------------
+# Device selection helpers (pure — factored out of the Tk UI so they can be
+# unit-tested without a live display, mirroring the readiness/auto-restart
+# split above). Only meaningful when _HAS_DEVICES (coderouter importable).
+# ---------------------------------------------------------------------------
+
+
+def _selection_from_inputs(
+    checked_ids: list[str],
+    fallback_raw: str,
+    tsplit_raw: str,
+) -> DeviceSelection:
+    """Build a :class:`DeviceSelection` from raw UI inputs.
+
+    * ``checked_ids`` — device ids ticked in the detected-device checkboxes.
+    * ``fallback_raw`` — comma-separated manual entry, used ONLY when nothing
+      was detected/ticked (detection-failure fallback path).
+    * ``tsplit_raw`` — comma-separated tensor-split floats; malformed values
+      are silently dropped (best-effort, never crashes the launch).
+
+    An empty result (``device_ids == []``) yields ``to_cli_args() == []`` —
+    the byte-for-byte backward-compatible "no --device" case.
+    """
+    ids = [i for i in checked_ids if i]
+    if not ids and fallback_raw and fallback_raw.strip():
+        ids = [t.strip() for t in fallback_raw.split(",") if t.strip()]
+    split: list[float] = []
+    if tsplit_raw and tsplit_raw.strip():
+        with contextlib.suppress(ValueError):
+            split = [float(t) for t in tsplit_raw.split(",") if t.strip()]
+    return DeviceSelection(device_ids=ids, tensor_split=split)
+
+
+def _build_sweep_configs(
+    devices: list[LlamaDevice],
+) -> list[tuple[str, DeviceSelection]]:
+    """Auto-generate labelled sweep configurations from detected devices.
+
+    Thin wrapper over the frozen
+    :func:`coderouter.launcher_devices.build_auto_sweep_configs`, which:
+
+    * emits one "single device" config per *selectable* device (0 MiB devices
+      such as macOS ``BLAS: Accelerate`` are dropped — they hold no VRAM);
+    * adds a multi-GPU + tensor-split config **only within a single backend**
+      (never mixing CUDA / Vulkan, which on a CUDA+Vulkan build enumerate the
+      same physical GPU twice — see ``backend_of`` / ``group_by_backend``).
+    """
+    return build_auto_sweep_configs(devices, by="total")
 
 
 # ---------------------------------------------------------------------------
@@ -1427,21 +1570,70 @@ class LauncherApp(tk.Tk):
                         variable=self._mtp_auto_var).grid(
             row=7, column=3, sticky="w", padx=(0, 10), pady=(6, 0))
 
-        lbl("追加オプション", 8, 0)
+        # ── デバイス選択(llama.cpp; _HAS_DEVICES のときのみ) ────────────────
+        # 検出ボタン → --list-devices を非同期実行 → チェックボックス群を動的に
+        # 流し込む。検出失敗時は手入力 Entry にフォールバック。tensor-split 欄は
+        # 複数選択時のみ有効化、検出デバイスが 1 個以下なら行ごと非表示。
+        self._device_vars: dict[str, tk.BooleanVar] = {}
+        self._devices: list[LlamaDevice] = []
+        self._device_fallback_var: tk.StringVar | None = None
+        self._pending_probe: DeviceProbe | None = None
+        r = 8
+        if _HAS_DEVICES:
+            lbl("デバイス", r, 0)
+            self._device_frame = tk.Frame(card, bg=self.BG2)
+            self._device_frame.grid(row=r, column=1, columnspan=2, sticky="ew",
+                                    padx=(0, 6), pady=(6, 0))
+            tk.Label(self._device_frame, text="未検出(🔍 検出 を押してください)",
+                     fg=self.FG2, bg=self.BG2,
+                     font=("monospace", 9), anchor="w").pack(anchor="w")
+            self._device_detect_btn = tk.Button(
+                card, text="🔍 検出", fg=self.FG, bg=self.BG3,
+                activebackground=self.BG2, activeforeground=self.FG,
+                relief="flat", bd=0, padx=6, pady=3, cursor="hand2",
+                font=("sans-serif", 9), command=self._detect_devices)
+            self._device_detect_btn.grid(row=r, column=3, sticky="new",
+                                         padx=(0, 10), pady=(6, 0))
+            r += 1
+
+            self._tsplit_lbl = tk.Label(card, text="tensor-split", fg=self.FG2,
+                                        bg=self.BG2, font=("sans-serif", 9))
+            self._tsplit_lbl.grid(row=r, column=0, sticky="w",
+                                  padx=(10, 4), pady=(6, 0))
+            self._tsplit_var = tk.StringVar(value="")
+            self._tsplit_entry = ttk.Entry(card, textvariable=self._tsplit_var,
+                                           state="disabled")
+            self._tsplit_entry.grid(row=r, column=1, columnspan=2, sticky="ew",
+                                    padx=(0, 6), pady=(6, 0))
+            self._tsplit_btn = tk.Button(
+                card, text="⚙ 自動", fg=self.FG, bg=self.BG3,
+                activebackground=self.BG2, activeforeground=self.FG,
+                relief="flat", bd=0, padx=6, pady=3, cursor="hand2",
+                font=("sans-serif", 9), command=self._suggest_tsplit,
+                state="disabled")
+            self._tsplit_btn.grid(row=r, column=3, sticky="ew",
+                                  padx=(0, 10), pady=(6, 0))
+            self._tsplit_row = r
+            # 起動時は検出前なので tensor-split 行を隠しておく。
+            self._set_tsplit_row_visible(False)
+            r += 1
+
+        lbl("追加オプション", r, 0)
         self._extra_var = tk.StringVar(value="-ngl 99")
         ttk.Entry(card, textvariable=self._extra_var).grid(
-            row=8, column=1, columnspan=2, sticky="ew",
+            row=r, column=1, columnspan=2, sticky="ew",
             padx=(0, 6), pady=(6, 0))
         tk.Button(card, text="⚙ 推奨値", fg=self.FG, bg=self.BG3,
                   activebackground=self.BG2, activeforeground=self.FG,
                   relief="flat", bd=0, padx=6, pady=3, cursor="hand2",
                   font=("sans-serif", 9),
                   command=self._suggest_options).grid(
-            row=8, column=3, sticky="ew", padx=(0, 10), pady=(6, 0))
+            row=r, column=3, sticky="ew", padx=(0, 10), pady=(6, 0))
+        r += 1
 
         # 起動ボタン
         _btn_wrap = tk.Frame(card, bg=self.ACCENT, bd=0)
-        _btn_wrap.grid(row=9, column=0, columnspan=4, sticky="ew", padx=10, pady=8)
+        _btn_wrap.grid(row=r, column=0, columnspan=4, sticky="ew", padx=10, pady=8)
         self._launch_btn = tk.Button(
             _btn_wrap, text="▶ llama.cpp / vllm / mlx 起動",
             fg="white", bg=self.ACCENT,
@@ -1454,12 +1646,23 @@ class LauncherApp(tk.Tk):
             command=self._do_launch,
         )
         self._launch_btn.pack(fill="both", expand=True)
+        r += 1
+
+        # ベンチスイープを開くボタン(_HAS_DEVICES のときのみ)
+        if _HAS_DEVICES:
+            tk.Button(
+                card, text="📊 ベンチスイープ", fg=self.FG, bg=self.BG3,
+                activebackground=self.BG2, activeforeground=self.FG,
+                relief="flat", bd=0, padx=8, pady=4, cursor="hand2",
+                font=("sans-serif", 10), command=self._open_sweep).grid(
+                row=r, column=0, columnspan=4, sticky="ew", padx=10, pady=(0, 4))
+            r += 1
 
         self._launch_err_var = tk.StringVar(value="")
         tk.Label(card, textvariable=self._launch_err_var,
                  fg=self.RED, bg=self.BG2,
                  font=("sans-serif", 9), anchor="w", justify="left",
-                 wraplength=400).grid(row=10, column=0, columnspan=4,
+                 wraplength=400).grid(row=r, column=0, columnspan=4,
                                       sticky="ew", padx=10, pady=(0, 6))
 
         # アニメーション用(Progressbar 非使用)
@@ -1467,6 +1670,139 @@ class LauncherApp(tk.Tk):
 
         self.after(200, self._update_binary_hint)
         self.after(200, self._populate_profiles)
+
+    # ── Device selection ─────────────────────────────────────────────────────
+
+    def _set_tsplit_row_visible(self, visible: bool) -> None:
+        """Show/hide the tensor-split row (label + entry + auto button).
+
+        Hidden when 1 or fewer devices are detected (Mac Metal 単体・単基 CUDA・
+        Windows 単 GPU): tensor-split is meaningless there, so the widgets are
+        removed with ``grid_remove`` to avoid any accidental input.
+        """
+        if not _HAS_DEVICES:
+            return
+        widgets = (self._tsplit_lbl, self._tsplit_entry, self._tsplit_btn)
+        if visible:
+            self._tsplit_lbl.grid()
+            self._tsplit_entry.grid()
+            self._tsplit_btn.grid()
+        else:
+            for w in widgets:
+                w.grid_remove()
+
+    def _detect_devices(self) -> None:
+        """Run ``--list-devices`` in a daemon thread; UI updates via the queue.
+
+        The blocking subprocess call must never run on the Tk main thread (it
+        would freeze the UI), so the probe is stored on ``self._pending_probe``
+        and a ``_DEVICES_`` marker is enqueued for the poll loop to render —
+        the same thread→UI handoff pattern used by the launch worker.
+        """
+        if not _HAS_DEVICES:
+            return
+        binary = _resolve_binary(self._backend_var.get(), self.cfg)
+        self._set_status("デバイス検出中…")
+
+        def work() -> None:
+            probe = detect_llama_devices(binary)
+            self._pending_probe = probe          # set BEFORE enqueuing marker
+            self._log_queue.put(("_DEVICES_", ""))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _render_devices(self, probe: DeviceProbe | None) -> None:
+        """Rebuild the device checkbox group (or manual-entry fallback)."""
+        if not _HAS_DEVICES or probe is None:
+            return
+        for w in self._device_frame.winfo_children():
+            w.destroy()
+        self._device_vars.clear()
+        self._devices = []
+        self._device_fallback_var = None
+
+        if not probe.ok:
+            # Detection failed → comma-separated manual entry fallback.
+            self._device_fallback_var = tk.StringVar()
+            ttk.Entry(self._device_frame,
+                      textvariable=self._device_fallback_var).pack(
+                fill="x", expand=True)
+            tk.Label(self._device_frame,
+                     text="例: CUDA0,CUDA1(カンマ区切りの device id)",
+                     fg=self.FG2, bg=self.BG2, font=("monospace", 8),
+                     anchor="w").pack(anchor="w")
+            self._set_tsplit_row_visible(False)
+            self._set_status(f"デバイス検出失敗: {probe.error} — 手入力してください")
+            return
+
+        self._devices = list(probe.devices)
+        for d in probe.devices:
+            # 全デバイスを一覧表示するが、0 MiB デバイス(macOS の BLAS:
+            # Accelerate 等)は VRAM を持たず選択不可 → チェックボックスを
+            # disabled にし、_device_vars にも登録しない(選択対象外)。
+            if d.total_mib <= 0:
+                ttk.Checkbutton(
+                    self._device_frame,
+                    text=f"{d.id}  {d.name}  (VRAM なし — 選択不可)",
+                    state="disabled").pack(anchor="w")
+                continue
+            v = tk.BooleanVar(value=False)
+            self._device_vars[d.id] = v
+            ttk.Checkbutton(
+                self._device_frame,
+                text=f"{d.id}  {d.name}  ({d.free_gb:g}/{d.total_gb:g} GB)",
+                variable=v, command=self._suggest_tsplit).pack(anchor="w")
+        # tensor-split は selectable(VRAM あり)が 2 台以上のときだけ意味を持つ。
+        # Mac の MTL0+BLAS では selectable=1 枚 → 非表示のまま。
+        self._set_tsplit_row_visible(len(selectable_devices(self._devices)) > 1)
+        self._suggest_tsplit()
+        self._set_status(f"デバイス {len(self._devices)} 個を検出")
+
+    def _selected_devices(self) -> list[LlamaDevice]:
+        # _device_vars には selectable なデバイスしか登録されない(0 MiB は
+        # disabled で var 無し)ので、選択結果は必ず selectable。
+        return [d for d in self._devices
+                if self._device_vars.get(d.id) is not None
+                and self._device_vars[d.id].get()]
+
+    def _suggest_tsplit(self) -> None:
+        """Enable + auto-fill tensor-split when 2+ same-backend devices tick.
+
+        tensor-split は「同一バックエンド内の複数枚」でのみ意味を持つ。
+        CUDA+Vulkan のようにバックエンドを跨いだ選択(同一物理 GPU の重複
+        列挙を含む)では自動提案せず、ステータスに警告を出す(手入力は可)。
+        """
+        if not _HAS_DEVICES:
+            return
+        sel = self._selected_devices()
+        multi = len(sel) > 1
+        same_backend = len({backend_of(d.id) for d in sel}) <= 1
+        # 2 枚以上選択されていれば欄は有効化(手入力の余地を残す)。
+        self._tsplit_entry.configure(state="normal" if multi else "disabled")
+        self._tsplit_btn.configure(state="normal" if multi else "disabled")
+        if multi and same_backend:
+            split = suggest_tensor_split(sel, by="total")
+            self._tsplit_var.set(",".join(f"{x:g}" for x in split))
+        elif multi:
+            # バックエンド跨ぎ — 自動提案しない(既存の手入力は保持)。
+            self._set_status(
+                "⚠ tensor-split: バックエンド跨ぎの選択は自動提案しません(手動指定は可)")
+        else:
+            self._tsplit_var.set("")   # 単一/0 選択は split 不要
+
+    def _current_selection(self) -> DeviceSelection:
+        """Collect the current device selection from the launch form."""
+        checked = [d.id for d in self._selected_devices()]
+        fallback = (self._device_fallback_var.get()
+                    if self._device_fallback_var is not None else "")
+        tsplit = self._tsplit_var.get() if hasattr(self, "_tsplit_var") else ""
+        return _selection_from_inputs(checked, fallback, tsplit)
+
+    def _open_sweep(self) -> None:
+        """Open the bench-sweep window (device configurations x llmbench)."""
+        if not _HAS_DEVICES:
+            return
+        SweepWindow(self)
 
     def _on_backend_change(self, _: Any = None) -> None:
         self._update_binary_hint()
@@ -1592,9 +1928,16 @@ class LauncherApp(tk.Tk):
                 self._set_launch_err(str(e))
                 return
 
+        # Device selection (llama.cpp only). When nothing is selected
+        # device_args is None → _build_cmd emits the exact current argv
+        # (complete backward compatibility — no --device is ever added).
+        device_args: list[str] | None = None
+        if _HAS_DEVICES and backend == "llama.cpp":
+            device_args = self._current_selection().to_cli_args() or None
+
         try:
             cmd = _build_cmd(backend, model_path, port, profile_args, extra,
-                             binary, spec_tokens)
+                             binary, spec_tokens, device_args)
         except ValueError as e:
             self._set_launch_err(str(e))
             return
@@ -1612,7 +1955,8 @@ class LauncherApp(tk.Tk):
         if spec_auto:
             with contextlib.suppress(ValueError):
                 fallback_cmd = _build_cmd(backend, model_path, port,
-                                          profile_args, extra, binary, None)
+                                          profile_args, extra, binary, None,
+                                          device_args)
         if fallback_cmd is None:
             spec_auto = False
 
@@ -2010,6 +2354,12 @@ class LauncherApp(tk.Tk):
                 break
             lc_processed += 1
 
+            # デバイス検出スレッドからの通知(実データは self._pending_probe)。
+            if proc_id == "_DEVICES_":
+                self._render_devices(self._pending_probe)
+                changed = True
+                continue
+
             if proc_id not in self.processes:
                 changed = True
                 continue
@@ -2095,6 +2445,439 @@ class LauncherApp(tk.Tk):
 
     def _set_status(self, msg: str) -> None:
         self._status_var.set(msg)
+
+
+# ---------------------------------------------------------------------------
+# Bench sweep — worker thread + window
+#
+# Runs a series of device configurations back-to-back:
+#   起動 (llama-server) → readiness 待ち (既存 poll_until_ready 再利用)
+#   → 外部ベンチ実行 (llmbench) → サーバー停止 → 次の構成
+# The worker is a plain threading.Thread and depends only on module-level
+# functions + the frozen launcher_devices logic, so it is unit-testable with
+# injected fakes (no live Tk app, no real subprocesses) — mirroring the
+# readiness/auto-restart split elsewhere in this module.
+# ---------------------------------------------------------------------------
+
+
+class _SweepWorker(threading.Thread):
+    """Drive a :class:`SweepPlan` step-by-step in a background thread.
+
+    Results are pushed to ``out_queue`` as ``("step", SweepStep)`` /
+    ``("log", str)`` / ``("done", None)`` tuples for the window's poll loop to
+    consume. ``popen`` / ``poll_ready`` / ``backend_ready`` are injectable so
+    tests can drive the state machine deterministically without spawning
+    anything.
+    """
+
+    def __init__(
+        self,
+        plan: SweepPlan,
+        cfg: LauncherConfig,
+        out_queue: queue.Queue[tuple[str, Any]],
+        abort_event: threading.Event,
+        *,
+        runs: int = 1,
+        popen: Callable[..., Any] = subprocess.Popen,
+        poll_ready: Callable[..., str] = poll_until_ready,
+        backend_ready: Callable[..., bool] = _backend_ready,
+    ) -> None:
+        super().__init__(daemon=True)
+        self.plan = plan
+        self.cfg = cfg
+        self.queue = out_queue
+        self._abort = abort_event
+        self.runs = runs
+        self._popen = popen
+        self._poll_ready = poll_ready
+        self._backend_ready = backend_ready
+
+    # ── emit helpers ─────────────────────────────────────────────────────
+    def _emit_step(self, step: SweepStep) -> None:
+        self.queue.put(("step", step))
+
+    def _emit_log(self, line: str) -> None:
+        self.queue.put(("log", line))
+
+    def run(self) -> None:
+        try:
+            for step in self.plan.steps:
+                if self._abort.is_set():
+                    step.state = SweepState.ABORTED
+                    self._emit_step(step)
+                    continue
+                self._run_one(step)
+        finally:
+            self.queue.put(("done", None))
+
+    def _pump_logs(self, proc: Any, label: str) -> None:
+        """Drain a child's stdout into the log queue in a daemon thread.
+
+        Tolerant of fakes with no ``stdout`` (tests) — simply does nothing.
+        """
+        stdout = getattr(proc, "stdout", None)
+        if stdout is None:
+            return
+
+        def _drain() -> None:
+            with contextlib.suppress(Exception):
+                for raw in iter(lambda: stdout.read(4096), b""):
+                    for ln in raw.decode("utf-8", errors="replace").splitlines():
+                        self._emit_log(f"[{label}] {ln}")
+
+        threading.Thread(target=_drain, daemon=True).start()
+
+    def _await_ready(self, proc: Any) -> str:
+        return self._poll_ready(
+            check=lambda: self._backend_ready(
+                "llama.cpp", self.plan.port,
+                probe_timeout_s=_READINESS_PROBE_TIMEOUT_S),
+            should_abort=lambda: self._abort.is_set() or proc.poll() is not None,
+            timeout_s=self.cfg.bench_readiness_timeout_s,
+            poll_interval_s=self.cfg.readiness_poll_interval_s,
+        )
+
+    def _terminate(self, proc: Any) -> None:
+        """SIGTERM → wait → SIGKILL. Ensures the port is freed before the next
+        configuration reuses it."""
+        with contextlib.suppress(Exception):
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=5)
+
+    def _run_one(self, step: SweepStep) -> None:
+        # ── サーバー起動 ──
+        step.state = SweepState.STARTING
+        self._emit_step(step)
+        binary = _resolve_binary("llama.cpp", self.cfg)
+        cmd = _build_cmd(
+            "llama.cpp", self.plan.model_path, self.plan.port,
+            self.plan.options, self.plan.extra_args, binary,
+            None, step.selection.to_cli_args() or None)
+        self._emit_log(f"[{step.label}] cmd: {' '.join(cmd)}")
+        try:
+            server = self._popen(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, bufsize=0)
+        except Exception as exc:
+            step.state = SweepState.FAILED
+            step.error = f"起動失敗: {exc}"
+            self._emit_step(step)
+            return
+        self._pump_logs(server, step.label)
+
+        # ── readiness 待ち(既存 poll_until_ready 再利用) ──
+        outcome = self._await_ready(server)
+        if outcome != "ready":
+            step.state = (SweepState.ABORTED if self._abort.is_set()
+                          else SweepState.FAILED)
+            step.error = f"readiness {outcome}"
+            self._terminate(server)
+            self._emit_step(step)
+            return
+
+        # ── 外部ベンチ実行 ──
+        step.state = SweepState.BENCHING
+        step.started_at = time.time()
+        self._emit_step(step)
+        bench_argv = render_bench_command(
+            self.plan.bench_cmd_template, port=self.plan.port,
+            config_label=step.label, results_dir=self.plan.results_dir,
+            runs=self.runs)
+        env = {**os.environ,
+               "OPENAI_BASE_URL": f"http://localhost:{self.plan.port}/v1"}
+        try:
+            bench = self._popen(
+                bench_argv, env=env, cwd=self.plan.results_dir or None,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        except Exception as exc:
+            step.state = SweepState.FAILED
+            step.error = f"ベンチ起動失敗: {exc}"
+            self._terminate(server)
+            self._emit_step(step)
+            return
+        self._pump_logs(bench, f"{step.label}/bench")
+        bench.wait()
+        step.bench_exit_code = bench.returncode
+        step.ended_at = time.time()
+
+        # bench の JSON results を best-effort で解析(比較用サマリ)。
+        if self.plan.results_dir:
+            with contextlib.suppress(Exception):
+                step.results_path, step.summary = load_latest_results(
+                    self.plan.results_dir, since=step.started_at)
+
+        # ── サーバー停止(ポート解放を必ず待つ) ──
+        self._terminate(server)
+        # bench 非ゼロ終了は「失敗」ではなく exit code で判別(計測は完了扱い)。
+        step.state = (SweepState.ABORTED if self._abort.is_set()
+                      else SweepState.DONE)
+        self._emit_step(step)
+
+
+class SweepWindow(tk.Toplevel):
+    """Bench-sweep window: pick device configurations, run llmbench per config."""
+
+    def __init__(self, app: LauncherApp) -> None:
+        super().__init__(app)
+        self.app = app
+        self.cfg = app.cfg
+        self.title("ベンチスイープ")
+        self.configure(bg=app.BG)
+        self.geometry("760x620")
+
+        self._queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._worker: _SweepWorker | None = None
+        self._abort = threading.Event()
+        self._config_vars: list[tuple[tk.BooleanVar, str, DeviceSelection]] = []
+        self._steps: list[SweepStep] = []
+
+        self._build_ui()
+        self.after(300, self._poll)
+
+    # ── UI ────────────────────────────────────────────────────────────────
+    def _build_ui(self) -> None:
+        app = self.app
+        pad = {"padx": 10, "pady": 4}
+
+        frm = tk.Frame(self, bg=app.BG)
+        frm.pack(fill="x", **pad)
+        frm.columnconfigure(1, weight=1)
+
+        def _row(label: str, var: tk.StringVar, row: int, width: int = 0) -> None:
+            tk.Label(frm, text=label, fg=app.FG2, bg=app.BG,
+                     font=("sans-serif", 9)).grid(row=row, column=0, sticky="w")
+            e = ttk.Entry(frm, textvariable=var)
+            if width:
+                e.configure(width=width)
+                e.grid(row=row, column=1, sticky="w", pady=2)
+            else:
+                e.grid(row=row, column=1, sticky="ew", pady=2)
+
+        self._model_var = tk.StringVar(value=app._model_path_var.get())
+        _row("モデルパス", self._model_var, 0)
+        self._port_var = tk.StringVar(value=str(self._safe_int(app._port_var.get(), 8080)))
+        _row("ポート", self._port_var, 1, width=8)
+        self._runs_var = tk.StringVar(value=str(self.cfg.bench_runs))
+        _row("runs", self._runs_var, 2, width=8)
+        self._results_var = tk.StringVar(value=self.cfg.bench_results_dir or "")
+        _row("results_dir", self._results_var, 3)
+        self._bench_var = tk.StringVar(value=self.cfg.bench_command_template)
+        _row("ベンチコマンド", self._bench_var, 4)
+        tk.Label(
+            frm,
+            text="{port} {config} {base_url} {results_dir} {runs} を置換。"
+                 "Windows はスペース入り引数をダブルクォートで。",
+            fg=app.FG2, bg=app.BG, font=("monospace", 8),
+            anchor="w", justify="left").grid(row=5, column=0, columnspan=2,
+                                             sticky="w")
+
+        # 構成マトリクス(検出デバイスから自動生成)
+        cfgf = tk.LabelFrame(self, text="構成(チェックで選択)", fg=app.FG2,
+                             bg=app.BG, font=("sans-serif", 9))
+        cfgf.pack(fill="x", **pad)
+        self._config_frame = tk.Frame(cfgf, bg=app.BG)
+        self._config_frame.pack(fill="x", padx=6, pady=4)
+        tk.Button(cfgf, text="🔍 デバイス検出 → 構成生成", fg=app.FG, bg=app.BG3,
+                  relief="flat", bd=0, padx=6, pady=3, cursor="hand2",
+                  font=("sans-serif", 9),
+                  command=self._detect_configs).pack(anchor="w", padx=6, pady=(0, 4))
+        # 親フォームで既に検出済みならそのまま流用。
+        if getattr(app, "_devices", None):
+            self._render_configs(app._devices)
+
+        # 操作ボタン
+        btns = tk.Frame(self, bg=app.BG)
+        btns.pack(fill="x", **pad)
+        self._start_btn = tk.Button(
+            btns, text="▶ 開始", fg="white", bg=app.ACCENT,
+            activebackground="#4f46e5", activeforeground="white",
+            relief="flat", bd=0, padx=10, pady=5, cursor="hand2",
+            font=("sans-serif", 10, "bold"), command=self._start)
+        self._start_btn.pack(side="left")
+        self._abort_btn = tk.Button(
+            btns, text="■ 中断", fg=app.FG, bg=app.BG3,
+            relief="flat", bd=0, padx=8, pady=5, cursor="hand2",
+            font=("sans-serif", 10), command=self._request_abort,
+            state="disabled")
+        self._abort_btn.pack(side="left", padx=(6, 0))
+        self._sweep_status = tk.StringVar(value="")
+        tk.Label(btns, textvariable=self._sweep_status, fg=app.FG2, bg=app.BG,
+                 font=("sans-serif", 9)).pack(side="left", padx=(10, 0))
+
+        # 進行テーブル
+        cols = ("label", "state", "exit", "tok_s", "ttft")
+        self._tree = ttk.Treeview(self, columns=cols, show="headings", height=8)
+        for col, w, label in [
+            ("label", 200, "構成"), ("state", 90, "状態"),
+            ("exit", 70, "exit"), ("tok_s", 90, "tok/s"),
+            ("ttft", 90, "ttft(ms)"),
+        ]:
+            self._tree.heading(col, text=label)
+            self._tree.column(col, width=w, minwidth=40, anchor="w")
+        self._tree.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+
+        # ログ
+        self._log = tk.Text(self, bg="#020617", fg=app.FG2,
+                            font=("monospace", 9), relief="flat", bd=0,
+                            height=6, wrap="none", state="disabled")
+        self._log.pack(fill="both", expand=False, padx=10, pady=(0, 8))
+
+    @staticmethod
+    def _safe_int(raw: str, default: int) -> int:
+        try:
+            return int(str(raw).strip())
+        except (TypeError, ValueError):
+            return default
+
+    # ── device detection / config generation ─────────────────────────────
+    def _detect_configs(self) -> None:
+        binary = _resolve_binary("llama.cpp", self.cfg)
+        self._sweep_status.set("デバイス検出中…")
+
+        def work() -> None:
+            probe = detect_llama_devices(binary)
+            self._queue.put(("_devices", probe))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _render_configs(self, devices: list[LlamaDevice]) -> None:
+        for w in self._config_frame.winfo_children():
+            w.destroy()
+        self._config_vars = []
+        labeled = _build_sweep_configs(devices)
+        if not labeled:
+            tk.Label(self._config_frame,
+                     text="デバイス未検出 — 上のボタンで検出してください",
+                     fg=self.app.FG2, bg=self.app.BG,
+                     font=("monospace", 9)).pack(anchor="w")
+            return
+        for label, sel in labeled:
+            v = tk.BooleanVar(value=True)
+            desc = label
+            if sel.tensor_split:
+                desc += "  (" + ",".join(f"{x:g}" for x in sel.tensor_split) + ")"
+            ttk.Checkbutton(self._config_frame, text=desc, variable=v).pack(
+                anchor="w")
+            self._config_vars.append((v, label, sel))
+
+    def _selected_configs(self) -> list[tuple[str, DeviceSelection]]:
+        return [(label, sel) for v, label, sel in self._config_vars if v.get()]
+
+    # ── run control ───────────────────────────────────────────────────────
+    def _start(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            return
+        model_path = self._model_var.get().strip()
+        if not model_path:
+            self._sweep_status.set("モデルパスを入力してください")
+            return
+        port = self._safe_int(self._port_var.get(), 0)
+        if not (1024 <= port <= 65535):
+            self._sweep_status.set("ポートは 1024-65535 で指定してください")
+            return
+        # ポート衝突チェック(既存の起動プロセス + OS レベルの空き確認)。
+        used = {mp.port for mp in self.app.processes.values()
+                if _proc_alive(mp)}
+        if port in used or not is_port_free(port):
+            self._sweep_status.set(f"ポート {port} は使用中です。別のポートを指定してください")
+            return
+        labeled = self._selected_configs()
+        if not labeled:
+            self._sweep_status.set("構成を 1 つ以上選択してください")
+            return
+
+        runs = self._safe_int(self._runs_var.get(), self.cfg.bench_runs)
+        results_dir = self._results_var.get().strip() or None
+        plan = SweepPlan(
+            steps=build_sweep_steps(labeled),
+            model_path=model_path,
+            backend="llama.cpp",
+            port=port,
+            bench_cmd_template=self._bench_var.get(),
+            results_dir=results_dir,
+        )
+        self._steps = plan.steps
+        self._refresh_table()
+
+        self._abort.clear()
+        self._worker = _SweepWorker(
+            plan, self.cfg, self._queue, self._abort, runs=runs)
+        self._worker.start()
+        self._start_btn.configure(state="disabled")
+        self._abort_btn.configure(state="normal")
+        self._sweep_status.set("実行中…")
+
+    def _request_abort(self) -> None:
+        self._abort.set()
+        self._sweep_status.set("中断要求 — 現在の構成の完了後に停止します")
+
+    # ── polling ─────────────────────────────────────────────────────────
+    def _poll(self) -> None:
+        try:
+            processed = 0
+            while processed < _MAX_LINES_PER_TICK:
+                try:
+                    kind, payload = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                processed += 1
+                if kind == "step":
+                    self._update_step(payload)
+                elif kind == "log":
+                    self._append_log(payload)
+                elif kind == "_devices":
+                    self._render_configs(
+                        payload.devices if payload.ok else [])
+                    self._sweep_status.set(
+                        f"デバイス {len(payload.devices)} 個を検出" if payload.ok
+                        else f"検出失敗: {payload.error}")
+                elif kind == "done":
+                    self._start_btn.configure(state="normal")
+                    self._abort_btn.configure(state="disabled")
+                    self._sweep_status.set(self._summary_text())
+        except Exception as exc:
+            print(f"[sweep] poll error: {exc}", flush=True)
+        finally:
+            self.after(300, self._poll)
+
+    def _update_step(self, step: SweepStep) -> None:
+        # 同じ label の行を上書き。
+        for i, s in enumerate(self._steps):
+            if s.label == step.label:
+                self._steps[i] = step
+                break
+        self._refresh_table()
+
+    def _refresh_table(self) -> None:
+        self._tree.delete(*self._tree.get_children())
+        for s in self._steps:
+            summary = s.summary or {}
+            tok = summary.get("tokens_per_sec", "")
+            ttft = summary.get("ttft_ms", "")
+            exit_code = "" if s.bench_exit_code is None else str(s.bench_exit_code)
+            self._tree.insert(
+                "", "end",
+                values=(s.label, s.state.value, exit_code, tok, ttft))
+
+    def _append_log(self, line: str) -> None:
+        self._log.configure(state="normal")
+        self._log.insert("end", line + "\n")
+        line_count = int(self._log.index("end-1c").split(".")[0])
+        if line_count > _MAX_TEXT_LINES:
+            self._log.delete("1.0", f"{line_count - _MAX_TEXT_LINES}.0")
+        self._log.see("end")
+        self._log.configure(state="disabled")
+
+    def _summary_text(self) -> str:
+        done = sum(1 for s in self._steps if s.state == SweepState.DONE)
+        failed = sum(1 for s in self._steps if s.state == SweepState.FAILED)
+        aborted = sum(1 for s in self._steps if s.state == SweepState.ABORTED)
+        return f"完了: DONE {done} / FAILED {failed} / ABORTED {aborted}"
 
 
 # ---------------------------------------------------------------------------

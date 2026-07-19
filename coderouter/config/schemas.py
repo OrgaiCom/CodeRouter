@@ -1460,6 +1460,49 @@ class LauncherOptionProfile(BaseModel):
     )
 
 
+class LauncherBenchConfig(BaseModel):
+    """The ``launcher.bench:`` block — defaults for the bench sweep feature.
+
+    設計 §4.1。デバイス構成スイープ(起動→readiness→外部ベンチ→停止→次)の
+    既定値を providers.yaml から供給する。未設定(``LauncherConfig.bench`` が
+    None)ならスイープ UI はハードコード既定を使う(完全後方互換)。すべての
+    フィールドに ``default`` があるので、既存 YAML は無改変で通過する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    command_template: str = Field(
+        default="llmbench run --model local-openai --runs {runs}",
+        description=(
+            "外部ベンチコマンドのテンプレ。``{port}`` ``{config}`` "
+            "``{base_url}`` ``{results_dir}`` ``{runs}`` を単純置換で展開して "
+            "argv 化する(``str.format`` ではないので JSON 波括弧で誤爆しない)。"
+        ),
+    )
+    runs: int = Field(
+        default=5,
+        ge=1,
+        le=1000,
+        description="1 構成あたりのベンチ実行回数。``{runs}`` に展開される。",
+    )
+    results_dir: str | None = Field(
+        default=None,
+        description=(
+            "llmbench の results/ ディレクトリ。相対はサーバ CWD 基準。"
+            "設定時のみスイープ結果 JSON を読み比較サマリを付与する。"
+        ),
+    )
+    readiness_timeout_s: float = Field(
+        default=300.0,
+        ge=5.0,
+        le=3600.0,
+        description=(
+            "スイープの各構成でサーバが ready になるのを待つ最大秒数。"
+            "大きな GGUF ロードを考慮した既定 5 分。"
+        ),
+    )
+
+
 class SwapModelSpec(BaseModel):
     """One entry in ``launcher.swap.models`` (docs/designs/launcher-model-swap.md).
 
@@ -1861,6 +1904,13 @@ class LauncherConfig(BaseModel):
             "Phase 1 on-demand model swap (docs/designs/launcher-model-"
             "swap.md). None (default) = disabled, identical to pre-swap "
             "behavior."
+        ),
+    )
+    bench: LauncherBenchConfig | None = Field(
+        default=None,
+        description=(
+            "デバイス構成ベンチスイープ(設計 §4)の既定値。None(既定)なら "
+            "スイープ UI はハードコード既定を使う=完全後方互換。"
         ),
     )
 

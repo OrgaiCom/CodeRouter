@@ -9,6 +9,73 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **llama.cpp device selection (`--device` / `--tensor-split`) in the
+  Launcher.** Both the desktop GUI and the Web edition can now detect
+  available `llama-server` devices (via `--list-devices`), display their
+  VRAM, and let the operator pick which one(s) to offload to instead of
+  always relying on llama.cpp's own default placement. New shared module
+  `coderouter/launcher_devices.py` (dataclasses + pure functions only, no
+  pydantic, so the standalone GUI can import it without the `coderouter`
+  package) owns detection/caching (`detect_llama_devices`,
+  `parse_list_devices`, a 60s TTL cache keyed by binary path),
+  CLI-fragment building (`DeviceSelection.to_cli_args` — empty selection
+  emits nothing, preserving today's launch command byte-for-byte),
+  VRAM-ratio tensor-split suggestion (`suggest_tensor_split`), and backend
+  grouping (`backend_of` / `group_by_backend` / `selectable_devices`) so a
+  GPU listed twice under different backends (e.g. `CUDA0` and `Vulkan1`
+  for the same physical card) is never double-counted and cross-backend
+  configs are never auto-generated. Devices reporting `0 MiB` (e.g. macOS
+  `BLAS: Accelerate`) are still shown for information but excluded from
+  selection/suggestion. `StartRequest` gained `device_ids` / `tensor_split`
+  (both default empty — existing Web clients are unaffected), and
+  `GET /api/launcher/devices` (`?backend=`, `?refresh=1`) returns the
+  probe plus a per-backend `suggested_tensor_split` and `auto_configs`.
+  `launcher_gui.py`'s LAUNCH form gained a device checklist (🔍 Detect,
+  falling back to a manual comma-separated entry on detection failure)
+  and a tensor-split field that auto-hides when one or fewer devices are
+  detected. See `tests/test_launcher_devices.py`,
+  `tests/test_launcher_devices_detect.py`,
+  `tests/test_launcher_devices_routes.py`,
+  `tests/test_launcher_gui_devices.py`, and the new "Device selection"
+  section in `docs/backends/launcher.md` / `launcher.en.md`.
+- **Bench sweep: automated device-configuration benchmarking against an
+  external `llmbench`.** Both Launcher editions can now drive a list of
+  device configurations (e.g. `CUDA0` alone / `CUDA1` alone / a
+  multi-GPU split) through start → wait for readiness → run an external
+  bench command → stop → advance to the next configuration, then compare
+  the results. `coderouter/launcher_devices.py` supplies the shared
+  `SweepPlan` / `SweepStep` / `SweepState` state machine,
+  `build_auto_sweep_configs` (one config per selectable device plus one
+  per multi-device backend group), `render_bench_command` (template
+  placeholders `{port}` `{config}` `{base_url}` `{results_dir}` `{runs}`,
+  expanded via plain string substitution rather than `str.format` so JSON
+  braces in the command aren't misinterpreted, then `shlex`-split with
+  `posix=False` on Windows to keep backslash paths intact), and
+  `load_latest_results` / `summarize_results` (best-effort, alias-tolerant
+  extraction of `tokens_per_sec` / `ttft_ms` / `latency_ms` from the
+  newest `llmbench` results JSON). New `LauncherBenchConfig`
+  (`command_template` / `runs` / `results_dir` / `readiness_timeout_s`,
+  read from an optional `launcher.bench:` block — omitted entirely by
+  default, so existing `providers.yaml` files are unaffected) supplies
+  the sweep's defaults. The Web edition gained
+  `POST /api/launcher/sweep/start` (token-gated; 409 if a sweep is
+  already running, 400 for empty `configs` or a busy/unavailable port),
+  `GET /api/launcher/sweep/status`, `POST /api/launcher/sweep/abort`
+  (token-gated), and `GET /api/launcher/sweep/logs`, backed by a new
+  `_SweepRunner` that reuses the existing `spawn_process` /
+  `stop_process` / `proc.ready` readiness primitives. `launcher_gui.py`
+  gained a "📊 Bench sweep" button opening a separate `SweepWindow` with
+  its own `_SweepWorker` thread, reusing `poll_until_ready` for readiness
+  and driving the same external bench subprocess model. See
+  `tests/test_launcher_config_bench.py` and the new "Bench sweep" section
+  in `docs/backends/launcher.md` / `launcher.en.md`.
+
+---
+
 ## [v2.9.3] — 2026-07-12 (GUI/Web parity, swap polish, launcher UI fixes)
 
 ### Added

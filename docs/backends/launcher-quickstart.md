@@ -111,6 +111,8 @@ Web版で起動した backend は `providers.yaml` を編集しなくても prov
 
 > **llama.cpp + MTP対応 gguf を使うなら**: LAUNCH フォームの「MTP/draft gguf」「MTP」欄を空欄・`auto` のままにしておけば speculative decoding を自動検出します。詳細は [MTP / speculative decoding](./launcher.md#mtp--speculative-decoding-llamacpp)。
 
+> **複数 GPU を積んでいるなら**: LAUNCH フォームの「🔍 検出」で `--device` / `--tensor-split` を選択でき、「📊 ベンチスイープ」で構成ごとの性能を自動比較できます(いずれも llama.cpp のみ)。詳細は [デバイス選択](./launcher.md#デバイス選択-llamacpp) / [ベンチスイープ](./launcher.md#ベンチスイープ-llamacpp)。
+
 ---
 
 ## 5. Claude Code から使う

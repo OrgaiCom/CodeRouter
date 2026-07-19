@@ -112,6 +112,8 @@ A backend started via the Web edition is automatically registered as a provider 
 
 > **Using llama.cpp with an MTP-capable gguf?** Leave the LAUNCH form's "MTP/draft gguf" field blank and "MTP" set to `auto` to get speculative decoding auto-detected. See [MTP / speculative decoding](./launcher.en.md#mtp--speculative-decoding-llamacpp) for details.
 
+> **Got multiple GPUs?** The LAUNCH form's "🔍 Detect" button lets you pick `--device` / `--tensor-split`, and "📊 Bench sweep" automatically compares throughput across configurations (both llama.cpp-only). See [Device selection](./launcher.en.md#device-selection-llamacpp) / [Bench sweep](./launcher.en.md#bench-sweep-llamacpp) for details.
+
 ---
 
 ## 5. Use it from Claude Code

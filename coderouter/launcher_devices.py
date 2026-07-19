@@ -1,0 +1,518 @@
+"""llama.cpp デバイス検出 + tensor-split 提案 + ベンチスイープ・コアロジック。
+
+GUI版 (launcher_gui.py) と Web版 (ingress/launcher_routes.py) の双方から
+共有する純粋ロジック層。実際の起動/停止/readiness はランタイムモデルが
+異なる (threading vs asyncio) ため各側で薄く実装し、ここには「データ構造 +
+純関数 + best-effort な検出プリミティブ」だけを置く。hardware.py の
+5-deps 不変則(標準ライブラリのみ・best-effort・失敗は握りつぶして degrade)
+に合わせる。
+
+このモジュールは pydantic を使わず dataclass のみで構成する。standalone
+GUI(coderouter パッケージ非同梱)からも import できることが要件で、かつ
+検出・提案・展開・解析はいずれも純粋関数なので、外部依存を持たせない。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import re
+import shlex
+import socket
+import subprocess  # controlled: fixed argv, no shell
+import threading
+import time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+__all__ = [
+    "DeviceProbe",
+    "DeviceSelection",
+    "LlamaDevice",
+    "SweepPlan",
+    "SweepState",
+    "SweepStep",
+    "backend_of",
+    "build_auto_sweep_configs",
+    "build_sweep_steps",
+    "detect_llama_devices",
+    "group_by_backend",
+    "is_port_free",
+    "load_latest_results",
+    "parse_list_devices",
+    "render_bench_command",
+    "reset_device_cache",
+    "selectable_devices",
+    "suggest_tensor_split",
+    "summarize_results",
+]
+
+
+# ---------------------------------------------------------------------------
+# 2.1 デバイス検出
+# ---------------------------------------------------------------------------
+
+# llama.cpp の --list-devices は ggml バックエンドを問わず
+#   "<name>: <description> (<total> MiB, <free> MiB free)"
+# の共通形式で出力する(ggml_backend_dev_name / _description / メモリ)。
+# バックエンド名は CUDA0 / Metal / Vulkan0 / SYCL0 / CPU 等さまざま
+# なので id は \S+ で汎用に受ける(CUDA 固定にしない)。行末は $ で
+# 固定せず余分な後置トークンにも耐える。
+# name(description)は貪欲最小 (.+?) で受け、メモリ括弧は「行末側の
+# (<total> MiB, <free> MiB free)」に固定する。これにより description 中の
+# 入れ子括弧(例 "AMD Radeon Graphics (RADV GFX1151)")を巻き込まず、
+# 最後のメモリ括弧だけを取り出す。
+# 例(実機出力):
+#   "  CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31610 MiB free)"       (Linux/Win CUDA)
+#   "  Vulkan2: AMD Radeon Graphics (RADV GFX1151) (114166 MiB, 113602 MiB free)"  (入れ子括弧)
+#   "  MTL0: Apple M3 Max (53084 MiB, 53083 MiB free)"                   (macOS Metal, id は MTL0)
+#   "  BLAS: Accelerate (0 MiB, 0 MiB free)"                            (0 MiB=選択不可・情報のみ)
+#   "  SYCL0: Intel Arc ... (16384 MiB, 16000 MiB free)"                (SYCL)
+# id は末尾数字を含む物理バックエンド名(CUDA0/Vulkan1/MTL0/SYCL0/BLAS/CPU)。
+# 同一物理 GPU が CUDA0 と Vulkan1 のように複数バックエンドで重複列挙される
+# ことがある(backend_of / group_by_backend でグループ化)。
+_DEVICE_LINE_RE = re.compile(
+    r"^\s+(?P<id>\S+):\s+(?P<name>.+?)\s+"
+    r"\((?P<total>\d+)\s*MiB,\s+(?P<free>\d+)\s*MiB\s+free\)"
+)
+_LIST_DEVICES_TIMEOUT_S = 5.0
+_DEVICE_CACHE_TTL_S = 60.0
+_MIB_PER_GB = 1024.0  # MiB→GiB 表示用(1024 MiB ≒ 1 GiB)
+
+
+@dataclass(frozen=True, slots=True)
+class LlamaDevice:
+    """``llama-server --list-devices`` の 1 行分。"""
+
+    id: str  # 例 "CUDA0" — そのまま --device に渡す名前(--list-devices が正)
+    name: str  # 例 "NVIDIA GeForce RTX 5090"
+    total_mib: int
+    free_mib: int
+
+    @property
+    def total_gb(self) -> float:
+        return round(self.total_mib / _MIB_PER_GB, 1)
+
+    @property
+    def free_gb(self) -> float:
+        return round(self.free_mib / _MIB_PER_GB, 1)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "total_mib": self.total_mib,
+            "free_mib": self.free_mib,
+            "total_gb": self.total_gb,
+            "free_gb": self.free_gb,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceProbe:
+    """検出結果。ok=False のとき UI は手入力フォールバックへ。"""
+
+    devices: list[LlamaDevice]
+    ok: bool
+    error: str | None = None
+    raw: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "error": self.error,
+            "devices": [d.as_dict() for d in self.devices],
+        }
+
+
+def parse_list_devices(output: str) -> list[LlamaDevice]:
+    """``--list-devices`` 標準出力をパース。
+
+    マッチしない行は無視する(前後の ``Available devices:`` ヘッダや将来の
+    追記、VRAM 表記の無い CPU 行に耐える)。
+    """
+    devices: list[LlamaDevice] = []
+    for line in output.splitlines():
+        m = _DEVICE_LINE_RE.match(line)
+        if not m:
+            continue
+        devices.append(
+            LlamaDevice(
+                id=m["id"],
+                name=m["name"].strip(),
+                total_mib=int(m["total"]),
+                free_mib=int(m["free"]),
+            )
+        )
+    return devices
+
+
+# ── キャッシュ(hardware.py と同じ RLock+TTL パターン。binary パス別) ──
+_cache_lock = threading.RLock()
+_cache: dict[str, tuple[float, DeviceProbe]] = {}
+
+
+def detect_llama_devices(
+    binary: str,
+    *,
+    timeout_s: float = _LIST_DEVICES_TIMEOUT_S,
+    use_cache: bool = True,
+    runner: Callable[[], subprocess.CompletedProcess[str]] | None = None,
+) -> DeviceProbe:
+    """``{binary} --list-devices`` を実行してデバイス一覧を返す。
+
+    失敗(バイナリ無し/タイムアウト/非ゼロ終了/パース 0 件)時は
+    ``ok=False`` の :class:`DeviceProbe` を返し、呼び出し側は手入力へ
+    フォールバックする。``runner`` はテスト用に ``subprocess.run`` を
+    差し替えるフック。
+    """
+    key = str(Path(binary).expanduser())
+    now = time.monotonic()
+    if use_cache:
+        with _cache_lock:
+            hit = _cache.get(key)
+            if hit and (now - hit[0]) < _DEVICE_CACHE_TTL_S:
+                return hit[1]
+
+    def _default_runner() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # fixed argv, no shell
+            [key, "--list-devices"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",  # ★ Windows cp932 対策
+            timeout=timeout_s,
+            check=False,
+        )
+
+    run = runner or _default_runner
+    try:
+        out = run()
+        raw = (out.stdout or "") + (out.stderr or "")  # 版により stderr 出力
+        devices = parse_list_devices(raw)
+        if not devices:
+            probe = DeviceProbe(
+                [], ok=False, error="デバイスを検出できませんでした", raw=raw
+            )
+        else:
+            probe = DeviceProbe(devices, ok=True, raw=raw)
+    except FileNotFoundError:
+        probe = DeviceProbe([], ok=False, error=f"バイナリが見つかりません: {key}")
+    except subprocess.TimeoutExpired:
+        probe = DeviceProbe([], ok=False, error="--list-devices がタイムアウトしました")
+    except (OSError, subprocess.SubprocessError) as exc:
+        probe = DeviceProbe([], ok=False, error=str(exc))
+
+    if use_cache:
+        with _cache_lock:
+            _cache[key] = (now, probe)
+    return probe
+
+
+def reset_device_cache() -> None:
+    """テスト用。検出キャッシュを破棄。"""
+    with _cache_lock:
+        _cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# 2.2 デバイス選択 → CLI
+# ---------------------------------------------------------------------------
+
+
+def _fmt_split(x: float) -> str:
+    return f"{x:g}"  # 0.57 / 0.43 のように末尾ゼロを落とす
+
+
+@dataclass
+class DeviceSelection:
+    """通常起動 / スイープ 1 構成のデバイス指定。"""
+
+    device_ids: list[str] = field(default_factory=list)  # ["CUDA0","CUDA1"]
+    tensor_split: list[float] = field(default_factory=list)
+
+    @property
+    def active(self) -> bool:
+        return bool(self.device_ids)
+
+    def to_cli_args(self) -> list[str]:
+        """llama.cpp 用 CLI 断片。選択が無ければ空(=現状挙動を完全維持)。"""
+        if not self.device_ids:
+            return []  # ★ 未選択時は何も足さない
+        args = ["--device", ",".join(self.device_ids)]
+        if len(self.device_ids) > 1 and self.tensor_split:
+            args += ["--tensor-split", ",".join(_fmt_split(x) for x in self.tensor_split)]
+        return args
+
+
+# ---------------------------------------------------------------------------
+# 2.3 tensor-split 自動提案
+# ---------------------------------------------------------------------------
+
+
+def suggest_tensor_split(
+    devices: Sequence[LlamaDevice],
+    *,
+    by: str = "total",  # "total" | "free"
+    decimals: int = 2,
+) -> list[float]:
+    """VRAM 比の tensor-split を提案。
+
+    合計が丸め後もちょうど 1.0 になるよう最後の要素で辻褄を合わせる
+    (llama.cpp 側でも正規化されるが表示の一貫性のため)。単一デバイス
+    (Metal 単体・単基 CUDA 等)は ``[]`` を返し tensor-split を提案しない。
+    """
+    if len(devices) <= 1:
+        return []
+    caps = [float(d.free_mib if by == "free" else d.total_mib) for d in devices]
+    total = sum(caps)
+    if total <= 0:
+        return []
+    props = [round(c / total, decimals) for c in caps]
+    props[-1] = round(1.0 - sum(props[:-1]), decimals)  # 丸め誤差を末尾に集約
+    return props
+
+
+# ---------------------------------------------------------------------------
+# 2.3b デバイス分類ヘルパ(選択可否 / バックエンドグループ化)
+# ---------------------------------------------------------------------------
+
+# 末尾の連番(CUDA0→CUDA / Vulkan12→Vulkan / MTL0→MTL)を落として
+# 「バックエンド接頭辞」を得る。数字を持たない BLAS / CPU / Metal は
+# そのまま返す。
+_BACKEND_SUFFIX_RE = re.compile(r"\d+$")
+
+
+def selectable_devices(devices: Sequence[LlamaDevice]) -> list[LlamaDevice]:
+    """GPU オフロード先として選べるデバイスだけを返す。
+
+    ``total_mib == 0`` のデバイス(macOS の ``BLAS: Accelerate (0 MiB, ...)``
+    等)は VRAM を持たず tensor-split やスイープ構成に参加できないため除外
+    する。一覧表示からは落とさない(:func:`parse_list_devices` は情報として
+    全行を返す)——本関数は「選択・提案・スイープ自動生成」の入力を絞るための
+    フィルタ。
+    """
+    return [d for d in devices if d.total_mib > 0]
+
+
+def backend_of(device_id: str) -> str:
+    """デバイス id からバックエンド接頭辞を返す。
+
+    ``"CUDA0"→"CUDA"`` / ``"Vulkan2"→"Vulkan"`` / ``"MTL0"→"MTL"`` /
+    ``"SYCL0"→"SYCL"``。末尾に数字を持たない ``"BLAS"`` / ``"CPU"`` /
+    ``"Metal"`` はそのまま返す。同一物理 GPU が CUDA と Vulkan の両方で
+    列挙されるケースをバックエンド単位で束ねるための正規化。
+    """
+    return _BACKEND_SUFFIX_RE.sub("", device_id)
+
+
+def group_by_backend(
+    devices: Sequence[LlamaDevice],
+) -> dict[str, list[LlamaDevice]]:
+    """デバイスをバックエンド接頭辞ごとにグループ化する(挿入順を保持)。"""
+    groups: dict[str, list[LlamaDevice]] = {}
+    for d in devices:
+        groups.setdefault(backend_of(d.id), []).append(d)
+    return groups
+
+
+def build_auto_sweep_configs(
+    devices: Sequence[LlamaDevice],
+    *,
+    by: str = "total",
+) -> list[tuple[str, DeviceSelection]]:
+    """検出デバイスからスイープ構成(ラベル + :class:`DeviceSelection`)を自動生成。
+
+    生成規則:
+    1. **単体構成**: selectable な各デバイスにつき 1 構成(``"CUDA0 単体"`` 等)。
+    2. **バックエンド内複数枚構成**: 同一バックエンド(:func:`backend_of`)に
+       selectable が 2 枚以上あるバックエンドのみ、その全枚数を束ねた 1 構成を
+       追加し、そのバックエンド内 VRAM 比で tensor-split を自動提案。
+
+    **バックエンド跨ぎの混成構成は自動生成しない**(CUDA と Vulkan、あるいは
+    同一物理 GPU が両バックエンドで重複列挙されるケースを混ぜない)。手動での
+    任意選択は :class:`DeviceSelection` を直接構築すれば妨げられない。
+    ``total_mib == 0`` のデバイス(BLAS 等)は :func:`selectable_devices` で
+    除外され、単体構成にもグループにも入らない。
+    """
+    sel = selectable_devices(devices)
+    configs: list[tuple[str, DeviceSelection]] = [
+        (f"{d.id} 単体", DeviceSelection(device_ids=[d.id])) for d in sel
+    ]
+    for backend, members in group_by_backend(sel).items():
+        if len(members) < 2:
+            continue
+        ids = [m.id for m in members]
+        split = suggest_tensor_split(members, by=by)
+        configs.append(
+            (
+                f"{backend} x{len(members)}",
+                DeviceSelection(device_ids=ids, tensor_split=split),
+            )
+        )
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# 2.4 スイープ計画・状態
+# ---------------------------------------------------------------------------
+
+
+class SweepState(StrEnum):
+    PENDING = "pending"
+    STARTING = "starting"  # サーバ起動→readiness 待ち
+    BENCHING = "benching"  # 外部ベンチ実行中
+    DONE = "done"
+    FAILED = "failed"
+    ABORTED = "aborted"
+
+
+@dataclass
+class SweepStep:
+    label: str  # "CUDA0 単体" 等(表示 + {config} 置換に使用)
+    selection: DeviceSelection
+    state: SweepState = SweepState.PENDING
+    bench_exit_code: int | None = None
+    results_path: str | None = None  # 読めた llmbench results JSON
+    summary: dict[str, Any] | None = None  # 抽出済み主要メトリクス
+    error: str | None = None
+    started_at: float = 0.0
+    ended_at: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "device_ids": self.selection.device_ids,
+            "tensor_split": self.selection.tensor_split,
+            "state": self.state.value,
+            "bench_exit_code": self.bench_exit_code,
+            "results_path": self.results_path,
+            "summary": self.summary,
+            "error": self.error,
+        }
+
+
+@dataclass
+class SweepPlan:
+    steps: list[SweepStep]
+    model_path: str
+    backend: str  # 当面 "llama.cpp"
+    port: int
+    bench_cmd_template: str
+    results_dir: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
+    extra_args: str = ""
+
+
+def build_sweep_steps(
+    labeled: Sequence[tuple[str, DeviceSelection]],
+) -> list[SweepStep]:
+    return [SweepStep(label=lbl, selection=sel) for lbl, sel in labeled]
+
+
+# ---------------------------------------------------------------------------
+# 2.5 ベンチコマンド展開
+# ---------------------------------------------------------------------------
+
+_BENCH_PLACEHOLDERS = ("port", "config", "base_url", "results_dir", "runs")
+
+
+def render_bench_command(
+    template: str,
+    *,
+    port: int,
+    config_label: str,
+    results_dir: str | None = None,
+    runs: int | None = None,
+) -> list[str]:
+    """テンプレ内の {port} {config} {base_url} {results_dir} {runs} を置換して
+    argv 化。
+
+    ``str.format`` は JSON 波括弧等で誤爆するため単純置換を使う。
+    """
+    mapping = {
+        "port": str(port),
+        "config": config_label,
+        "base_url": f"http://localhost:{port}/v1",
+        "results_dir": results_dir or "",
+        "runs": str(runs) if runs is not None else "",
+    }
+    rendered = template
+    for k, v in mapping.items():
+        rendered = rendered.replace("{" + k + "}", v)
+    # ★ Windows: shlex の POSIX モードはバックスラッシュをエスケープ文字
+    #   として食い潰し `C:\tools\llmbench.exe` を壊す。os.name で分岐して
+    #   Windows では posix=False(バックスラッシュを素通し)にする。
+    return shlex.split(rendered, posix=(os.name != "nt"))
+
+
+# ---------------------------------------------------------------------------
+# 2.6 results 解析
+# ---------------------------------------------------------------------------
+
+
+def load_latest_results(
+    results_dir: str | Path,
+    *,
+    since: float,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """``results_dir`` 内で mtime>=since の最新 ``*.json`` を読む。
+
+    ``(path, summary)`` を返す。読めなければ ``(None, None)``。llmbench の
+    スキーマに強く依存せず、既知キーを防御的に拾う。
+    """
+    base = Path(results_dir).expanduser()
+    if not base.is_dir():
+        return None, None
+    cands = [p for p in base.glob("*.json") if p.stat().st_mtime >= since - 1.0]
+    if not cands:
+        return None, None
+    newest = max(cands, key=lambda p: p.stat().st_mtime)
+    try:
+        data = json.loads(newest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return str(newest), None
+    return str(newest), summarize_results(data)
+
+
+# llmbench の JSON スキーマは変わりうるので、複数の別名を許容して拾う
+_SUMMARY_KEYS = {
+    "tokens_per_sec": ("tokens_per_sec", "tok_s", "throughput", "tps"),
+    "ttft_ms": ("ttft_ms", "time_to_first_token_ms", "ttft"),
+    "latency_ms": ("latency_ms", "avg_latency_ms", "latency"),
+    "runs": ("runs", "n_runs", "count"),
+}
+
+
+def summarize_results(data: dict[str, Any]) -> dict[str, Any]:
+    """llmbench results JSON から比較用の主要メトリクスを best-effort 抽出。"""
+    flat = data.get("summary", data) if isinstance(data, dict) else {}
+    out: dict[str, Any] = {}
+    for canon, aliases in _SUMMARY_KEYS.items():
+        for a in aliases:
+            if isinstance(flat, dict) and a in flat:
+                out[canon] = flat[a]
+                break
+    out["_raw_keys"] = sorted(flat.keys()) if isinstance(flat, dict) else []
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 2.7 ポート補助
+# ---------------------------------------------------------------------------
+
+
+def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
+    """best-effort な空きポート判定(TOCTOU 窓は残る)。"""
+    with (
+        contextlib.suppress(OSError),
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s,
+    ):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((host, port))
+        return True
+    return False

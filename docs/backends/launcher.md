@@ -225,6 +225,162 @@ MODELS 一覧の各モデルには、CodeRouter を動かしているマシン�
 
 ---
 
+## デバイス選択 (llama.cpp)
+
+複数 GPU 環境で `llama-server` に `--device` / `--tensor-split` を渡し、オフロード先を明示的に選べます。GUI/Web 両対応。**llama.cpp のみ**(vllm / mlx にはデバイス選択欄自体がありません)。
+
+### 検出
+
+LAUNCH フォームの **🔍 検出** ボタンで `{binary} --list-devices` を実行し、検出できたデバイスをチェックボックス(GUI)/カード(Web)で一覧表示します。各デバイスに VRAM(空き/合計 GB)が併記されます。実機出力例:
+
+```
+# CUDA マルチGPU(Linux)
+CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31626 MiB free)
+CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 23800 MiB free)
+
+# macOS / Apple Silicon(Metal + BLAS フォールバック)
+MTL0: Apple M3 Max (53084 MiB, 53083 MiB free)
+BLAS: Accelerate (0 MiB, 0 MiB free)
+```
+
+macOS の Metal デバイス id は `Metal` ではなく **`MTL0`** です(`llama-server --list-devices` の実出力に合わせています)。`BLAS: Accelerate` のような `0 MiB` のデバイスは一覧には表示されますが、VRAM を持たず選択・tensor-split 提案の対象にはなりません(除外されるのは「選択候補」からのみで、検出結果自体からは消えません)。
+
+検出に失敗した場合(バイナリが無い / タイムアウト / 出力をパースできない等)は `ok: false` になり、UI はカンマ区切りのデバイス id を直接入力する手入力欄にフォールバックします。
+
+### 選択と tensor-split
+
+- デバイスを 1 個選ぶと `--device <id>` のみが付与されます(`--tensor-split` は付きません)
+- 2 個以上選ぶと **VRAM 比(合計 VRAM ベース)で `--tensor-split` を自動提案**します(例: RTX 5090 + RTX 3090 →`0.57,0.43`)。手動で上書きできます
+- 検出デバイスが 1 個以下(Mac Metal 単体・単基 CUDA 等)の場合、tensor-split の入力欄自体が無効化/非表示になります(単一デバイスでは意味を持たないため)
+- **未選択なら `--device` は一切付与されません** — 起動コマンドは本機能導入前と完全に同じままです(既存デプロイへの影響なし)
+
+### マルチバックエンドの注意点
+
+CUDA と Vulkan の両方をサポートしてビルドされた llama.cpp では、**同一の物理 GPU が `CUDA0` と `Vulkan1` のように複数バックエンドで重複列挙される**ことがあります。実機出力例:
+
+```
+CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31610 MiB free)
+CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 23858 MiB free)
+Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 24096 MiB free)
+Vulkan1: NVIDIA GeForce RTX 5090 (32607 MiB, 31610 MiB free)
+```
+
+tensor-split の自動提案・スイープ構成の自動生成は、この重複を安全に扱うため**バックエンド接頭辞ごと**(`CUDA` / `Vulkan` / `MTL` / `SYCL` など、id 末尾の連番を除いた部分)に行われます。**バックエンドを跨いだ混成構成(例: `CUDA0` + `Vulkan1`)は自動生成されません** — 同じ GPU を二重に数えてしまうためです。バックエンドを跨いだ組み合わせを試したい場合は、デバイス id を手動でチェック(または手入力)して選択してください。
+
+### API(Web版)
+
+| Method | Path | 認証 | 説明 |
+|---|---|---|---|
+| GET | `/api/launcher/devices` | なし | デバイス検出。`?backend=llama.cpp`(既定)、`?refresh=1` で検出キャッシュを無視して再取得 |
+
+`GET /api/launcher/devices` のレスポンス:
+
+```jsonc
+{
+  "ok": true,
+  "error": null,
+  "devices": [
+    {"id": "CUDA0", "name": "NVIDIA GeForce RTX 5090",
+     "total_mib": 32149, "free_mib": 31626, "total_gb": 31.4, "free_gb": 30.9},
+    {"id": "CUDA1", "name": "NVIDIA GeForce RTX 3090",
+     "total_mib": 24123, "free_mib": 23800, "total_gb": 23.6, "free_gb": 23.2}
+  ],
+  // バックエンド接頭辞ごとの VRAM 比提案(0 MiB デバイスは除外、2 枚以上の
+  // バックエンドのみキーを持つ)
+  "suggested_tensor_split": {"CUDA": [0.57, 0.43]},
+  // スイープ構成の自動生成候補(単体構成 + バックエンド内複数枚構成)
+  "auto_configs": [
+    {"label": "CUDA0 単体", "device_ids": ["CUDA0"], "tensor_split": []},
+    {"label": "CUDA1 単体", "device_ids": ["CUDA1"], "tensor_split": []},
+    {"label": "CUDA x2", "device_ids": ["CUDA0", "CUDA1"], "tensor_split": [0.57, 0.43]}
+  ]
+}
+```
+
+`POST /api/launcher/start` は以下のフィールドを追加で受け付けます(**llama.cpp のみ有効**。既定は空配列 = 未選択 = 従来どおりの起動コマンド):
+
+| フィールド | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `device_ids` | `list[string]` | `[]` | 選択したデバイス id(例 `["CUDA0", "CUDA1"]`) |
+| `tensor_split` | `list[float]` | `[]` | `device_ids` が 2 個以上のときのみ有効な分割比(例 `[0.57, 0.43]`) |
+
+---
+
+## ベンチスイープ (llama.cpp)
+
+複数のデバイス構成(例: `CUDA0` 単体 / `CUDA1` 単体 / `CUDA0,CUDA1` 分割)を**自動で順番に**「起動 → readiness 待ち → 外部ベンチ実行 → 停止 → 次の構成へ」と回し、構成ごとの性能を比較する機能です。GUI/Web 両対応。**llama.cpp のみ**。
+
+ベンチ本体は外部ツール [llmbench](https://github.com/zephel01/swe-bench) を想定しています(別途インストールが必要— Launcher 自体には同梱されません)。
+
+### 使い方(GUI)
+
+LAUNCH フォームの **📊 ベンチスイープ** ボタンで別ウィンドウ(`SweepWindow`)が開きます。
+
+1. モデルパス・ポート・runs・results_dir・ベンチコマンドを入力(モデルパス/ポートは親フォームの値を引き継ぎ)
+2. **🔍 デバイス検出 → 構成生成** で `--list-devices` を実行し、[デバイス選択](#デバイス選択-llamacpp)の自動生成規則(単体構成 + バックエンド内複数枚構成)で構成候補のチェックボックスを生成
+3. 実行したい構成にチェックを入れて **▶ 開始**
+4. 進行テーブル(構成 / 状態 / exit / tok/s / ttft(ms))とログが更新される。**■ 中断**で以降の構成をキャンセル(実行中の構成は完了まで進む)
+
+### 使い方(Web版)
+
+`/launcher` ページのベンチスイープカードから、GUI 版と同じ構成マトリクス・ベンチコマンド欄・runs・results_dir を入力して **開始**。**開始/中断は書き込み系のため launcher token 認証が必要**(`launcher.readiness_timeout_s` 等と同様、`X-CodeRouter-Token` ヘッダ)。進行状況は 3 秒ごとの状態ポーリングで表示されます。
+
+### 状態遷移
+
+各構成(`SweepStep`)は `pending → starting →(readiness 通過)→ benching →(ベンチ終了)→ done` と遷移します。
+
+- 起動失敗 / readiness タイムアウト → `failed`(次の構成へ継続)
+- ベンチが非ゼロ終了しても `done`(exit code を記録して比較を継続 — ベンチ自体の起動に失敗した場合のみ `failed`)
+- 中断要求 → 実行中の構成は完了まで進み、以降の未実行構成は `aborted`
+
+### `launcher.bench` 設定(既定値)
+
+`providers.yaml` の `launcher.bench:` ブロックで、スイープの既定値を設定できます(省略時はハードコードされた既定値を使用 — 完全後方互換)。
+
+```yaml
+launcher:
+  bench:
+    command_template: "llmbench run --model local-openai --runs {runs}"
+    runs: 5
+    results_dir: ~/llmbench-results
+    readiness_timeout_s: 300
+```
+
+| フィールド | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `command_template` | str | `"llmbench run --model local-openai --runs {runs}"` | 外部ベンチコマンドのテンプレート。`{port}` `{config}` `{base_url}` `{results_dir}` `{runs}` を単純文字列置換(`str.format` ではないので JSON の波括弧を誤爆しない)で展開し `shlex` で argv 化する。Windows では `shlex.split(..., posix=False)` でバックスラッシュ入りパスを保護する |
+| `runs` | int | `5`(1〜1000) | 1 構成あたりのベンチ実行回数。`{runs}` に展開される |
+| `results_dir` | str \| null | `null` | `llmbench` の results 出力先ディレクトリ。相対パスはサーバの CWD 基準。指定時のみ、各構成の完了後にこのディレクトリ内の最新 JSON を読み比較サマリを付与する |
+| `readiness_timeout_s` | float | `300.0`(5〜3600) | スイープの各構成でサーバが ready になるのを待つ最大秒数。大きな GGUF のロード時間を見込んだ既定 5 分 |
+
+`{port}` にはスイープ用に固定したポート、`{config}` には構成ラベル(例 `CUDA0 単体`)、`{base_url}` には `http://localhost:{port}/v1` が入ります。ベンチ子プロセスには環境変数 `OPENAI_BASE_URL=http://localhost:{port}/v1` も設定されるため、`llmbench` 側がテンプレ引数と環境変数のどちらで接続先を受け取っても動作します。
+
+### results 比較
+
+`results_dir` を指定すると、各構成のベンチ終了後にそのディレクトリ内で最も新しい `*.json`(構成の開始時刻以降に更新されたもの)を読み込み、`tokens_per_sec` / `ttft_ms` / `latency_ms` / `runs` を別名キー(`tok_s` / `throughput` / `tps` 等)も含めて best-effort で抽出し、進行テーブルに反映します。`llmbench` の JSON スキーマが変わっても壊れないよう防御的に解析され、抽出できなかった項目は空欄のままです。
+
+### API(Web版)
+
+| Method | Path | 認証 | 説明 |
+|---|---|---|---|
+| POST | `/api/launcher/sweep/start` | **token** | スイープを開始。既に実行中なら 409、`configs` が空なら 400、ポートが使用中/確保できなければ 400 |
+| GET | `/api/launcher/sweep/status` | なし | 現在(または直近)のスイープ状態。`{sweep_id, running, current_index, steps: [...]}` |
+| POST | `/api/launcher/sweep/abort` | **token** | 進行中スイープに中断要求。実行中のスイープが無ければ 404 |
+| GET | `/api/launcher/sweep/logs?n=200` | なし | 進行ログ末尾 N 行。`{logs: [str], total: int}` |
+
+`POST /api/launcher/sweep/start` のリクエストボディ(主なフィールド):
+
+| フィールド | 型 | 既定値 | 説明 |
+|---|---|---|---|
+| `backend` | str | `"llama.cpp"` | 対象バックエンド |
+| `model_path` | str(必須) | — | 全構成で共通のモデルパス |
+| `port` | int(必須) | — | 全構成で使い回すポート(1024〜65535)。各構成の停止はポート解放を待ってから次へ進む |
+| `configs` | `list[{label, device_ids, tensor_split}]`(必須・1件以上) | — | 実行する構成の一覧。`/api/launcher/devices` の `auto_configs` をそのまま使うか、手動で組み立てる |
+| `bench_command` | str \| null | `null` | `null` なら `launcher.bench.command_template`(未設定ならハードコード既定)を使う |
+| `runs` / `results_dir` | int \| null / str \| null | `null` | 同様に `launcher.bench` の既定値にフォールバック |
+
+---
+
 ## モデル自動スワップ (launcher.swap) — v2.9.1+
 
 [llama-swap](https://github.com/mostlygeek/llama-swap) 相当の機能を、追加の依存なしで CodeRouter 単体に組み込んだものです。既定は無効(`enabled: false`)の opt-in 機能です。
@@ -396,6 +552,10 @@ option_profiles:
 **新しいプロセス status `loading`** — 起動直後で readiness 待ち中の状態です。`starting` / `running` / `stopped` / `error` に加えて PROCESSES テーブルに表示されます。readiness を通過すると `running` に遷移し、そこで初めて provider として登録されます(以前は spawn 直後に登録していたため、ロード未完了へのリクエストが connection-refused / 503 になる不具合がありました)。
 
 > **動作変更(v2.9.1)**: `POST /api/launcher/start` は provider 同期を同期的に行わなくなりました。レスポンスの `provider_sync` は常に `null` です。同期結果は `/api/launcher/processes` またはログの `provider sync:` 行で確認してください。
+
+### `launcher.bench` — ベンチスイープ既定値
+
+`launcher:` ブロック直下に `bench:` サブブロックを追加すると、[ベンチスイープ](#ベンチスイープ-llamacpp)の既定値(ベンチコマンド・runs・results_dir・readiness タイムアウト)を差し替えられます。省略時はハードコードされた既定値を使うため、既存の `providers.yaml` はそのまま動作します。フィールド一覧・サンプル YAML は [ベンチスイープ](#ベンチスイープ-llamacpp) セクションの `launcher.bench` 設定表を参照してください。
 
 ### 追加オプション(自由入力)
 
