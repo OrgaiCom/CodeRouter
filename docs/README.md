@@ -20,6 +20,7 @@ Index of CodeRouter's public documentation — find the right page by what you w
 | 機能を一通り知りたい / Learn the features | [guides/usage-guide](guides/usage-guide.md) |
 | 言語税を計測・回避したい / Measure & avoid the language tax | [guides/language-tax](guides/language-tax.md) |
 | エラーで詰まった / Something broke | [guides/troubleshooting](guides/troubleshooting.md) |
+| VSCode / Cline / Continue から使いたい / Use from VSCode extensions | [guides/vscode](guides/vscode.md) |
 | ローカル LLM を起動したい / Launch a local LLM | [backends/launcher-quickstart](backends/launcher-quickstart.md) |
 | APIキー・機密の扱い / Secrets & security | [guides/security](guides/security.md) |
 | 仕組みを理解したい / Understand the design | [concepts/architecture](concepts/architecture.md) |
@@ -64,6 +65,7 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 - **troubleshooting** — つまずいたときの解決集 / Fixing problems · [日本語](guides/troubleshooting.md) · [English](guides/troubleshooting.en.md)
 - **security** — シークレット管理とセキュリティ方針 / Secrets handling & security posture · [日本語](guides/security.md) · [English](guides/security.en.md)
 - **subagent-routing** — Claude Code のサブエージェントをモデルごとに振り分ける / Route Claude Code sub-agents to different models · [日本語](guides/subagent-routing.md) · [English](guides/subagent-routing.en.md)
+- **vscode** — VSCode 統合ターミナル(Claude Code)と Cline / Roo / Continue.dev から接続する / Connect from VSCode's integrated terminal (Claude Code) and Cline / Roo / Continue.dev. Includes the `coderouter vscode-init` scaffolder (v2.10.0) · [日本語](guides/vscode.md)
 
 ## 3. ローカル LLM バックエンド / Local LLM backends — `backends/`
 

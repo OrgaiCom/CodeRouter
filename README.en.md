@@ -69,6 +69,8 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 That's it. Claude Code works as usual, but your local Ollama is answering behind the scenes.
 
+**From VSCode's integrated terminal**, avoid the env-var footgun with `coderouter vscode-init`. Run it once at your project root and it merges `terminal.integrated.env.*` into `.vscode/settings.json`, so `claude` in VSCode's terminal just works from then on. Cheat-sheet snippets for Cline / Roo Code / Continue.dev are printed at the end of the same run → [VSCode integration guide](./docs/guides/vscode.md) (JP only for now).
+
 ---
 
 ## Do you need it?
@@ -217,6 +219,7 @@ More detail → [Usage guide](./docs/guides/usage-guide.en.md) · [Architecture]
 | Run for free | [Free-tier guide](./docs/guides/free-tier-guide.en.md) |
 | Launch llama.cpp / vllm via GUI | [Launcher guide](./docs/backends/launcher.md) |
 | Measure & avoid the language tax | [Language Tax guide](./docs/guides/language-tax.en.md) |
+| Use from VSCode / Cline / Continue | [VSCode integration guide](./docs/guides/vscode.md) (JP) |
 | Reach it safely from another machine | [Remote access guide](./docs/guides/remote-access.en.md) |
 | Stuck? | [Troubleshooting](./docs/guides/troubleshooting.en.md) |
 | Understand the design | [Architecture](./docs/concepts/architecture.md) |
