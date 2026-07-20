@@ -32,13 +32,10 @@ from coderouter import cli
 from coderouter.vscode_init import (
     DEFAULT_PORT,
     DEFAULT_TOKEN,
-    FileOutcome,
-    VSCodeInitResult,
     exit_code_for,
     format_result,
     run_vscode_init,
 )
-
 
 # ---------------------------------------------------------------------------
 # run_vscode_init — happy paths

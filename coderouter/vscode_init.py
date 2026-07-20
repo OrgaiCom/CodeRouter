@@ -57,8 +57,10 @@ DEFAULT_PORT = 8088
 # Bogus token — CodeRouter's chat ingress does not validate ANTHROPIC_AUTH_TOKEN
 # (real API keys are managed on the ``providers.yaml`` side). Using a
 # fixed sentinel here means we never accidentally embed the operator's
-# real token into a workspace file.
-DEFAULT_TOKEN = "dummy"  # noqa: S105 — intentional placeholder, not a secret
+# real token into a workspace file. (Not annotated with `noqa: S105`
+# because this project doesn't enable that ruff rule — RUF100 would
+# then flag the unused directive.)
+DEFAULT_TOKEN = "dummy"
 
 # VSCode reads terminal env from a separate key per host OS. Writing all
 # three means the same ``.vscode/`` folder works whether the developer
