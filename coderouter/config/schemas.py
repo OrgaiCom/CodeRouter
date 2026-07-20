@@ -394,7 +394,7 @@ class ProviderConfig(BaseModel):
         default=False,
         description="If true, only used when ALLOW_PAID=true (plan.md §2.3).",
     )
-    timeout_s: float = Field(default=30.0, ge=1.0, le=600.0)
+    timeout_s: float = Field(default=30.0, ge=1.0, le=86400.0)
 
     # v2.6 language-tax track: path to a LOCAL ``tokenizer.json`` for this
     # provider's model, used to measure the CJK over-count vs the char/4
