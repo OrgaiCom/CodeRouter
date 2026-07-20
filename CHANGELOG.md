@@ -9,6 +9,96 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.10.0] — 2026-07-20 (VSCode workspace scaffolder)
+
+### Added
+
+- **`coderouter vscode-init` — one-shot VSCode workspace scaffolder.**
+  Writes `.vscode/settings.json` with `terminal.integrated.env.osx` /
+  `.linux` / `.windows` populated so a Claude Code session launched
+  from VSCode's integrated terminal auto-points at CodeRouter with no
+  manual `ANTHROPIC_BASE_URL` juggling. Optionally emits a direnv
+  `.envrc` (`--with-envrc`). The command is **idempotent** (re-running
+  with the same arguments is a no-op) and **conflict-aware**: if an
+  existing `settings.json` has different values for one of our managed
+  keys, the file is left untouched and a unified diff is printed —
+  operators re-run with `--force` to overwrite. Unrelated top-level
+  keys (`editor.fontSize`, `python.testing.pytestEnabled`, etc.) and
+  unrelated env keys inside the terminal blocks (a user's `PATH`
+  tweak) are preserved verbatim on merge. All writes are atomic
+  (temp file + `os.replace`) so a partial write cannot corrupt an
+  existing `settings.json`. Non-Claude-Code extensions (Cline / Roo
+  Code / Kilo Code / Continue.dev) are handled by a cheat sheet
+  printed at end of run plus the fuller `docs/guides/vscode.md` —
+  `vscode-init` deliberately does NOT reach into those extensions'
+  own config schemas (each ships its own release cadence, so any
+  automation would need continuous maintenance to follow). The
+  Continue.dev cheat-sheet snippet is built via `json.dumps` rather
+  than hand-formatted concatenation, so it is guaranteed to be
+  syntactically valid JSON (an early hand-formatted version leaked
+  an extra `}` from mismatched f-string / plain-string brace
+  escaping; a test round-trips the snippet through `json.loads` to
+  pin the invariant). Options: `--target PATH` (default cwd),
+  `--port PORT` (default **8088**, matching every docs / quickstart
+  example — note that `coderouter serve` alone still defaults to
+  4000, so if you serve on 4000 pass `--port 4000` here too),
+  `--profile NAME` (adds `CODEROUTER_MODE=<profile>` to the terminal
+  env for header-less profile routing), `--with-envrc` (also emit
+  `.envrc`), `--dry-run` (compute diffs but write nothing —
+  byte-identical to the write path minus the final `os.replace`),
+  and `--force` (overwrite conflicting values). Exit codes: 0 clean,
+  2 conflicts (nothing was written for the conflicting file), 1
+  hard error (unparseable JSON, missing target directory, write
+  failure). Implementation lives in `coderouter/vscode_init.py`
+  (stdlib only — no new runtime deps, keeping the strict-5-package
+  rule in `pyproject.toml` intact); the CLI wrapper
+  (`_run_vscode_init` in `coderouter/cli.py`) mirrors the existing
+  `stats` / `audit` / `replay` "thin argparse plumbing + logic in a
+  sibling module" pattern. See `tests/test_vscode_init.py` (33 cases
+  across happy paths, merge preservation, conflict detection,
+  `--force`, `--dry-run` byte parity, `.envrc`, malformed inputs,
+  JSON validity of the Continue.dev snippet, and CLI wrapper
+  plumbing) and the new `docs/guides/vscode.md` for the full Cline /
+  Roo / Continue.dev cheat sheet.
+
+### Documentation
+
+- **Launcher port ↔ `providers.yaml` mismatch, three ways to prevent
+  it.** New section
+  ["providers.yaml とのポート整合"](docs/backends/launcher.md#providersyaml-とのポート整合食い違いを構造的に防ぐ)
+  in the Launcher guide walks through the three coexisting patterns
+  — (A) hardcoded `providers.yaml` with matching Launcher port
+  (traditional), (B) v2.7.4 Launcher auto-sync
+  (`launcher-<backend>-<port>` provider names, no `providers.yaml`
+  edit needed), and (C) the recommended hybrid where
+  `option_profiles` pins the port so the Launcher UI and
+  `providers.yaml` cannot drift. Includes a copy-paste `cr-check`
+  shell function that runs `coderouter doctor --check-model <name>`
+  against every hand-declared provider before work begins so
+  operators catch a port mismatch in seconds rather than after a
+  session of quiet fallback churn. The symptom side (dashboard's
+  `unhealthy` badge + half-and-half `provider-failed` events in the
+  ring buffer while requests still succeed via fallback) is
+  documented as a new
+  [troubleshooting §1-7](docs/guides/troubleshooting.md#1-7-transport-error-all-connections-failed--ポート不一致の疑い)
+  entry, cross-linked back to the Launcher guide for the fix. Both
+  additions are Japanese-side only (English counterpart will follow
+  in a later docs-sync commit).
+
+### Fixed
+
+- **`ProviderConfig.timeout_s` upper bound raised from 600s (10 min) to
+  86400s (24h)** (#76, contributed by @firelzrd). The previous 10-minute
+  ceiling was too restrictive for long-running local model inference —
+  configurations that legitimately need multi-hour timeouts (heavy
+  reasoning models, large-context sweeps, batch operations) were being
+  rejected by the Pydantic `le=600` validator before the request could
+  even leave the router. The default (30s) and lower bound (1s) are
+  unchanged, so existing configs are unaffected; only users who were
+  hitting the ceiling gain the new headroom.
+
+---
+
 ## [v2.9.4] — 2026-07-19 (launcher device selection & bench sweep, cache-stable system prompt)
 
 ### Added

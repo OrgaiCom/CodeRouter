@@ -87,6 +87,8 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 これだけ。Claude Code はいつも通り動きますが、裏ではローカルの Ollama が答えています。
 
+**VSCode の統合ターミナルから使う場合** は、環境変数の書き忘れを避けるため `coderouter vscode-init` が便利です。プロジェクトルートで 1 回叩くと `.vscode/settings.json` に `terminal.integrated.env.*` をマージ書き込みするので、以後 VSCode のターミナルで `claude` と打つだけで通ります。Cline / Roo Code / Continue.dev の設定コピペも含めて → [VSCode 連携ガイド](./docs/guides/vscode.md)
+
 ---
 
 ## 自分に必要？
@@ -236,6 +238,7 @@ providers:
 | 無料で回す | [無料枠ガイド](./docs/guides/free-tier-guide.md) |
 | llama.cpp / vllm を GUI で起動 | [Launcher ガイド](./docs/backends/launcher.md) |
 | 言語税を計測・回避する | [言語税ガイド](./docs/guides/language-tax.md) |
+| VSCode / Cline / Continue から使う | [VSCode 連携ガイド](./docs/guides/vscode.md) |
 | 別の PC から安全に繋ぐ | [リモートアクセスガイド](./docs/guides/remote-access.md) |
 | 詰まった | [トラブルシューティング](./docs/guides/troubleshooting.md) |
 | 設計を知りたい | [アーキテクチャ詳細](./docs/concepts/architecture.md) |

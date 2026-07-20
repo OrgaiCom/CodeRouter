@@ -336,6 +336,78 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # v2.10-A: `coderouter vscode-init` — scaffold a VSCode workspace so
+    # Claude Code launched from the integrated terminal auto-points at
+    # CodeRouter (no manual env-var juggling). Optionally writes .envrc
+    # for direnv users. Cline / Roo / Continue are covered by the cheat
+    # sheet printed on completion and docs/guides/vscode.md — this
+    # command deliberately does NOT touch those extensions' settings
+    # (their schemas change with their own release cadence).
+    vscode_init = sub.add_parser(
+        "vscode-init",
+        help="Scaffold VSCode workspace settings for CodeRouter (v2.10-A).",
+        description=(
+            "Write .vscode/settings.json (terminal.integrated.env.*) so a "
+            "Claude Code session launched from VSCode's integrated terminal "
+            "auto-points at CodeRouter. Optionally emit a direnv .envrc. "
+            "Idempotent: safe to re-run. Conflict-aware: refuses to overwrite "
+            "differing existing values without --force."
+        ),
+    )
+    vscode_init.add_argument(
+        "--target",
+        default=".",
+        metavar="PATH",
+        help="Workspace root (default: current directory).",
+    )
+    vscode_init.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help=(
+            "CodeRouter port for ANTHROPIC_BASE_URL. Defaults to 8088 "
+            "(matches every docs / quickstart example). Note that "
+            "`coderouter serve` alone defaults to 4000; if you serve on "
+            "4000, pass --port 4000 here too."
+        ),
+    )
+    vscode_init.add_argument(
+        "--profile",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Preload CODEROUTER_MODE=<profile> so the VSCode terminal "
+            "routes to a non-default profile without a per-request header."
+        ),
+    )
+    vscode_init.add_argument(
+        "--with-envrc",
+        action="store_true",
+        help=(
+            "Also write .envrc (direnv). Run `direnv allow` once after "
+            "generation. Tip: keep secrets in a separate .envrc.local."
+        ),
+    )
+    vscode_init.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Compute all changes and print unified diffs, but do not write "
+            "any files. Byte-identical to the write path minus the final "
+            "os.replace."
+        ),
+    )
+    vscode_init.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite existing conflicting values. Without this flag, a "
+            "conflict is reported with a diff and the file is left "
+            "untouched (exit 2)."
+        ),
+    )
+
     return parser
 
 
@@ -431,6 +503,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "replay":
         return _run_replay(args)
+
+    if args.command == "vscode-init":
+        return _run_vscode_init(args)
 
     print(f"unknown command: {args.command}", file=sys.stderr)
     return 2
@@ -763,6 +838,56 @@ def _run_replay(args: argparse.Namespace) -> int:
         print(format_summary_table(summary))
 
     return 0
+
+
+def _run_vscode_init(args: argparse.Namespace) -> int:
+    """v2.10-A: drive :func:`coderouter.vscode_init.run_vscode_init`.
+
+    Kept small and testable — the actual scaffolding logic lives in
+    :mod:`coderouter.vscode_init` so tests can exercise it without
+    argparse in the way. This wrapper's job is:
+
+    * resolve the ``--target`` argument to a real directory
+    * map ``--port`` (default None) to the module's ``DEFAULT_PORT``
+    * translate exceptions (missing target directory) to a friendly
+      stderr message + exit 1
+    * print the formatted result and propagate the module's exit code
+    """
+    from coderouter.vscode_init import (
+        DEFAULT_PORT,
+        exit_code_for,
+        format_result,
+        run_vscode_init,
+    )
+
+    target = Path(args.target).expanduser()
+    if not target.is_dir():
+        print(
+            f"vscode-init: target directory does not exist: {target}",
+            file=sys.stderr,
+        )
+        return 1
+
+    port = args.port if args.port is not None else DEFAULT_PORT
+
+    try:
+        result = run_vscode_init(
+            target,
+            port=port,
+            profile=args.profile,
+            with_envrc=args.with_envrc,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except FileNotFoundError as exc:
+        # Raised only when target vanishes between the pre-check above
+        # and the module's own check — unlikely in practice, but map
+        # it to the same shape as the pre-check for consistency.
+        print(f"vscode-init: {exc}", file=sys.stderr)
+        return 1
+
+    print(format_result(result, dry_run=args.dry_run, port=port))
+    return exit_code_for(result)
 
 
 def _run_check_env(arg_value: str) -> int:

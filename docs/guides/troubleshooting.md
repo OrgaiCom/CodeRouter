@@ -150,6 +150,53 @@ CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter serve --host 0.0.0.0 --port 808
 > 安全な公開パターン(SSH トンネル / Tailscale / リバースプロキシ)の具体手順は
 > [リモートアクセスガイド](./remote-access.md) にまとめてあります。
 
+### 1-7. `transport error: All connections failed` — ポート不一致の疑い
+
+Launcher で backend(llama.cpp / vllm など)を起動しているのに、ダッシュボードで
+その provider が半々失敗、Recent Events に
+
+```
+provider-failed  llama-cpp-local  FAIL
+```
+
+が繰り返し出る、というパターン。フォールバック先(vllm-local など)が拾って
+Cline / Claude Code へは応答が届くので「動いてはいる」ように見えますが、内部では
+毎回 1 プロバイダを潰しています。ダッシュボード右上に `unhealthy` バッジが常時。
+
+**最頻の原因**: Launcher が起動した backend の**実ポート**と、
+`providers.yaml` の `base_url` に書いた**期待ポート**が食い違っている。CodeRouter
+はそのポートに繋がる backend が居ないことを起動時には知らないので、実リクエストが
+飛んだ瞬間に `httpx.ConnectError` を全リトライで受け取り
+`transport error: All connections failed` として上位に伝えます。
+
+**確認**:
+
+```bash
+# providers.yaml が期待しているポートに対して疎通確認
+coderouter doctor --check-model llama-cpp-local
+#   → auth+basic-chat が [OK] なら疎通OK、ポート整合済み
+#   → transport error なら不一致。base_url と Launcher の実ポートを比較
+
+# 実際に上がっている backend のポートを直接叩いてみる
+curl -s http://localhost:8085/v1/models    # ← providers.yaml が期待している方
+curl -s http://localhost:8086/v1/models    # ← Launcher が実際に上げている方
+```
+
+**修正**: `providers.yaml` の `base_url` と Launcher の起動ポートを同じ値に揃える。
+恒常的に食い違いを防ぎたい場合は Launcher の `option_profiles` にポートを埋めるか
+(方式 C)、v2.7.4 以降なら Launcher 自動同期(方式 B)に移行するのが根治です
+— 3 通りの回避策の詳細は
+[Launcher ガイド §providers.yaml とのポート整合](../backends/launcher.md#providersyaml-とのポート整合食い違いを構造的に防ぐ) を参照。
+
+同じ症状が**恒久的にではなく散発的に**出る場合は、ポート不一致ではなく backend の
+memory pressure / OOM / タイムアウトによる再起動が疑わしいので、
+Launcher の該当プロセスの stderr ログ・§4-2 の Ollama 系の項目・§H4/H5 相当の
+guard 発火を audit で確認してください。
+
+```bash
+coderouter audit --tail 20 --filter provider-failed
+```
+
 ---
 
 ## 2. ログの読み方とよくあるパターン

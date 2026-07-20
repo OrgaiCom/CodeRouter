@@ -139,6 +139,71 @@ curl http://localhost:8088/v1/chat/completions \
 
 デスクトップ GUI 版(launcher_gui.py)は別プロセスで動くため自動同期の対象外です。従来どおり providers.yaml のエントリ(初回自動生成される `llama-cpp-local` など)の `base_url` を、起動ポートに合わせてください。
 
+### providers.yaml とのポート整合(食い違いを構造的に防ぐ)
+
+Launcher が起動する backend のポートと、`providers.yaml` の `base_url` に書かれたポートが**ズレると黙って死にます**。CodeRouter は「そのポートに繋がる backend が居ない」ことを起動時には知らないので、実リクエストが飛んだ瞬間に `transport error: All connections failed` を返し、フォールバックがあれば次のプロバイダが救う(=**ダッシュボードで llama-cpp-local が半々失敗、vllm-local が 100%** という絵になる)、無ければ 502 で作業が止まります。3 通りの回避策があります。
+
+**方式 (A) — ハードコード派(従来どおり、Launcher デスクトップ GUI 版と併用)**
+
+`providers.yaml` に手書きしたエントリを真実の源にします。プロバイダ名を意図的に固定したい(Cline / Continue から `model` ID で狙いたい、`auto_router.rules` で名前を指定したい)場合はこれ。
+
+```yaml
+providers:
+  - name: llama-cpp-local
+    kind: openai_compat
+    base_url: http://localhost:8085/v1   # ← 真実の源
+    model: qwen2.5-coder:14b
+```
+
+Launcher 側は**同じ 8085 で起動**する必要があります。LAUNCH フォームのポート欄に 8086 と入れて `providers.yaml` は 8085 のまま、というのがハマりの定型パターン。作業開始前に `coderouter doctor --check-model llama-cpp-local` を 1 回叩けば疎通が確認できます(下の「予防ワンライナー」)。
+
+**方式 (B) — Launcher 自動同期派(v2.7.4 以降、Web 版のみ)**
+
+Launcher が起動した瞬間に provider 名にポートが**埋め込まれた**エントリ(`launcher-llamacpp-8085` など)が自動登録されるので、`providers.yaml` にはそもそも書きません。ポートが変わっても provider 名が変わるだけで、`X-CodeRouter-Profile: launcher` で流している限りルーティングは追従します。デスクトップ GUI 版は対象外なので注意。
+
+**方式 (C) — 折衷(推奨、名前は固定・ポートは 1 箇所で定義)**
+
+`providers.yaml` にハードコードした provider を残しつつ、Launcher の `option_profiles` に**同じポート**を書いておくと、プリセットを選ぶだけで整合が担保されます。ズレ得ないので運用が最も楽です。
+
+```yaml
+providers:
+  - name: llama-cpp-local
+    kind: openai_compat
+    base_url: http://localhost:8085/v1
+
+launcher:
+  option_profiles:
+    llama.cpp:
+      - name: "GPU フル活用 (8085)"
+        args:
+          "-ngl": 99
+          "--ctx-size": 4096
+          "--port": 8085     # ← providers.yaml と同じ値を書く
+```
+
+**予防ワンライナー**(方式 A / C 向け):
+
+```bash
+# Launcher で backend を起動した直後・作業開始前に 1 回叩く
+coderouter doctor --check-model llama-cpp-local
+#   → auth+basic-chat が [OK] なら疎通確認完了
+#   → transport error が出たらポート不一致を疑う
+```
+
+シェル関数化しておくと楽です:
+
+```bash
+# ~/.zshrc / ~/.bashrc
+cr-check() {
+  coderouter doctor --check-model llama-cpp-local || return 1
+  coderouter doctor --check-model vllm-local || return 1
+  echo "✅ CodeRouter chain is healthy"
+}
+```
+
+事象そのものの見え方(ダッシュボードの `unhealthy` バッジや半々失敗の Recent Events)は
+[トラブルシューティング §1-7](../guides/troubleshooting.md#1-7-transport-error-all-connections-failed--ポート不一致の疑い) にまとまっています。
+
 ### PROCESSES テーブル
 
 起動した backend プロセスの一覧です。NAME / BACKEND(llama.cpp / vllm / mlx)/ MODEL / PORT / PID / STATUS(`starting` / `running` / `stopped` / `error` を色分け)を表示し、プロセスを選んで **停止**(SIGTERM)・**削除**(レジストリから除去)・**ログ表示**ができます。

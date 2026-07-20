@@ -168,6 +168,15 @@ launcher:
           "--min-p": 0.05
           "--batch-size": 1024
 
+      - name: "GPU フル活用 (Vulkan/AMD)"
+        args:
+          "-ngl": 99
+          "--ctx-size": 65536
+          "--no-mmap": true        # ← Vulkan では実質必須。6tps の主犯候補
+          "--batch-size": 2048
+          "--ubatch-size": 512
+          "--threads": 4
+
     # ── vllm オプションプロファイル ───────────────────────────────────────────
     vllm:
 
