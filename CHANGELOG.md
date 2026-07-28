@@ -9,7 +9,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
-## [Unreleased]
+## [v2.11.0] — 2026-07-28 (launcher backend variants)
 
 ### Added
 
