@@ -114,6 +114,8 @@ A backend started via the Web edition is automatically registered as a provider 
 
 > **Got multiple GPUs?** The LAUNCH form's "🔍 Detect" button lets you pick `--device` / `--tensor-split`, and "📊 Bench sweep" automatically compares throughput across configurations (both llama.cpp-only). See [Device selection](./launcher.en.md#device-selection-llamacpp) / [Bench sweep](./launcher.en.md#bench-sweep-llamacpp) for details.
 
+> **Built llama.cpp separately for CUDA / Vulkan / ROCm?** Register keys such as `llama.cpp-cuda` under `backends` and the "Backend" select lets you pick a build per launch (v2.11.0+). Different builds expose different devices, so you can match the build to the model. See [Switching specialized builds](./launcher.en.md#switching-specialized-builds-llamacpp).
+
 ---
 
 ## 5. Use it from Claude Code

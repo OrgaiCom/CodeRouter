@@ -179,6 +179,7 @@ providers:
 | **ログビューア** | 各プロセスの stdout/stderr をブラウザ内でリアルタイム確認 |
 | **provider 自動同期** (v2.7.4) | 起動したバックエンドを provider として自動登録(`launcher-llamacpp-8085` 等)。providers.yaml 無編集で `X-CodeRouter-Profile: launcher` からルーティング可能。メモリ内のみ・serve と同寿命 |
 | **モデル名パススルー** (v2.7.4) | `model: ""` の provider は `/v1/models` が上流のロード中モデル ID(gguf 名)をそのまま返す。gguf を差し替えても config 編集不要 — 外部ベンチからモデルを識別できる |
+| **特化ビルドの切り替え** (v2.11.0) | `llama.cpp-cuda` / `-vulkan` / `-rocm` を `backends` に登録すると、起動ごとにどのビルドの `llama-server` を使うか選べる。ビルド別にデバイス検出・option_profiles・ベンチスイープが独立(書かなければ従来どおり) |
 
 ```yaml
 # providers.yaml に追記するだけで有効になる

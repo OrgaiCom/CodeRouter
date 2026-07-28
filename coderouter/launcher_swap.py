@@ -50,6 +50,7 @@ from coderouter.ingress.launcher_routes import (
     spawn_process,
     stop_process,
 )
+from coderouter.launcher_devices import resolve_option_profiles
 from coderouter.logging import get_logger
 
 logger = get_logger(__name__)
@@ -353,10 +354,18 @@ class SwapManager:
             reg.remove(proc_id)
 
     def _resolve_options(self, spec: SwapModelSpec) -> dict[str, Any]:
-        """Resolve ``spec.option_profile`` into the launcher options dict."""
+        """Resolve ``spec.option_profile`` into the launcher options dict.
+
+        ``spec.backend`` may be a variant (``llama.cpp-cuda``), in which case
+        the base backend's presets are inherited — the same merge the manual
+        UI applies, so a swap entry can reference a shared preset without
+        duplicating it under every variant key.
+        """
         if not spec.option_profile or self._launcher_cfg is None:
             return {}
-        profiles = self._launcher_cfg.option_profiles.get(spec.backend, [])
+        profiles = resolve_option_profiles(
+            self._launcher_cfg.option_profiles, spec.backend
+        )
         for p in profiles:
             if p.name == spec.option_profile:
                 return dict(p.args)

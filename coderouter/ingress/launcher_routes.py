@@ -47,6 +47,7 @@ from coderouter.launcher_devices import (
     SweepPlan,
     SweepState,
     SweepStep,
+    base_backend,
     build_auto_sweep_configs,
     build_sweep_steps,
     detect_llama_devices,
@@ -54,8 +55,11 @@ from coderouter.launcher_devices import (
     is_port_free,
     load_latest_results,
     render_bench_command,
+    resolve_option_profiles,
     selectable_devices,
     suggest_tensor_split,
+    unknown_device_ids,
+    variant_of,
 )
 from coderouter.launcher_speculative import resolve_speculative
 from coderouter.logging import get_logger
@@ -281,6 +285,9 @@ def _scan_models(model_dirs: list[str]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+# 基底バックエンド名 → 既定の実行ファイル名。キーは常に**基底名**であり、
+# ``llama.cpp-cuda`` のようなバリアント名は入らない。参照側は必ず
+# ``base_backend()`` を通してから引くこと(launcher_devices §2.0)。
 _BACKEND_DEFAULTS: dict[str, str] = {
     "llama.cpp": "llama-server",
     "vllm": "python",
@@ -315,8 +322,15 @@ def _assert_no_model_override(backend: str, tokens: list[str]) -> None:
     ``tokens`` is the flat list of argument tokens sourced from ``options``
     keys or ``shlex.split(extra_args)``. Matching is exact on the flag name;
     ``--model=foo`` style is caught by comparing the part before ``=``.
+
+    ``backend`` may be a variant name (``llama.cpp-cuda``), so the lookup goes
+    through :func:`base_backend`. A missing entry must NOT silently disable the
+    guard — an unknown base falls back to the union of every banned set, i.e.
+    the strictest possible check (fail-closed).
     """
-    banned = _MODEL_FLAGS.get(backend, frozenset())
+    banned = _MODEL_FLAGS.get(base_backend(backend))
+    if banned is None:
+        banned = frozenset().union(*_MODEL_FLAGS.values())
     for token in tokens:
         name = token.split("=", 1)[0]
         if name in banned:
@@ -328,9 +342,34 @@ def _assert_no_model_override(backend: str, tokens: list[str]) -> None:
 
 
 def _resolve_binary(backend: str, configured: str | None) -> str:
-    """Return the executable to use, expanding ~ and env vars."""
-    raw = configured or _BACKEND_DEFAULTS.get(backend, backend)
+    """Return the executable to use, expanding ~ and env vars.
+
+    ``backend`` may be a variant name; the default-executable fallback is
+    keyed by :func:`base_backend` so ``llama.cpp-cuda`` without a configured
+    ``binary`` would fall back to ``llama-server`` rather than to the literal
+    backend name. In practice variants require ``binary`` (validated at config
+    load — see ``LauncherConfig``), so that fallback should be unreachable.
+    """
+    raw = configured or _BACKEND_DEFAULTS.get(base_backend(backend), backend)
     return str(Path(raw).expanduser())
+
+
+def _backend_names(backends_cfg: dict[str, Any] | None) -> list[str]:
+    """Launcher が提示するバックエンド名の一覧 (順序が UI の並び順)。
+
+    基底 3 つを常に先頭に (従来どおりの順)、そのあとに ``launcher.backends``
+    に書かれたバリアントを記述順で並べる。設計 §6。
+
+    ``launcher.backends`` にバリアントを書かない利用者には従来と同じ 3 要素が
+    返るので、UI の選択肢も API 応答も完全に不変 —— 特化ビルドは「書いた人に
+    だけ見える上級者向けオプション」であり、バッジや注記ではなく構造でそれを
+    担保する。
+    """
+    names = list(_BACKEND_DEFAULTS)
+    for name in backends_cfg or {}:
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def _resolve_backends_sync(
@@ -340,9 +379,16 @@ def _resolve_backends_sync(
 
     Performs blocking filesystem I/O (``is_file`` / ``shutil.which``),
     so async-route callers must invoke it via ``asyncio.to_thread``.
+
+    Covers the base backends plus any variant declared in
+    ``launcher.backends`` (see :func:`_backend_names`). Each entry gains
+    ``base`` / ``variant`` so the UI can label a variant without re-parsing
+    the name client-side.
     """
     result: dict[str, dict[str, Any]] = {}
-    for backend, default_bin in _BACKEND_DEFAULTS.items():
+    for backend in _backend_names(backends_cfg):
+        base = base_backend(backend)
+        default_bin = _BACKEND_DEFAULTS.get(base, backend)
         configured: str | None = None
         if backends_cfg:
             bc = backends_cfg.get(backend)
@@ -360,6 +406,9 @@ def _resolve_backends_sync(
             "default": default_bin,
             "is_custom": configured is not None,
             "found": found,
+            # 以下 2 キーはバリアント機能で追加 (基底名では variant=None)。
+            "base": base,
+            "variant": variant_of(backend),
         }
     return result
 
@@ -436,6 +485,8 @@ def _suggest_launch_flags(backend: str, size_gb: float,
       - mlx       : 統合メモリ前提で起動時フラグ不要 (空文字)
     あくまで目安。他プロセスのメモリ使用や量子化方式までは考慮しない。
     """
+    # バリアント名 (llama.cpp-cuda 等) でも同じフラグ体系なので基底名で判定。
+    backend = base_backend(backend)
     if backend == "mlx":
         # MLX は統合メモリ + Metal 前提。llama.cpp の -ngl に相当する
         # レイヤーオフロードの概念がなく、mlx_lm.server は起動時の
@@ -552,20 +603,23 @@ def _build_cmd(
     model-override guard, and never apply to vllm/mlx (device 非対応)。
     """
     exe = _resolve_binary(backend, binary)
+    # argv の形はバリアントによらず基底バックエンドで決まる
+    # (llama.cpp-cuda も llama.cpp と同じフラグ体系)。
+    base = base_backend(backend)
 
-    if backend == "llama.cpp":
+    if base == "llama.cpp":
         cmd: list[str] = [exe, "-m", model_path, "--port", str(port)]
         if device_args:
             cmd.extend(device_args)
         if spec_tokens:
             cmd.extend(spec_tokens)
-    elif backend == "vllm":
+    elif base == "vllm":
         cmd = [
             exe, "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_path,
             "--port", str(port),
         ]
-    elif backend == "mlx":
+    elif base == "mlx":
         cmd = [
             exe, "-m", "mlx_lm.server",
             "--model", model_path,
@@ -574,7 +628,8 @@ def _build_cmd(
     else:
         raise ValueError(
             f"Unknown backend: {backend!r}. "
-            "Expected 'llama.cpp', 'vllm' or 'mlx'."
+            "Expected 'llama.cpp', 'vllm' or 'mlx' "
+            "(optionally with a '-<variant>' suffix)."
         )
 
     # H8: reject model-path re-specification via options keys.
@@ -653,8 +708,14 @@ async def _backend_ready(backend: str, port: int, *, probe_timeout_s: float) -> 
     documented health endpoint) fall back to a bare TCP connect: it can't
     distinguish "loaded" from "listening", but it is a strict improvement
     over registering the provider before the port is even open.
+
+    ``backend`` may be a variant name (``llama.cpp-cuda``): the check goes
+    through :func:`base_backend` so a variant keeps the ``/health`` probe.
+    Falling through to the bare TCP connect here would silently re-introduce
+    the bug readiness gating was added to fix (provider registered before the
+    model finished loading).
     """
-    if backend in ("llama.cpp", "vllm"):
+    if base_backend(backend) in ("llama.cpp", "vllm"):
         try:
             async with httpx.AsyncClient(timeout=probe_timeout_s) as client:
                 resp = await client.get(f"http://localhost:{port}/health")
@@ -1032,15 +1093,30 @@ async def api_models(request: Request) -> dict[str, Any]:
 
 @router.get("/api/launcher/option-profiles")
 async def api_option_profiles(request: Request) -> dict[str, Any]:
-    """Return option_profiles from providers.yaml launcher config."""
+    """Return option_profiles from providers.yaml launcher config.
+
+    A backend-variant key inherits the base backend's presets: the response
+    for ``llama.cpp-cuda`` is the ``llama.cpp`` list followed by the
+    variant-specific list, with same-``name`` presets replaced in place
+    (:func:`resolve_option_profiles`). Every declared backend gets an entry
+    so the UI can key on the selected backend name directly, and a config
+    without variants yields exactly the pre-feature payload.
+    """
     cfg = request.app.state.config
     launcher_cfg = getattr(cfg, "launcher", None)
     if not launcher_cfg:
         return {"profiles": {}, "_note": "launcher: block not found in providers.yaml"}
     if not launcher_cfg.option_profiles:
         return {"profiles": {}, "_note": "option_profiles is empty — add option_profiles: under launcher: in providers.yaml"}
+    names = list(launcher_cfg.option_profiles)
+    for name in _backend_names(launcher_cfg.backends):
+        if name not in names:
+            names.append(name)
     result: dict[str, list[dict]] = {}
-    for backend, profiles in launcher_cfg.option_profiles.items():
+    for backend in names:
+        profiles = resolve_option_profiles(launcher_cfg.option_profiles, backend)
+        if not profiles and backend not in launcher_cfg.option_profiles:
+            continue  # 継承もローカル定義も無いバックエンドはキーを作らない
         result[backend] = [{"name": p.name, "args": p.args} for p in profiles]
     return {"profiles": result}
 
@@ -1323,10 +1399,12 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     _require_launcher_token(request)
     cfg = request.app.state.config
     launcher_cfg = getattr(cfg, "launcher", None)
+    _assert_backend_declared(launcher_cfg, req.backend)
     # デバイス選択 → CLI 断片(llama.cpp のみ・選択された場合のみ)。未指定なら
     # None を渡し、既存の argv と完全一致(後方互換)。
     device_args: list[str] | None = None
-    if req.backend == "llama.cpp" and req.device_ids:
+    if base_backend(req.backend) == "llama.cpp" and req.device_ids:
+        await _assert_device_ids_known(launcher_cfg, req.backend, req.device_ids)
         device_args = DeviceSelection(
             device_ids=list(req.device_ids), tensor_split=list(req.tensor_split)
         ).to_cli_args()
@@ -1436,12 +1514,71 @@ async def api_suggest(request: Request, model_path: str = "",
 
 
 def _configured_binary_for(launcher_cfg: Any, backend: str) -> str | None:
-    """launcher.backends[backend].binary を取り出す(未設定なら None)。"""
+    """launcher.backends[backend].binary を取り出す(未設定なら None)。
+
+    ``backend`` はバリアント名 (``llama.cpp-cuda``) でもよい —— ``backends`` は
+    バリアント名もキーに取るので、そのまま引ける。
+    """
     if launcher_cfg and getattr(launcher_cfg, "backends", None):
         bc = launcher_cfg.backends.get(backend)
         if bc and bc.binary:
             return bc.binary
     return None
+
+
+def _assert_backend_declared(launcher_cfg: Any, backend: str) -> None:
+    """バリアント名は ``launcher.backends`` に宣言済みでなければ 400。
+
+    設計 §8。バリアントの実行ファイルパスは ``launcher.backends`` にしか無い
+    ので、宣言されていない名前を受け取ったら**フォールバックせずに拒否**する。
+    基底名 (``llama.cpp`` 等) は PATH 解決で動くため従来どおり宣言不要。
+
+    これは同時に「API はバックエンド名しか受け取らず、実行ファイルパスは常に
+    オペレータの静的設定から来る」という不変則の実装でもある (§11)。
+    """
+    if not variant_of(backend):
+        return
+    declared = getattr(launcher_cfg, "backends", None) or {}
+    if backend not in declared:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown backend variant {backend!r}: not declared in "
+                "launcher.backends. Add it (with a 'binary' path) to "
+                "providers.yaml first."
+            ),
+        )
+
+
+async def _assert_device_ids_known(
+    launcher_cfg: Any, backend: str, device_ids: list[str]
+) -> None:
+    """選択デバイス ID がそのビルドに実在しなければ 400 (設計 §7.2)。
+
+    デバイス ID の名前空間はビルドごとに違う (``CUDA0`` と ``Vulkan0`` は同じ
+    GPU を指さない)。CUDA ビルドで ``CUDA0`` を選んだまま Vulkan ビルドで起動
+    すると ``--device CUDA0`` が渡って llama-server が起動失敗するので、spawn
+    前に弾く。
+
+    ``--list-devices`` 自体が失敗した環境では検証をスキップする
+    (:func:`unknown_device_ids` の best-effort 契約)。
+    """
+    if not device_ids:
+        return
+    configured = _configured_binary_for(launcher_cfg, backend)
+    binary = _resolve_binary(backend, configured)
+    probe = await asyncio.to_thread(detect_llama_devices, binary)
+    unknown = unknown_device_ids(list(device_ids), probe)
+    if unknown:
+        known = [d.id for d in probe.devices]
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Device id(s) {unknown} do not exist in backend {backend!r} "
+                f"(detected: {known}). Device ids are build-specific — "
+                "re-select devices after switching build."
+            ),
+        )
 
 
 @router.get("/api/launcher/devices")
@@ -1504,6 +1641,9 @@ class SweepConfigItem(BaseModel):
     label: str
     device_ids: list[str] = Field(default_factory=list)
     tensor_split: list[float] = Field(default_factory=list)
+    # バリアント横断スイープ: このステップだけ別ビルドで起動する。None なら
+    # ``SweepRequest.backend`` を使う=従来と完全に同一の argv。
+    backend: str | None = None
 
 
 class SweepRequest(BaseModel):
@@ -1621,12 +1761,15 @@ class _SweepRunner:
         step.state = SweepState.STARTING
         self.log_tail.append(f"[sweep] {step.label}: starting")
         device_args = step.selection.to_cli_args() or None
+        # ステップ個別のバックエンド(バリアント横断スイープ)。未指定なら
+        # プラン既定 = 従来の挙動。
+        step_backend = step.backend or self.plan.backend
         try:
             mp = await spawn_process(
                 self.app,
                 self.launcher_cfg,
                 name=f"sweep-{step.label}",
-                backend=self.plan.backend,
+                backend=step_backend,
                 model_path=self.plan.model_path,
                 port=self.plan.port,
                 options=self.plan.options,
@@ -1768,6 +1911,13 @@ async def api_sweep_start(req: SweepRequest, request: Request) -> dict[str, Any]
             status_code=400, detail=f"Port {req.port} is not free."
         )
 
+    # バリアント横断スイープ: 各構成が別ビルドを指せる。宣言されていない
+    # バリアント名は通常起動と同じく 400 で弾く(フォールバックしない)。
+    _assert_backend_declared(launcher_cfg, req.backend)
+    for item in req.configs:
+        if item.backend:
+            _assert_backend_declared(launcher_cfg, item.backend)
+
     labeled = [
         (
             item.label,
@@ -1775,6 +1925,7 @@ async def api_sweep_start(req: SweepRequest, request: Request) -> dict[str, Any]
                 device_ids=list(item.device_ids),
                 tensor_split=list(item.tensor_split),
             ),
+            item.backend,
         )
         for item in req.configs
     ]
@@ -1927,6 +2078,10 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
       <div>
         <label class="block text-xs text-slate-400 mb-1">バックエンド</label>
+        <!-- 選択肢は fetchBackends() が /api/launcher/backends の応答から
+             動的生成する。providers.yaml に llama.cpp-cuda のようなバリアント
+             を書くとここに増える。書かなければ基底 3 つのまま(従来と同一)。
+             初期値は JS が届く前でも表示が崩れないための土台。 -->
         <select id="f-backend" onchange="onBackendChange()">
           <option value="llama.cpp">llama.cpp</option>
           <option value="vllm">vllm</option>
@@ -2031,7 +2186,13 @@ _LAUNCHER_HTML = r"""<!doctype html>
     </p>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       <div>
-        <label class="block text-xs text-slate-400 mb-1">構成候補</label>
+        <div class="flex items-center justify-between mb-1">
+          <label class="block text-xs text-slate-400">構成候補</label>
+          <!-- 宣言済みの llama.cpp バリアントを全部プローブして横断構成を作る。
+               「CUDA ビルドと Vulkan ビルドどちらが速いか」を 1 回で回すための入口。 -->
+          <button id="btn-cross-variant" onclick="buildCrossVariantConfigs()"
+                  class="btn-sm btn-slate hidden">⚙ ビルド横断</button>
+        </div>
         <div id="sweep-configs" class="text-xs text-slate-400 space-y-1 bg-slate-800/40 rounded p-2 max-h-40 overflow-y-auto">
           <span class="text-slate-600">先に「🔍 検出」でデバイスを取得してください</span>
         </div>
@@ -2254,10 +2415,28 @@ _LAUNCHER_HTML = r"""<!doctype html>
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       allBackends = d.backends || {};
+      populateBackendSelect();
+      updateCrossVariantButton();
     } catch (e) {
       console.error("[Launcher] fetchBackends failed:", e);
     }
     renderBinaryHint();  // always call outside try-catch so errors surface
+  };
+
+  // バックエンドセレクトをサーバ応答から作り直す。バリアント
+  // (llama.cpp-cuda 等) には ⚙ を付けて「対応ランタイムを自分で入れる
+  // 上級者向け」であることを示す。バリアントが 0 個なら従来と同じ 3 択。
+  const populateBackendSelect = () => {
+    const sel = document.getElementById("f-backend");
+    const names = Object.keys(allBackends);
+    if (!names.length) return;
+    const prev = sel.value;
+    sel.innerHTML = names.map((n) => {
+      const info = allBackends[n] || {};
+      const label = info.variant ? `${n} ⚙` : n;
+      return `<option value="${esc(n)}">${esc(label)}</option>`;
+    }).join("");
+    sel.value = names.includes(prev) ? prev : names[0];
   };
 
   const renderBinaryHint = () => {
@@ -2276,10 +2455,20 @@ _LAUNCHER_HTML = r"""<!doctype html>
     const pathColor = info.found
       ? (info.is_custom ? "#818cf8" : "#4ade80")  // indigo-400 / green-400
       : "#f87171";  // red-400
-    hint.innerHTML = dot
+    // バリアント (特化ビルド) は対応 GPU ランタイムをユーザー自身が入れて
+    // いる前提なので、選択中はその旨を一行添える。基底名では出さない
+    // (通常利用者の画面を汚さない)。
+    const runtimeNote = info.variant
+      ? `<div style="color:#fbbf24;margin-top:2px">⚙ ${esc(info.variant)} ビルド`
+        + ` — 対応ランタイム(CUDA / Vulkan / ROCm)が導入済みの環境でのみ動作します</div>`
+      : "";
+    hint.innerHTML = "<div style=\"display:flex;align-items:center;overflow:hidden\">"
+      + dot
       + `<span style="font-family:monospace;color:${pathColor};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(info.resolved)}</span>`
-      + `<span style="color:#64748b;margin-left:6px;white-space:nowrap;flex-shrink:0">(${label} — ${statusText})</span>`;
-    hint.style.cssText = "display:flex;align-items:center;gap:0;overflow:hidden";
+      + `<span style="color:#64748b;margin-left:6px;white-space:nowrap;flex-shrink:0">(${label} — ${statusText})</span>`
+      + "</div>"
+      + runtimeNote;
+    hint.style.cssText = "overflow:hidden";
     // Enable/disable launch button based on binary availability
     if (!info.found) {
       btn.disabled = true;
@@ -2320,6 +2509,20 @@ _LAUNCHER_HTML = r"""<!doctype html>
   };
 
   window.onBackendChange = () => {
+    // ★ デバイス id の名前空間はビルドごとに違う ("CUDA0" と "Vulkan0" は
+    //   同じ GPU ではない)。バックエンド/バリアントを切り替えたら選択を破棄
+    //   して検出やり直しにする。残したままだと --device CUDA0 が Vulkan
+    //   ビルドに渡って起動失敗する (サーバ側でも 400 で弾くが、UI 側で
+    //   先に消しておくのが本筋)。
+    _devices = [];
+    _deviceSel = {};
+    _deviceOk = false;
+    _autoConfigs = [];
+    const box = document.getElementById("device-list");
+    if (box) {
+      box.innerHTML =
+        '<span class="text-slate-600">「検出」を押してデバイスを取得</span>';
+    }
     populateProfileSelect();
     renderBinaryHint();
     updateDeviceBlock();
@@ -2360,7 +2563,17 @@ _LAUNCHER_HTML = r"""<!doctype html>
   let _deviceOk = false;
   let _autoConfigs = [];    // サーバ生成のスイープ構成候補
 
-  const isLlama = () => document.getElementById("f-backend").value === "llama.cpp";
+  // バックエンド名は "llama.cpp" だけでなく "llama.cpp-cuda" のようなバリアント
+  // 名も来る (docs/designs/launcher-multi-build.md)。素の === 比較にすると
+  // バリアント選択時にデバイス欄が出なくなるので基底名で判定する。
+  const baseBackend = (name) => {
+    for (const b of ["llama.cpp", "vllm", "mlx"]) {
+      if (name === b || name.startsWith(b + "-")) return b;
+    }
+    return name;
+  };
+  const isLlama = () =>
+    baseBackend(document.getElementById("f-backend").value) === "llama.cpp";
 
   // デバイス id → バックエンド接頭辞(末尾数字を除く)。launcher_devices の
   // backend_of と同じ規則。"CUDA0"→"CUDA" / "Vulkan2"→"Vulkan" / "MTL0"→"MTL"。
@@ -2488,13 +2701,56 @@ _LAUNCHER_HTML = r"""<!doctype html>
   // 0 MiB 除外・バックエンド単位のグループ化・跨バックエンド混成の除外は
   // すべてサーバ側ロジックに一本化されている。
   const buildSweepConfigs = () => {
+    const backend = document.getElementById("f-backend").value;
     _sweepConfigs = (_autoConfigs || []).map(c => ({
       label: c.label,
       device_ids: c.device_ids || [],
       tensor_split: c.tensor_split || [],
+      backend: backend,
       checked: true,
     }));
     renderSweepConfigs();
+  };
+
+  // 宣言済みの llama.cpp バリアントを全部プローブし、ビルド横断の構成を作る。
+  // ラベルにビルド名を前置するので {config} 経由でベンチ結果も見分けられる。
+  // ビルド間の混成構成は作らない(1 プロセスは 1 実行ファイルなので原理的に不可)。
+  window.buildCrossVariantConfigs = async () => {
+    const names = Object.keys(allBackends).filter(n => baseBackend(n) === "llama.cpp");
+    if (names.length < 2) {
+      showSweepErr("横断できるビルドが 1 つしかありません。providers.yaml の "
+                   + "launcher.backends に llama.cpp-cuda などを追加してください");
+      return;
+    }
+    showSweepErr("");
+    const box = document.getElementById("sweep-configs");
+    box.innerHTML = '<span class="text-slate-600">全ビルドを検出中…</span>';
+    const collected = [];
+    for (const name of names) {
+      try {
+        const r = await fetch("/api/launcher/devices?backend=" + encodeURIComponent(name));
+        const d = await r.json();
+        if (!r.ok || !d.ok) continue;   // 検出できないビルドは黙って飛ばす
+        const prefix = (allBackends[name] || {}).variant || name;
+        for (const c of (d.auto_configs || [])) {
+          collected.push({
+            label: prefix + " / " + c.label,
+            device_ids: c.device_ids || [],
+            tensor_split: c.tensor_split || [],
+            backend: name,
+            checked: true,
+          });
+        }
+      } catch (_) {}
+    }
+    if (!collected.length) {
+      showSweepErr("どのビルドでもデバイスを検出できませんでした");
+      renderSweepConfigs();
+      return;
+    }
+    _sweepConfigs = collected;
+    renderSweepConfigs();
+    statusMsg(`ビルド横断構成 ${collected.length} 件を生成 (${names.length} ビルド)`);
   };
 
   const renderSweepConfigs = () => {
@@ -2510,6 +2766,15 @@ _LAUNCHER_HTML = r"""<!doctype html>
         <span class="text-slate-500 font-mono ml-auto">${esc(c.device_ids.join(","))}${c.tensor_split.length ? " · " + c.tensor_split.join(",") : ""}</span>
       </label>`
     ).join("");
+  };
+
+  // 「⚙ ビルド横断」ボタンは llama.cpp のビルドが 2 つ以上宣言されている
+  // ときだけ出す(バリアントを書いていない利用者の画面は従来どおり)。
+  const updateCrossVariantButton = () => {
+    const btn = document.getElementById("btn-cross-variant");
+    if (!btn) return;
+    const n = Object.keys(allBackends).filter(x => baseBackend(x) === "llama.cpp").length;
+    btn.classList.toggle("hidden", n < 2);
   };
 
   window.onSweepCfgToggle = () => {
@@ -2529,7 +2794,8 @@ _LAUNCHER_HTML = r"""<!doctype html>
     const model = document.getElementById("f-model").value.trim();
     if (!model) { showSweepErr("起動フォームでモデルパスを選択してください"); return; }
     const configs = _sweepConfigs.filter(c => c.checked)
-      .map(c => ({label: c.label, device_ids: c.device_ids, tensor_split: c.tensor_split}));
+      .map(c => ({label: c.label, device_ids: c.device_ids,
+                  tensor_split: c.tensor_split, backend: c.backend || null}));
     if (!configs.length) { showSweepErr("構成を 1 つ以上選択してください"); return; }
     const port = parseInt(document.getElementById("sweep-port").value);
     const cmd = document.getElementById("sweep-cmd").value.trim();
@@ -2597,7 +2863,8 @@ _LAUNCHER_HTML = r"""<!doctype html>
       const tok = sm.tokens_per_sec != null ? sm.tokens_per_sec : "—";
       const ttft = sm.ttft_ms != null ? sm.ttft_ms : "—";
       const dev = (s.device_ids || []).join(",")
-        + ((s.tensor_split || []).length ? " · " + s.tensor_split.join(",") : "");
+        + ((s.tensor_split || []).length ? " · " + s.tensor_split.join(",") : "")
+        + (s.backend ? "  [" + s.backend + "]" : "");
       const exit = s.bench_exit_code != null ? s.bench_exit_code : "—";
       return `<tr>
         <td class="py-2 pr-3">${esc(s.label)}</td>
@@ -2628,7 +2895,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
 
     // デバイス選択 (llama.cpp のみ)。未選択なら空 → サーバ側で --device 不付与。
     let deviceIds = [], tensorSplit = [];
-    if (backend === "llama.cpp") {
+    if (baseBackend(backend) === "llama.cpp") {
       deviceIds = selectedDeviceIds();
       const ts = document.getElementById("f-tsplit").value.trim();
       if (ts && deviceIds.length > 1) {

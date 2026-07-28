@@ -290,9 +290,118 @@ MODELS 一覧の各モデルには、CodeRouter を動かしているマシン�
 
 ---
 
+## 特化ビルドの切り替え (llama.cpp)
+
+**v2.11.0+**。llama.cpp を GPU ランタイム別にビルドしてある環境で、起動ごとにどのビルドの `llama-server` を使うか選べます。GUI/Web 両対応。
+
+### なぜ必要か
+
+同じマシンでもビルドによって見えるデバイスが違います。実機 (Ryzen AI Max 環境 + RTX 5090 + RTX 3090 + Radeon 8060S) の `--list-devices`:
+
+| ビルド | 列挙されるデバイス |
+| --- | --- |
+| `build/` | (CPU のみ) |
+| `build-cuda/` | `CUDA0` RTX 5090 (32149 MiB) / `CUDA1` RTX 3090 (24123 MiB) |
+| `build-vulkan/` | `Vulkan0` RTX 3090 / `Vulkan1` RTX 5090 / `Vulkan2` Radeon 8060S (114164 MiB) |
+| `build-rocm/` | `ROCm0` Radeon 8060S (98304 MiB) |
+
+Radeon 8060S に載せたいなら Vulkan か ROCm、NVIDIA 2 枚で tensor-split したいなら CUDA、という択があります。モデルによって最適なビルドが変わるので、`providers.yaml` を書き換えて CodeRouter を再起動せずに切り替えられるようにするのが本機能です。
+
+### 設定
+
+`launcher.backends` のキーに `<バックエンド名>-<バリアント>` を追加します。**バリアントは `binary` 必須**です。
+
+```yaml
+launcher:
+  backends:
+    # 基底名。binary 省略なら PATH の llama-server (従来どおり)
+    llama.cpp:
+      binary: ~/llm/apps/llama.cpp/build/bin/llama-server
+
+    # 特化ビルド = バリアント。binary は必須
+    llama.cpp-cuda:
+      binary: ~/llm/apps/llama.cpp/build-cuda/bin/llama-server
+    llama.cpp-vulkan:
+      binary: ~/llm/apps/llama.cpp/build-vulkan/bin/llama-server
+    llama.cpp-rocm:
+      binary: ~/llm/apps/llama.cpp/build-rocm/bin/llama-server
+```
+
+バリアント名は小文字英数と `.` `_` `-` のみ(`[a-z0-9][a-z0-9._-]*`)。基底名は `llama.cpp` / `vllm` / `mlx` のいずれかです。
+
+`binary` が必須なのは事故防止のためです。省略を許すと PATH の `llama-server` にフォールバックし、**CUDA ビルドを指定したつもりで素のビルドが静かに動く**という最も気づきにくい状態になります。設定ロード時にエラーにしています。
+
+### 使い方
+
+書いたバリアントは「バックエンド」セレクトに `llama.cpp-cuda ⚙` のように増えます。`⚙` は「対応ランタイムが必要な上級者向け」の印です。選ぶと解決されたパスの下に前提ランタイムの注記が出ます。
+
+**バリアントを書かなければセレクトは従来どおり 3 択のまま**で、生成される起動コマンドも 1 バイトも変わりません。特化ビルドは書いた人にだけ見えるオプションです。
+
+### 前提ランタイム(ユーザー側で導入)
+
+CodeRouter はドライバやランタイムを導入しません。ビルド済みバイナリを選ぶだけです。
+
+| バリアント | 必要なもの |
+| --- | --- |
+| `-cuda` | NVIDIA ドライバ + CUDA ランタイム |
+| `-vulkan` | Vulkan ランタイム (`libvulkan`) + ICD |
+| `-rocm` | ROCm (`hip`) |
+
+導入状況の事前検査もしません。代わりに **そのビルドで `--list-devices` が成功するか** を実質的な健全性チェックとして使います。失敗した場合は「デバイスを列挙できません」と表示しますが、起動自体は止めません(検出できないが動く環境を潰さないため)。
+
+> `launcher.auto_restart` を有効にしている環境でランタイム未導入のビルドを選ぶと、クラッシュ→再起動が走ります。`auto_restart_max_attempts`(既定 3)で打ち切られて `status='error'` に落ち着くので無限ループはしませんが、ログを確認してください。
+
+### デバイス選択との連動(重要)
+
+**デバイス ID の名前空間はビルドごとに違います。** `CUDA0` と `Vulkan0` は同じ GPU を指しません。上の実機例では `CUDA0` が RTX 5090 なのに `Vulkan0` は RTX 3090 です。
+
+そのため、バックエンドを切り替えると**デバイス選択は自動的にクリアされ**、再検出を求められます。仮に持ち越したまま起動しようとしても、サーバ側が「そのビルドに存在しない ID」を検出して 400 で拒否します(`--device CUDA0` が Vulkan ビルドに渡ると `llama-server` が起動失敗するため)。
+
+### ビルド別の option_profiles
+
+`option_profiles` にもバリアント名のキーを書けます。基底名のプロファイルが**継承**され、バリアント固有のものが後ろに追加されます。同名は基底側と同じ位置で差し替えられます。
+
+```yaml
+launcher:
+  option_profiles:
+    llama.cpp:                   # 全ビルドに継承される
+      - name: 標準
+        args: { "-ngl": 99, "--ctx-size": 4096 }
+    llama.cpp-cuda:              # CUDA ビルド専用(上の「標準」の後ろに並ぶ)
+      - name: 5090単体・速度重視
+        args: { "-ngl": 99, "--ctx-size": 8192 }
+```
+
+共通プロファイルをビルドごとに複製する必要はありません。
+
+### ビルド横断ベンチスイープ
+
+llama.cpp のビルドを 2 つ以上宣言すると、ベンチスイープ欄に **⚙ ビルド横断** ボタンが出ます。押すと宣言済みの全ビルドをプローブし、`cuda / CUDA0 単体` `vulkan / Vulkan2 単体` のようにビルド名を前置した構成候補を一括生成します。そのまま実行すれば、同一モデルを各ビルドで順に起動してベンチし、どのビルドが速いかを 1 回で比較できます。
+
+ラベルはベンチコマンドの `{config}` に展開されるので、結果 JSON もビルド別に見分けられます。なお**ビルド間の混成構成は作りません** — 1 プロセスは 1 つの実行ファイルでしか動かないので原理的に不可能です。
+
+### モデル別にビルドを固定する (launcher.swap)
+
+`launcher.swap` のカタログでもバリアントを指定できます。モデルごとに最適なビルドで自動起動させたい場合に使います。
+
+```yaml
+launcher:
+  swap:
+    enabled: true
+    models:
+      - name: qwen3-30b
+        backend: llama.cpp-cuda      # このモデルは常に CUDA ビルドで起動
+        model_path: ~/models/Qwen3-30B-A3B-Q4_K_M.gguf
+        port: 18081
+```
+
+バリアントを指定する場合、そのバリアントが `launcher.backends` に宣言されていることが設定ロード時に検証されます(実行ファイルパスが `backends` にしか無いため)。
+
+---
+
 ## デバイス選択 (llama.cpp)
 
-複数 GPU 環境で `llama-server` に `--device` / `--tensor-split` を渡し、オフロード先を明示的に選べます。GUI/Web 両対応。**llama.cpp のみ**(vllm / mlx にはデバイス選択欄自体がありません)。
+複数 GPU 環境で `llama-server` に `--device` / `--tensor-split` を渡し、オフロード先を明示的に選べます。GUI/Web 両対応。**llama.cpp のみ**(vllm / mlx にはデバイス選択欄自体がありません)。バリアント (`llama.cpp-cuda` 等) でも同様に使えます。
 
 ### 検出
 
@@ -571,6 +680,10 @@ launcher:
 ```
 
 `binary` を省略または `null` にすると、PATH からデフォルト名(`llama-server` / `python`)を探します。チルダ (`~`) 展開に対応。vLLM / MLX 用の venv は `~/.coderouter/backends/<バックエンド名>/` 配下にバックエンドごとに分けて作るのが推奨です(詳細は [インストール手順書](./install-backends.md))。UI の「バックエンド」セレクト下に解決されたパスが表示されます。
+
+キーには `llama.cpp-cuda` のような**バリアント名**も書けます(v2.11.0+)。同じ llama.cpp を GPU ランタイム別にビルドしてある環境で、起動ごとにどのビルドを使うか選べるようになります。詳細は [特化ビルドの切り替え](#特化ビルドの切り替え-llamacpp) を参照。
+
+> **v2.11.0 の変更(破壊的)**: `launcher.backends` のキーは `llama.cpp` / `vllm` / `mlx` か、その `-<バリアント>` 形式でなければ**設定ロード時にエラー**になります。以前は `llamacpp:` のような打ち間違いが黙って無視されていました(バックエンド一覧が固定 3 キーだったため)。起動できなくなった場合はキーの綴りを確認してください。
 
 ### `model_dirs`
 

@@ -23,13 +23,14 @@ import socket
 import subprocess  # controlled: fixed argv, no shell
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "KNOWN_BASE_BACKENDS",
     "DeviceProbe",
     "DeviceSelection",
     "LlamaDevice",
@@ -37,19 +38,138 @@ __all__ = [
     "SweepState",
     "SweepStep",
     "backend_of",
+    "base_backend",
     "build_auto_sweep_configs",
+    "build_cross_variant_sweep_configs",
     "build_sweep_steps",
     "detect_llama_devices",
     "group_by_backend",
     "is_port_free",
+    "is_valid_backend_name",
+    "is_variant",
     "load_latest_results",
     "parse_list_devices",
     "render_bench_command",
     "reset_device_cache",
+    "resolve_option_profiles",
     "selectable_devices",
     "suggest_tensor_split",
     "summarize_results",
+    "unknown_device_ids",
+    "variant_of",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 2.0 バックエンド名の正規化 (基底名 + バリアント)
+# ---------------------------------------------------------------------------
+
+# llama.cpp を CUDA / Vulkan / ROCm 向けに個別ビルドしている環境では、同じ
+# "llama.cpp" でもビルドごとに実行ファイルも列挙されるデバイスも違う。これを
+# 設定・UI・API の全面で扱うため、バックエンド名に "<基底名>-<バリアント>"
+# 形式を認める:
+#
+#   llama.cpp          基底名 (素のビルド / PATH の llama-server)
+#   llama.cpp-cuda     build-cuda/bin/llama-server
+#   llama.cpp-vulkan   build-vulkan/bin/llama-server
+#   llama.cpp-rocm     build-rocm/bin/llama-server
+#
+# ★重要: バックエンド名は実行ファイルの選択だけでなく「どのフラグ体系か」
+# 「readiness を /health で見るか」「MTP を使えるか」といった挙動の分岐にも
+# 使われている。それらの分岐は必ず :func:`base_backend` を通して判定すること。
+# 素の文字列比較のままバリアント名が届くと、モデル上書きガードが無効化され
+# たり readiness が TCP connect に退行したりと、例外を出さずに壊れる
+# (docs/designs/launcher-multi-build.md §4 に全分岐の一覧がある)。
+KNOWN_BASE_BACKENDS: tuple[str, ...] = ("llama.cpp", "vllm", "mlx")
+
+# バリアント部分に許す文字。プロバイダ名・プロファイル名・ログに混ざっても
+# 壊れない集合に限定し、パス区切りやシェルメタ文字を通さない。
+_VARIANT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def base_backend(name: str) -> str:
+    """``"llama.cpp-cuda"`` → ``"llama.cpp"``。基底名そのものはそのまま返す。
+
+    既知基底名との**最長一致**で判定する。``name.split("-", 1)[0]`` にしない
+    のは意図的で、基底名自体がハイフンを含むようになった日に静かに誤判定する
+    のを防ぐため。既知基底名で始まらない名前は加工せずそのまま返し、呼び出し
+    側の既存 "Unknown backend" 経路に委ねる。
+    """
+    best = ""
+    for base in KNOWN_BASE_BACKENDS:
+        if name == base:
+            return base
+        if name.startswith(base + "-") and len(base) > len(best):
+            best = base
+    return best or name
+
+
+def variant_of(name: str) -> str | None:
+    """``"llama.cpp-cuda"`` → ``"cuda"``。基底名そのものなら ``None``。
+
+    ``"llama.cpp-"`` のようにバリアント部が空の場合も ``None`` を返す
+    (妥当性判定は :func:`is_valid_backend_name` が担う)。
+    """
+    base = base_backend(name)
+    if base == name or not name.startswith(base + "-"):
+        return None
+    return name[len(base) + 1 :] or None
+
+
+def is_variant(name: str) -> bool:
+    """``name`` が ``<既知基底名>-<バリアント>`` 形式かどうか。"""
+    return variant_of(name) is not None
+
+
+def is_valid_backend_name(name: str) -> bool:
+    """既知基底名そのもの、または既知基底名 + 妥当なバリアントかどうか。
+
+    ``launcher.backends`` のキー検証に使う。``"llamacpp"`` (typo) や
+    ``"llama.cpp-CUDA"`` (大文字) / ``"llama.cpp-"`` (空) は False。
+    """
+    if name in KNOWN_BASE_BACKENDS:
+        return True
+    variant = variant_of(name)
+    return variant is not None and _VARIANT_RE.match(variant) is not None
+
+
+def resolve_option_profiles[P](
+    profiles_by_backend: Mapping[str, Sequence[P]], backend: str
+) -> list[P]:
+    """バックエンド(バリアント可)に適用する option_profiles を解決する。
+
+    基底名のリスト(継承)を先に、バリアント固有のリストを後に連結する。
+    ``name`` が衝突したらバリアント固有が**同じ位置で置き換える** —— 並び順を
+    安定させ、末尾に重複を作らないため。``backend`` が基底名そのものなら
+    ``profiles_by_backend.get(backend, [])`` と完全に同一の結果になる
+    (後方互換)。
+
+    要素は ``.name`` 属性を持つ任意の型でよい。pydantic の
+    ``LauncherOptionProfile`` と GUI の dataclass ``OptionProfile`` の双方から
+    使うため、この層は pydantic に依存しない (モジュール冒頭の方針どおり)。
+    """
+    base = base_backend(backend)
+    inherited = list(profiles_by_backend.get(base, []))
+    if backend == base:
+        return inherited
+    own = list(profiles_by_backend.get(backend, []))
+    if not own:
+        return inherited
+
+    by_name = {p.name: p for p in own}  # type: ignore[attr-defined]
+    merged: list[P] = []
+    replaced: set[str] = set()
+    for p in inherited:
+        name = p.name  # type: ignore[attr-defined]
+        if name in by_name:
+            merged.append(by_name[name])  # 継承分と同じ位置で差し替え
+            replaced.add(name)
+        else:
+            merged.append(p)
+    merged.extend(
+        p for p in own if p.name not in replaced  # type: ignore[attr-defined]
+    )
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +369,24 @@ class DeviceSelection:
         return args
 
 
+def unknown_device_ids(device_ids: Sequence[str], probe: DeviceProbe) -> list[str]:
+    """``device_ids`` のうち ``probe`` に存在しないものを返す(空なら健全)。
+
+    バックエンドバリアントを切り替えるとデバイス ID の名前空間も変わる
+    (``CUDA0`` と ``Vulkan0`` は同じ GPU を指さない)。CUDA ビルドで
+    ``CUDA0`` を選んだまま Vulkan ビルドで起動すると ``--device CUDA0`` が
+    Vulkan ビルドに渡って起動失敗するので、spawn 前に弾くための判定。
+
+    ``probe.ok`` が False (``--list-devices`` 自体が失敗) のときは **常に空
+    リスト** を返す。デバイスを列挙できない環境で機能を殺さないための
+    best-effort 原則 (``hardware.py`` の 5-deps 不変則と同じ姿勢)。
+    """
+    if not probe.ok:
+        return []
+    known = {d.id for d in probe.devices}
+    return [d for d in device_ids if d not in known]
+
+
 # ---------------------------------------------------------------------------
 # 2.3 tensor-split 自動提案
 # ---------------------------------------------------------------------------
@@ -357,6 +495,36 @@ def build_auto_sweep_configs(
     return configs
 
 
+def build_cross_variant_sweep_configs(
+    probes: Sequence[tuple[str, Sequence[LlamaDevice]]],
+    *,
+    by: str = "total",
+) -> list[tuple[str, str, DeviceSelection]]:
+    """複数ビルド(バリアント)を横断するスイープ構成を生成する。
+
+    ``probes`` は ``[(backend_name, devices), ...]`` —— 各バリアントを
+    ``--list-devices`` でプローブした結果。返すのは
+    ``[(label, backend_name, DeviceSelection), ...]`` で、ラベルには
+    バリアント名を前置する (``"cuda / CUDA0 単体"``)。``{config}`` プレース
+    ホルダ経由でベンチ結果 JSON もビルド別に見分けられる。
+
+    ``build_auto_sweep_configs`` を各ビルドに対して呼ぶだけなので、
+    「バックエンド跨ぎの混成構成は作らない」という既存規則はビルド内でも
+    そのまま維持される。ビルド間の混成 (CUDA ビルドの CUDA0 と Vulkan
+    ビルドの Vulkan2 を同時に、など) は **原理的に不可能** ——1 プロセスは
+    1 つの実行ファイルでしか動かないので、ここでも作らない。
+
+    これで「同一モデルを CUDA ビルドと Vulkan ビルドで順に起動してベンチし、
+    どちらが速いか比較する」が 1 回のスイープで回る。
+    """
+    out: list[tuple[str, str, DeviceSelection]] = []
+    for backend, devices in probes:
+        prefix = variant_of(backend) or backend
+        for label, selection in build_auto_sweep_configs(devices, by=by):
+            out.append((f"{prefix} / {label}", backend, selection))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 2.4 スイープ計画・状態
 # ---------------------------------------------------------------------------
@@ -382,6 +550,10 @@ class SweepStep:
     error: str | None = None
     started_at: float = 0.0
     ended_at: float = 0.0
+    # ステップ個別のバックエンド(バリアント横断スイープ用)。None なら
+    # ``SweepPlan.backend`` を使う=従来と完全に同じ argv。末尾の任意
+    # フィールドなので既存の位置指定コンストラクタ呼び出しは無影響。
+    backend: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -393,6 +565,7 @@ class SweepStep:
             "results_path": self.results_path,
             "summary": self.summary,
             "error": self.error,
+            "backend": self.backend,
         }
 
 
@@ -400,7 +573,7 @@ class SweepStep:
 class SweepPlan:
     steps: list[SweepStep]
     model_path: str
-    backend: str  # 当面 "llama.cpp"
+    backend: str  # プラン既定。step.backend が None のとき使われる
     port: int
     bench_cmd_template: str
     results_dir: str | None = None
@@ -409,9 +582,20 @@ class SweepPlan:
 
 
 def build_sweep_steps(
-    labeled: Sequence[tuple[str, DeviceSelection]],
+    labeled: Sequence[tuple[str, DeviceSelection]]
+    | Sequence[tuple[str, DeviceSelection, str | None]],
 ) -> list[SweepStep]:
-    return [SweepStep(label=lbl, selection=sel) for lbl, sel in labeled]
+    """``(label, selection)`` または ``(label, selection, backend)`` から生成。
+
+    3 要素形はバリアント横断スイープ用 (ステップごとに実行ファイルが違う)。
+    2 要素形は従来どおり ``backend=None`` になり、プラン既定で動く。
+    """
+    steps: list[SweepStep] = []
+    for item in labeled:
+        lbl, sel = item[0], item[1]
+        backend = item[2] if len(item) == 3 else None
+        steps.append(SweepStep(label=lbl, selection=sel, backend=backend))
+    return steps
 
 
 # ---------------------------------------------------------------------------

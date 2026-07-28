@@ -45,6 +45,7 @@ import re
 from pathlib import Path
 
 from coderouter.gguf_introspect import try_read_gguf_metadata
+from coderouter.launcher_devices import base_backend
 
 __all__ = ["find_draft_companion", "resolve_speculative"]
 
@@ -248,7 +249,10 @@ def resolve_speculative(
 
     # 1. Non-llama.cpp backends do not support speculation. Reject explicit
     #    use; otherwise (auto default, no draft) stay a silent no-op.
-    if backend != _LLAMA_CPP:
+    #    ``backend`` may be a variant (``llama.cpp-cuda``) — every llama.cpp
+    #    build supports speculation, so compare the base name. A plain ``!=``
+    #    here would silently drop the spec flags for variants.
+    if base_backend(backend) != _LLAMA_CPP:
         if draft_model_path or mtp_mode == "off":
             raise ValueError(
                 "draft_model_path / mtp_mode are only supported for llama.cpp"

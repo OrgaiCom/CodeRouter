@@ -113,6 +113,8 @@ Web版で起動した backend は `providers.yaml` を編集しなくても prov
 
 > **複数 GPU を積んでいるなら**: LAUNCH フォームの「🔍 検出」で `--device` / `--tensor-split` を選択でき、「📊 ベンチスイープ」で構成ごとの性能を自動比較できます(いずれも llama.cpp のみ)。詳細は [デバイス選択](./launcher.md#デバイス選択-llamacpp) / [ベンチスイープ](./launcher.md#ベンチスイープ-llamacpp)。
 
+> **llama.cpp を CUDA / Vulkan / ROCm 別にビルドしているなら**: `backends` に `llama.cpp-cuda` などを登録すると「バックエンド」セレクトで起動ごとにビルドを選べます(v2.11.0+)。ビルドによって見えるデバイスが変わるので、モデルごとに最適なビルドを選べます。詳細は [特化ビルドの切り替え](./launcher.md#特化ビルドの切り替え-llamacpp)。
+
 ---
 
 ## 5. Claude Code から使う
