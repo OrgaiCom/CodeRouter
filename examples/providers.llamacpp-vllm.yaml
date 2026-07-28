@@ -199,6 +199,55 @@ launcher:
           "--ubatch-size": 512
           "--threads": 4
 
+    # ── ビルド別オプションプロファイル (v2.11.0+) ─────────────────────────
+    # 上の backends でバリアント (llama.cpp-cuda 等) を宣言している場合、
+    # option_profiles にも同じキーを書けます。
+    #
+    #   * 基底名 "llama.cpp" のプロファイルは **全ビルドに継承** されます。
+    #     共通設定をビルドごとに複製する必要はありません。
+    #   * バリアント固有のものは継承分の **後ろ** に並びます。
+    #   * name が衝突した場合はバリアント側が **継承分と同じ位置で差し替え**
+    #     ます (末尾に重複を作りません)。
+    #
+    # 例えば上の "GPU フル活用 (Vulkan/AMD)" は --no-mmap が Vulkan ビルド
+    # 専用の設定なので、バリアントを使うなら llama.cpp-vulkan 側へ移すのが
+    # 素直です (基底名に置いたままだと CUDA ビルドの選択肢にも並びます)。
+    #
+    # llama.cpp-cuda:
+    #   - name: "5090 単体・速度重視"
+    #     args:
+    #       "-ngl": 99
+    #       "--ctx-size": 65536
+    #       "--device": "CUDA0"        # ← id は CUDA ビルドの --list-devices が正
+    #
+    #   # 継承した "GPU フル活用 (CUDA/Metal)" を CUDA ビルドだけ上書きする例。
+    #   # name を一致させると、継承分と同じ位置で置き換わります。
+    #   - name: "GPU フル活用 (CUDA/Metal)"
+    #     args:
+    #       "-ngl": 99
+    #       "--ctx-size": 131072       # 5090 の 32GB なら伸ばせる
+    #       "--batch-size": 1024
+    #
+    # llama.cpp-vulkan:
+    #   - name: "Radeon 8060S 単体 (統合メモリ 114GB)"
+    #     args:
+    #       "-ngl": 99
+    #       "--ctx-size": 131072
+    #       "--no-mmap": true          # Vulkan では実質必須
+    #       "--device": "Vulkan2"      # ← id は Vulkan ビルドの --list-devices が正
+    #
+    # llama.cpp-rocm:
+    #   - name: "Radeon 8060S (ROCm)"
+    #     args:
+    #       "-ngl": 99
+    #       "--ctx-size": 32768
+    #       "--device": "ROCm0"
+    #
+    # ★ --device の id はビルドごとに別の名前空間です。CUDA0 と Vulkan0 は
+    #   同じ GPU を指しません。プロファイルに --device を書くときは、その
+    #   ビルドの --list-devices の出力に合わせてください (UI の「🔍 検出」で
+    #   確認できます)。
+
     # ── vllm オプションプロファイル ───────────────────────────────────────────
     vllm:
 
