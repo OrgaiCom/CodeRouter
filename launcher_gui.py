@@ -24,6 +24,7 @@ import contextlib
 import os
 import platform
 import queue
+import re
 import shlex
 import shutil
 import socket
@@ -87,14 +88,20 @@ try:
         SweepState,
         SweepStep,
         backend_of,
+        base_backend,
         build_auto_sweep_configs,
         build_sweep_steps,
         detect_llama_devices,
         is_port_free,
+        is_valid_backend_name,
+        is_variant,
         load_latest_results,
         render_bench_command,
+        resolve_option_profiles,
         selectable_devices,
         suggest_tensor_split,
+        unknown_device_ids,
+        variant_of,
     )
     _HAS_DEVICES = True
 except ImportError:  # standalone GUI (coderouter package not importable)
@@ -116,6 +123,39 @@ except ImportError:  # standalone GUI (coderouter package not importable)
     render_bench_command = None  # type: ignore
     selectable_devices = None  # type: ignore
     suggest_tensor_split = None  # type: ignore
+    unknown_device_ids = None  # type: ignore
+
+    # ★ バックエンド名の正規化だけは None にできない。_build_cmd /
+    #   _backend_ready が _HAS_DEVICES に関係なく通る経路で使うため、
+    #   standalone 実行でも動く同等の実装をここに置く (stdlib のみ)。
+    #   本体は coderouter/launcher_devices.py §2.0 で、仕様はそちらが正。
+    KNOWN_BASE_BACKENDS = ("llama.cpp", "vllm", "mlx")  # type: ignore[misc]
+
+    def base_backend(name: str) -> str:  # type: ignore[misc]
+        """``"llama.cpp-cuda"`` → ``"llama.cpp"`` (既知基底名との最長一致)。"""
+        best = ""
+        for _base in KNOWN_BASE_BACKENDS:
+            if name == _base:
+                return _base
+            if name.startswith(_base + "-") and len(_base) > len(best):
+                best = _base
+        return best or name
+
+    def variant_of(name: str) -> str | None:  # type: ignore[misc]
+        """``"llama.cpp-cuda"`` → ``"cuda"``。基底名そのものなら None。"""
+        _base = base_backend(name)
+        if _base == name or not name.startswith(_base + "-"):
+            return None
+        return name[len(_base) + 1 :] or None
+
+    def is_variant(name: str) -> bool:  # type: ignore[misc]
+        return variant_of(name) is not None
+
+    def is_valid_backend_name(name: str) -> bool:  # type: ignore[misc]
+        if name in KNOWN_BASE_BACKENDS:
+            return True
+        _v = variant_of(name)
+        return _v is not None and re.match(r"^[a-z0-9][a-z0-9._-]*$", _v) is not None
 
 # ---------------------------------------------------------------------------
 # Config
@@ -350,14 +390,49 @@ def _load_config(path: str | None) -> LauncherConfig:
 
 
 def _resolve_binary(backend: str, cfg: LauncherConfig) -> str:
+    """バックエンド(バリアント可)の実行ファイルを解決する。
+
+    ``cfg.backends`` はバリアント名 (``llama.cpp-cuda``) もキーに取る。既定名の
+    フォールバックは基底名で引く。実運用ではバリアントは ``binary`` 必須
+    (config ロード時に検証) なのでフォールバックには入らない。
+    """
     bc = cfg.backends.get(backend)
-    raw = (bc.binary if bc else None) or _BACKEND_DEFAULTS.get(backend, backend)
+    raw = (bc.binary if bc else None) or _BACKEND_DEFAULTS.get(
+        base_backend(backend), backend
+    )
     return str(Path(raw).expanduser())
 
 
 def _check_binary(binary: str) -> bool:
     expanded = str(Path(binary).expanduser())
     return Path(expanded).is_file() or shutil.which(expanded) is not None
+
+
+def _backend_names(cfg: LauncherConfig) -> list[str]:
+    """バックエンドセレクトに出す名前の一覧(順序が並び順)。
+
+    基底 3 つを常に先頭に、そのあとに ``launcher.backends`` に書かれた
+    バリアント (``llama.cpp-cuda`` 等) を記述順で並べる。Web 版の
+    ``launcher_routes._backend_names`` と同じ規則。バリアントを書かない
+    利用者には従来と同じ 3 要素が返るので選択肢は完全に不変。
+    """
+    names = list(_BACKEND_DEFAULTS)
+    for name in cfg.backends:
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _profiles_for(cfg: LauncherConfig, backend: str) -> list[OptionProfile]:
+    """バックエンド(バリアント可)に適用する option_profiles を解決する。
+
+    基底名のプロファイルを継承し、バリアント固有のものを後ろに連結する
+    (同名は同じ位置で差し替え)。共有ロジックが import できない standalone
+    実行では基底名の分だけを返す。
+    """
+    if _HAS_DEVICES:
+        return resolve_option_profiles(cfg.option_profiles, backend)
+    return list(cfg.option_profiles.get(base_backend(backend), []))
 
 
 def _scan_models(model_dirs: list[str]) -> list[dict[str, Any]]:
@@ -405,16 +480,18 @@ def _build_cmd(backend: str, model_path: str, port: int,
     absolute backward-compatibility requirement. Only llama.cpp consumes them
     (vllm / mlx ignore device_args entirely).
     """
-    if backend == "llama.cpp":
+    # argv の形はバリアントによらず基底バックエンドで決まる。
+    base = base_backend(backend)
+    if base == "llama.cpp":
         cmd = [binary, "-m", model_path, "--port", str(port)]
         if device_args:
             cmd.extend(device_args)
         if spec_tokens:
             cmd.extend(spec_tokens)
-    elif backend == "vllm":
+    elif base == "vllm":
         cmd = [binary, "-m", "vllm.entrypoints.openai.api_server",
                "--model", model_path, "--port", str(port)]
-    elif backend == "mlx":
+    elif base == "mlx":
         cmd = [binary, "-m", "mlx_lm.server",
                "--model", model_path, "--port", str(port)]
     else:
@@ -717,8 +794,12 @@ def _backend_ready(backend: str, port: int, *, probe_timeout_s: float) -> bool:
     documented health endpoint) fall back to a bare TCP connect: it can't
     distinguish "loaded" from "listening", but it is a strict improvement
     over showing "running" before the port is even open.
+
+    ``backend`` may be a variant name (``llama.cpp-cuda``): the check goes
+    through :func:`base_backend` so a variant keeps the ``/health`` probe
+    instead of silently degrading to the bare TCP connect.
     """
-    if backend in ("llama.cpp", "vllm"):
+    if base_backend(backend) in ("llama.cpp", "vllm"):
         try:
             req = urllib.request.Request(f"http://localhost:{port}/health")
             with urllib.request.urlopen(req, timeout=probe_timeout_s) as resp:
@@ -1525,7 +1606,7 @@ class LauncherApp(tk.Tk):
         lbl("バックエンド", 2, 0)
         self._backend_var = tk.StringVar(value="llama.cpp")
         cb = ttk.Combobox(card, textvariable=self._backend_var,
-                          values=list(_BACKEND_DEFAULTS.keys()),
+                          values=_backend_names(self.cfg),
                           state="readonly")
         cb.grid(row=2, column=1, columnspan=3, sticky="ew",
                 padx=(0, 10), pady=(6, 0))
@@ -1805,8 +1886,36 @@ class LauncherApp(tk.Tk):
         SweepWindow(self)
 
     def _on_backend_change(self, _: Any = None) -> None:
+        # ★ デバイス id の名前空間はビルドごとに違う ("CUDA0" と "Vulkan0" は
+        #   同じ GPU ではない)。バックエンド/バリアントを切り替えたら選択を
+        #   破棄して検出やり直しにする。残したままだと --device CUDA0 が
+        #   Vulkan ビルドに渡って起動失敗する (Web 版の onBackendChange と同じ)。
+        self._reset_device_selection()
         self._update_binary_hint()
         self._populate_profiles()
+
+    def _reset_device_selection(self) -> None:
+        """デバイス検出結果と選択状態を破棄する(バックエンド切替時)。
+
+        デバイス UI が構築されていない (_HAS_DEVICES False) 場合は何もしない。
+        検出結果は破棄して「未検出」表示に戻し、再検出を促す。
+        """
+        if not _HAS_DEVICES:
+            return
+        self._device_vars.clear()
+        self._devices = []
+        self._device_fallback_var = None
+        self._pending_probe = None
+        if hasattr(self, "_tsplit_var"):
+            self._tsplit_var.set("")
+        frame = getattr(self, "_device_frame", None)
+        if frame is not None:
+            for w in frame.winfo_children():
+                w.destroy()
+            tk.Label(frame, text="未検出(🔍 検出 を押してください)",
+                     fg=self.FG2, bg=self.BG2,
+                     font=("monospace", 9), anchor="w").pack(anchor="w")
+        self._set_tsplit_row_visible(False)
 
     def _update_binary_hint(self) -> None:
         """shutil.which() はメインスレッドをブロックするのでスレッドで実行する。"""
@@ -1848,7 +1957,7 @@ class LauncherApp(tk.Tk):
 
     def _populate_profiles(self) -> None:
         backend = self._backend_var.get()
-        profiles = self.cfg.option_profiles.get(backend, [])
+        profiles = _profiles_for(self.cfg, backend)
         names = ["-- なし --"] + [p.name for p in profiles]
         self._profile_cb["values"] = names
         self._profile_var.set("-- なし --")
@@ -1856,7 +1965,7 @@ class LauncherApp(tk.Tk):
 
     def _on_profile_change(self, _: Any = None) -> None:
         backend = self._backend_var.get()
-        profiles = self.cfg.option_profiles.get(backend, [])
+        profiles = _profiles_for(self.cfg, backend)
         sel = self._profile_var.get()
         matched = next((p for p in profiles if p.name == sel), None)
         if matched and matched.args:
@@ -1898,7 +2007,7 @@ class LauncherApp(tk.Tk):
         profile_args: dict[str, Any] = {}
         sel_profile = self._profile_var.get()
         if sel_profile != "-- なし --":
-            profs = self.cfg.option_profiles.get(backend, [])
+            profs = _profiles_for(self.cfg, backend)
             matched = next((p for p in profs if p.name == sel_profile), None)
             if matched:
                 profile_args = matched.args
@@ -1932,7 +2041,7 @@ class LauncherApp(tk.Tk):
         # device_args is None → _build_cmd emits the exact current argv
         # (complete backward compatibility — no --device is ever added).
         device_args: list[str] | None = None
-        if _HAS_DEVICES and backend == "llama.cpp":
+        if _HAS_DEVICES and base_backend(backend) == "llama.cpp":
             device_args = self._current_selection().to_cli_args() or None
 
         try:

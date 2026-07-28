@@ -225,9 +225,118 @@ All of these are **estimates** — they don't account for other processes' memor
 
 ---
 
+## Switching specialized builds (llama.cpp)
+
+**v2.11.0+**. When llama.cpp is built separately for different GPU runtimes, you can pick which build's `llama-server` to launch, per launch. Available in both the GUI and Web editions.
+
+### Why this exists
+
+The same machine exposes different devices depending on the build. Real output from `--list-devices` on a Ryzen AI Max box with an RTX 5090, an RTX 3090 and a Radeon 8060S:
+
+| Build | Devices enumerated |
+| --- | --- |
+| `build/` | (CPU only) |
+| `build-cuda/` | `CUDA0` RTX 5090 (32149 MiB) / `CUDA1` RTX 3090 (24123 MiB) |
+| `build-vulkan/` | `Vulkan0` RTX 3090 / `Vulkan1` RTX 5090 / `Vulkan2` Radeon 8060S (114164 MiB) |
+| `build-rocm/` | `ROCm0` Radeon 8060S (98304 MiB) |
+
+To offload onto the Radeon 8060S you need the Vulkan or ROCm build; to tensor-split across the two NVIDIA cards you need the CUDA build. The best build varies per model, so this feature lets you switch without editing `providers.yaml` and restarting CodeRouter.
+
+### Configuration
+
+Add `<backend>-<variant>` keys under `launcher.backends`. **A variant must set `binary`.**
+
+```yaml
+launcher:
+  backends:
+    # Base name. Omitting binary means "llama-server from PATH" (unchanged)
+    llama.cpp:
+      binary: ~/llm/apps/llama.cpp/build/bin/llama-server
+
+    # Specialized builds = variants. binary is required
+    llama.cpp-cuda:
+      binary: ~/llm/apps/llama.cpp/build-cuda/bin/llama-server
+    llama.cpp-vulkan:
+      binary: ~/llm/apps/llama.cpp/build-vulkan/bin/llama-server
+    llama.cpp-rocm:
+      binary: ~/llm/apps/llama.cpp/build-rocm/bin/llama-server
+```
+
+A variant name may contain lowercase alphanumerics plus `.` `_` `-` (`[a-z0-9][a-z0-9._-]*`). The base must be `llama.cpp`, `vllm` or `mlx`.
+
+`binary` is mandatory to prevent a specific accident: if it could be omitted, resolution would fall back to `llama-server` on PATH and **you would think you selected the CUDA build while the plain build silently ran**. That is the hardest failure to notice, so it is rejected at config load.
+
+### Using it
+
+Declared variants appear in the "Backend" select as e.g. `llama.cpp-cuda ⚙`. The `⚙` marks it as an advanced option that needs a matching runtime. Selecting one shows a note about its prerequisites under the resolved path.
+
+**If you declare no variants the select stays exactly the three entries it always had**, and the generated launch command is byte-for-byte identical. Specialized builds are only visible to operators who opt in.
+
+### Runtime prerequisites (you install these)
+
+CodeRouter never installs drivers or runtimes; it only picks an already-built binary.
+
+| Variant | Requires |
+| --- | --- |
+| `-cuda` | NVIDIA driver + CUDA runtime |
+| `-vulkan` | Vulkan runtime (`libvulkan`) + ICD |
+| `-rocm` | ROCm (`hip`) |
+
+There is no pre-flight dependency check either. Instead, whether `--list-devices` succeeds for that build serves as the practical health check. If it fails the UI says devices could not be enumerated but does not block launching — some setups work even when enumeration doesn't.
+
+> With `launcher.auto_restart` enabled, selecting a build whose runtime is missing causes crash-then-restart cycles. `auto_restart_max_attempts` (default 3) stops it and the process settles into `status='error'`, so it won't loop forever — but check the logs.
+
+### Interaction with device selection (important)
+
+**Device IDs are per-build namespaces.** `CUDA0` and `Vulkan0` are not the same GPU — in the example above `CUDA0` is the RTX 5090 while `Vulkan0` is the RTX 3090.
+
+Switching backends therefore **clears the device selection** and asks you to detect again. If a stale selection were somehow submitted, the server detects IDs that don't exist in the chosen build and rejects the launch with a 400 (passing `--device CUDA0` to a Vulkan build makes `llama-server` fail to start).
+
+### Per-build option_profiles
+
+`option_profiles` accepts variant keys too. The base backend's presets are **inherited**, with variant-specific ones appended; a preset whose name collides replaces the inherited one in place.
+
+```yaml
+launcher:
+  option_profiles:
+    llama.cpp:                   # inherited by every build
+      - name: standard
+        args: { "-ngl": 99, "--ctx-size": 4096 }
+    llama.cpp-cuda:              # CUDA-only (appended after "standard")
+      - name: 5090-only-fast
+        args: { "-ngl": 99, "--ctx-size": 8192 }
+```
+
+You don't need to duplicate shared presets under every variant key.
+
+### Cross-build bench sweep
+
+Declare two or more llama.cpp builds and a **⚙ Cross-build** button appears in the bench-sweep panel. It probes every declared build and generates configuration candidates prefixed with the build name (`cuda / CUDA0 single`, `vulkan / Vulkan2 single`, …). Running the sweep then launches the same model on each build in turn and benchmarks it, so one sweep tells you which build is fastest.
+
+Labels expand into the bench command's `{config}` placeholder, so result JSON files stay distinguishable per build. Note that **no configuration ever mixes devices across builds** — one process runs one executable, so it is impossible by construction.
+
+### Pinning a build per model (launcher.swap)
+
+The `launcher.swap` catalog accepts variants too, for auto-launching each model on its best build.
+
+```yaml
+launcher:
+  swap:
+    enabled: true
+    models:
+      - name: qwen3-30b
+        backend: llama.cpp-cuda      # always launch this model on the CUDA build
+        model_path: ~/models/Qwen3-30B-A3B-Q4_K_M.gguf
+        port: 18081
+```
+
+When a variant is named, config load verifies it is declared in `launcher.backends` (that's the only place its binary path exists).
+
+---
+
 ## Device selection (llama.cpp)
 
-On multi-GPU machines you can pass explicit `--device` / `--tensor-split` flags to `llama-server` to control which GPU(s) a model is offloaded to. Available in both the GUI and Web editions. **llama.cpp only** — vllm/mlx don't have a device-selection field at all.
+On multi-GPU machines you can pass explicit `--device` / `--tensor-split` flags to `llama-server` to control which GPU(s) a model is offloaded to. Available in both the GUI and Web editions. **llama.cpp only** — vllm/mlx don't have a device-selection field at all. Variants (`llama.cpp-cuda`, …) work the same way.
 
 ### Detection
 
@@ -507,6 +616,10 @@ launcher:
 ```
 
 If `binary` is omitted or `null`, the default name (`llama-server` / `python`) is looked up in PATH. Tilde (`~`) expansion is supported. For vLLM/MLX, it's recommended to keep separate venvs per backend under `~/.coderouter/backends/<backend-name>/` (see the [Installation Guide](./install-backends.en.md) for details). The resolved path is shown below the "Backend" select in the UI.
+
+A key may also be a **variant name** such as `llama.cpp-cuda` (v2.11.0+). This lets you register several builds of the same backend — typically llama.cpp compiled for different GPU runtimes — and pick one per launch. See [Switching specialized builds](#switching-specialized-builds-llamacpp).
+
+> **Breaking change in v2.11.0**: keys in `launcher.backends` must be `llama.cpp` / `vllm` / `mlx` or one of those with a `-<variant>` suffix; anything else is now a **config-load error**. Previously a typo such as `llamacpp:` was silently ignored (the backend list was a fixed set of three keys). If startup fails after upgrading, check the spelling of your keys.
 
 ### `model_dirs`
 

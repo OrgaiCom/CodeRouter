@@ -17,7 +17,14 @@ import re
 import warnings
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 
 class Capabilities(BaseModel):
@@ -1414,6 +1421,29 @@ class LauncherBackendConfig(BaseModel):
             binary: ~/llama.cpp/build/bin/llama-server
           vllm:
             binary: ~/.venv/bin/python
+
+    **Backend variants** (v2.11.0+, docs/designs/launcher-multi-build.md):
+    a key may also be ``<base>-<variant>`` to register an additional build of
+    the same backend — typically llama.cpp compiled for a specific GPU
+    runtime. Each variant appears as its own entry in the Launcher's backend
+    select, gets its own ``--list-devices`` probe (device IDs differ per
+    build: ``CUDA0`` and ``Vulkan0`` are not the same GPU) and can carry its
+    own ``option_profiles``. ``binary`` is **required** for a variant::
+
+        backends:
+          llama.cpp:                    # 素のビルド (binary 省略可 = PATH)
+            binary: ~/llm/apps/llama.cpp/build/bin/llama-server
+          llama.cpp-cuda:
+            binary: ~/llm/apps/llama.cpp/build-cuda/bin/llama-server
+          llama.cpp-vulkan:
+            binary: ~/llm/apps/llama.cpp/build-vulkan/bin/llama-server
+          llama.cpp-rocm:
+            binary: ~/llm/apps/llama.cpp/build-rocm/bin/llama-server
+
+    Variants are an advanced option: the matching GPU runtime (CUDA Toolkit /
+    Vulkan runtime + ICD / ROCm) must already be installed by the operator.
+    CodeRouter never selects a variant implicitly — omit them and both the UI
+    and the resulting argv are identical to before.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1544,9 +1574,39 @@ class SwapModelSpec(BaseModel):
             "only widens *catalog* matching for ``SwapManager.match``."
         ),
     )
-    backend: Literal["llama.cpp", "vllm", "mlx"] = Field(
-        ..., description="Same backend set as the manual launcher UI / _build_cmd.",
+    backend: str = Field(
+        ...,
+        description=(
+            "Same backend set as the manual launcher UI / _build_cmd: "
+            "'llama.cpp' / 'vllm' / 'mlx', optionally with a '-<variant>' "
+            "suffix naming a specific build declared in launcher.backends "
+            "(e.g. 'llama.cpp-cuda' to pin this model to the CUDA build). "
+            "Validated by the field validator below plus "
+            "LauncherConfig._check_swap_backends_declared."
+        ),
     )
+
+    @field_validator("backend")
+    @classmethod
+    def _check_backend_name(cls, v: str) -> str:
+        """基底名 or 既知基底名 + 妥当なバリアントのみ許す。
+
+        以前は ``Literal["llama.cpp","vllm","mlx"]`` だった。バリアント
+        (``llama.cpp-cuda``) を通すため str に緩めたので、代わりに形式検証を
+        ここで行う。既存の 3 値はそのまま通る (後方互換)。
+        """
+        from coderouter.launcher_devices import (
+            KNOWN_BASE_BACKENDS,
+            is_valid_backend_name,
+        )
+
+        if not is_valid_backend_name(v):
+            raise ValueError(
+                f"backend {v!r} is not valid. Expected one of "
+                f"{list(KNOWN_BASE_BACKENDS)} or '<base>-<variant>' "
+                "(e.g. 'llama.cpp-cuda')."
+            )
+        return v
     model_path: str = Field(
         ...,
         description=(
@@ -1802,10 +1862,13 @@ class LauncherConfig(BaseModel):
         default_factory=dict,
         description=(
             "Per-backend binary path overrides. "
-            "Keys are backend names ('llama.cpp', 'vllm'). "
-            "When a key is absent, the default executable is used "
-            "('llama-server' / 'python') and resolved via PATH. "
-            "Useful when running a from-source build or a venv-specific binary."
+            "Keys are backend names ('llama.cpp', 'vllm', 'mlx') or backend "
+            "variants ('llama.cpp-cuda', 'llama.cpp-vulkan', ...) naming an "
+            "additional build of the same backend — see "
+            "LauncherBackendConfig. When a base key is absent, the default "
+            "executable is used ('llama-server' / 'python') and resolved via "
+            "PATH. Variants must set 'binary' explicitly and additionally "
+            "appear in the Launcher's backend select."
         ),
     )
     option_profiles: dict[str, list[LauncherOptionProfile]] = Field(
@@ -1813,6 +1876,10 @@ class LauncherConfig(BaseModel):
         description=(
             "Named option presets per backend. "
             "Keys should be backend names: 'llama.cpp', 'vllm'. "
+            "A backend-variant key ('llama.cpp-cuda') is also accepted: its "
+            "presets are appended to the base backend's list, and a preset "
+            "whose 'name' collides replaces the inherited one in place "
+            "(see launcher_devices.resolve_option_profiles). "
             "Each key maps to an ordered list of named presets. "
             "A free-form 'extra args' field is always available in the UI "
             "for one-off overrides without touching this config."
@@ -1930,14 +1997,81 @@ class LauncherConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _check_swap_option_profiles_exist(self) -> LauncherConfig:
-        """§5.4 #2: a swap model's ``option_profile`` must be a real preset."""
+    def _check_backend_names_and_variant_binaries(self) -> LauncherConfig:
+        """``backends`` のキー形式と、バリアントの ``binary`` 必須を検証する。
+
+        設計: docs/designs/launcher-multi-build.md §5.2。
+
+        1. キーは既知基底名 (``llama.cpp`` / ``vllm`` / ``mlx``) そのもの、
+           または ``<既知基底名>-<バリアント>`` (``llama.cpp-cuda`` 等) のみ。
+           **破壊的変更**: これまで ``llamacpp:`` のような typo は黙って無視
+           されていた (バックエンド一覧が固定 3 キーだったため)。今後は
+           ロード時エラーになる。
+        2. **バリアントは ``binary`` 必須**。``llama.cpp-cuda: {}`` を許すと
+           既定名フォールバックで PATH の ``llama-server`` が使われ、CUDA
+           ビルドを指定したつもりで素のビルドが静かに動く —— 本機能で最も
+           気づきにくい事故なのでロード時に殺す。基底名は従来どおり
+           ``binary`` 省略可 (PATH 解決)。
+        """
+        from coderouter.launcher_devices import (
+            KNOWN_BASE_BACKENDS,
+            is_valid_backend_name,
+            is_variant,
+        )
+
+        for name, bc in self.backends.items():
+            if not is_valid_backend_name(name):
+                raise ValueError(
+                    f"launcher.backends: invalid backend key {name!r}. "
+                    f"Expected one of {list(KNOWN_BASE_BACKENDS)} or "
+                    "'<base>-<variant>' where variant matches "
+                    "[a-z0-9][a-z0-9._-]* (e.g. 'llama.cpp-cuda')."
+                )
+            if is_variant(name) and not bc.binary:
+                raise ValueError(
+                    f"launcher.backends[{name!r}]: 'binary' is required for a "
+                    "backend variant. Without it the launcher would fall back "
+                    "to the base default on PATH and silently run a different "
+                    "build than the one you selected."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_swap_backends_declared(self) -> LauncherConfig:
+        """swap のモデルがバリアントを指すなら ``backends`` に実在すること。
+
+        設計 §5.2-3。基底名 (``llama.cpp`` 等) は ``backends`` に書かなくても
+        PATH 解決で動くので従来どおり不要。バリアントは実行ファイルパスが
+        ``backends`` にしか無いので、宣言漏れをロード時に弾く。
+        """
         if self.swap is None:
             return self
+        from coderouter.launcher_devices import is_variant
+
+        for spec in self.swap.models:
+            if is_variant(spec.backend) and spec.backend not in self.backends:
+                raise ValueError(
+                    f"launcher.swap.models[{spec.name!r}]: backend "
+                    f"{spec.backend!r} is a variant but is not declared in "
+                    "launcher.backends (its binary path is unknown)."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_swap_option_profiles_exist(self) -> LauncherConfig:
+        """§5.4 #2: a swap model's ``option_profile`` must be a real preset.
+
+        バリアント backend の場合は基底名のプロファイルも継承されるので
+        (:func:`resolve_option_profiles`)、マージ後の一覧で判定する。
+        """
+        if self.swap is None:
+            return self
+        from coderouter.launcher_devices import resolve_option_profiles
+
         for spec in self.swap.models:
             if spec.option_profile is None:
                 continue
-            profiles = self.option_profiles.get(spec.backend, [])
+            profiles = resolve_option_profiles(self.option_profiles, spec.backend)
             if not any(p.name == spec.option_profile for p in profiles):
                 raise ValueError(
                     f"launcher.swap.models[{spec.name!r}]: option_profile "

@@ -76,6 +76,28 @@ launcher:
       binary: null          # null = PATH の python を使用
       # binary: ~/.venv/bin/python                    # venv 例
 
+    # ── 特化ビルドの切り替え (v2.11.0+) ────────────────────────────────
+    # llama.cpp を GPU ランタイム別にビルドしてあるなら、"<基底名>-<バリアント>"
+    # のキーで登録すると「バックエンド」セレクトに増え、起動ごとに選べます。
+    # デバイス ID はビルドごとに別 (CUDA0 と Vulkan0 は同じ GPU ではない) なので、
+    # 切り替えるとデバイス選択は自動でクリアされます。
+    #
+    # ★ バリアントは binary 必須。省略すると PATH の llama-server に落ちて
+    #   「CUDA ビルドを指定したつもりで素のビルドが動く」事故になるため、
+    #   設定ロード時にエラーにしています。
+    #
+    # ★ 対応ランタイム (CUDA Toolkit / Vulkan ランタイム + ICD / ROCm) は
+    #   自分で導入してください。CodeRouter は導入も事前検査もしません。
+    #
+    # 書かなければセレクトは従来どおり 3 択のままです。
+    #
+    # llama.cpp-cuda:
+    #   binary: ~/llm/apps/llama.cpp/build-cuda/bin/llama-server
+    # llama.cpp-vulkan:
+    #   binary: ~/llm/apps/llama.cpp/build-vulkan/bin/llama-server
+    # llama.cpp-rocm:
+    #   binary: ~/llm/apps/llama.cpp/build-rocm/bin/llama-server
+
   option_profiles:
 
     # ⚠ context size の既定について

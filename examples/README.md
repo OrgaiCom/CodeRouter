@@ -47,7 +47,7 @@ coderouter serve --port 8088
 
 ### 🟨 llama.cpp / vLLM — Ollama を使わない
 
-- **`providers.llamacpp-vllm.yaml`** … 手元の `.gguf` を **llama.cpp** で、または **vLLM** で動かす最小構成。Launcher（`/launcher`）で起動したサーバーを provider として登録する形。**Ollama を入れたくない / DL 済み GGUF をそのまま使いたい人向け**（詳細は連作 note 第 22 話、`docs/backends/launcher.md`）。
+- **`providers.llamacpp-vllm.yaml`** … 手元の `.gguf` を **llama.cpp** で、または **vLLM** で動かす最小構成。Launcher（`/launcher`）で起動したサーバーを provider として登録する形。**Ollama を入れたくない / DL 済み GGUF をそのまま使いたい人向け**（詳細は連作 note 第 22 話、`docs/backends/launcher.md`）。`backends` に `llama.cpp-cuda` / `-vulkan` / `-rocm` を登録して**特化ビルドを起動ごとに選ぶ**例もコメントで併記（v2.11.0+）。
 - **`providers.swap.yaml`** … **モデル自動スワップ**（`launcher.swap`）。リクエストの model 名を見て llama-server をオンデマンド起動し、ロード完了まで保留、アイドル TTL で自動アンロードする llama-swap 相当の構成。カタログに列挙したモデルだけが起動可能（詳細は `docs/designs/launcher-model-swap.md`）。
 
 ### 🟧 特殊 — 環境・用途が限定的

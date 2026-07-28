@@ -9,6 +9,109 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Backend variants — pick which llama.cpp build to launch.**
+  `launcher.backends` now accepts keys of the form `<base>-<variant>`
+  (`llama.cpp-cuda`, `llama.cpp-vulkan`, `llama.cpp-rocm`), each naming
+  an additional build of the same backend with its own `binary` path.
+  Declared variants appear as extra entries in the Launcher's backend
+  select (GUI and Web) marked `⚙`, and each one gets its own
+  `--list-devices` probe, its own `option_profiles`, and can be pinned
+  per model in `launcher.swap`. Motivation: on a machine with mixed
+  GPUs the visible devices differ per build — the CUDA build enumerates
+  `CUDA0`/`CUDA1` (RTX 5090 + 3090) while the Vulkan build also
+  enumerates `Vulkan2` (Radeon 8060S) and the ROCm build only the
+  Radeon — so the best build varies by model. Previously `binary` held
+  a single path and switching meant editing `providers.yaml` and
+  restarting. Docs: `docs/backends/launcher.md` "特化ビルドの切り替え",
+  design: `docs/designs/launcher-multi-build.md`.
+- **`option_profiles` inheritance for variants.** A variant key
+  inherits the base backend's presets and appends its own; a preset
+  whose `name` collides replaces the inherited one *in place* (order
+  stays stable, no duplicate at the tail). Shared presets no longer
+  need duplicating under every variant key. Shared implementation:
+  `launcher_devices.resolve_option_profiles` (used by the Web routes,
+  the Tk GUI and `launcher_swap`).
+- **Cross-build bench sweep.** With two or more llama.cpp builds
+  declared, the sweep panel shows a "⚙ ビルド横断" button that probes
+  every build and generates configurations labelled
+  `cuda / CUDA0 単体`, `vulkan / Vulkan2 単体`, … Running the sweep
+  launches the same model on each build in turn, so one sweep answers
+  "which build is fastest for this model". `SweepStep.backend` /
+  `SweepConfigItem.backend` carry the per-step build; `None` keeps the
+  previous plan-wide behaviour. New
+  `launcher_devices.build_cross_variant_sweep_configs`. Configurations
+  never mix devices across builds — one process runs one executable.
+- **Device-id namespace guard.** Device ids are build-specific
+  (`CUDA0` and `Vulkan0` are not the same GPU). Switching backend in
+  either launcher now clears the device selection, and
+  `POST /api/launcher/start` / `sweep/start` reject ids that do not
+  exist in the chosen build with a 400 instead of letting
+  `--device CUDA0` reach a Vulkan build and fail at startup. Skipped
+  when `--list-devices` itself fails (best-effort, per the
+  `hardware.py` invariant). New `launcher_devices.unknown_device_ids`.
+
+### Changed
+
+- **BREAKING: `launcher.backends` keys are now validated.** A key must
+  be `llama.cpp` / `vllm` / `mlx` or one of those with a
+  `-<variant>` suffix (variant matching `[a-z0-9][a-z0-9._-]*`).
+  Previously any key was accepted and silently ignored, because the
+  backend list was a hard-coded set of three; a typo such as
+  `llamacpp:` therefore had no effect and no warning. It is now a
+  config-load error. Check key spelling if startup fails after
+  upgrading.
+- **A backend variant must set `binary`.** Allowing it to be omitted
+  would fall back to the base default on PATH, meaning an operator who
+  selected `llama.cpp-cuda` could silently get the plain build — the
+  hardest failure of this feature to notice. Rejected at config load.
+  Base keys keep `binary` optional (PATH resolution), unchanged.
+- **The Launcher's backend list is now config-derived.** Both launchers
+  build the select from the three base backends plus whatever variants
+  `launcher.backends` declares, instead of a hard-coded list. Declaring
+  no variants yields exactly the previous three entries, so specialized
+  builds stay invisible to operators who have not opted in.
+- `SwapModelSpec.backend` relaxed from
+  `Literal["llama.cpp","vllm","mlx"]` to a validated `str` so it can
+  name a variant; the three previous values still validate unchanged.
+  When a variant is named, config load verifies it is declared in
+  `launcher.backends`.
+- `GET /api/launcher/backends` entries gained `base` and `variant`
+  keys. All pre-existing keys (`resolved` / `configured` / `default` /
+  `is_custom` / `found`) are unchanged.
+
+### Fixed
+
+- **Backend-name branches are normalized through a single helper.**
+  Backend name drove behaviour in ten places, several of which would
+  have failed *open* for a variant name rather than raising. Two
+  mattered: `_MODEL_FLAGS.get(backend, frozenset())` would have
+  returned an empty set and **disabled the H8 model-override guard**
+  (letting `options` / `extra_args` re-specify `-m` and load an
+  arbitrary model), and `_backend_ready`'s
+  `backend in ("llama.cpp","vllm")` would have degraded readiness to a
+  bare TCP connect — re-introducing the bug readiness gating was added
+  to fix (provider registered before the model finished loading). All
+  branches now go through `launcher_devices.base_backend()`, in
+  `launcher_routes.py`, `launcher_speculative.py`, `launcher_gui.py`
+  and the inline SPA JS. `_assert_no_model_override` additionally
+  became fail-closed: an unrecognized base uses the union of every
+  banned flag set rather than an empty one.
+
+### Tests
+
+- 4 new files, 150 new cases (`test_launcher_backend_variants.py`,
+  `test_launcher_variant_config.py`, `test_launcher_variant_routes.py`,
+  `test_launcher_variant_sweep.py`, `test_launcher_variant_gui.py`).
+  The fail-open branches above each have a 1:1 regression test, plus
+  byte-identical-argv and unchanged-API-payload tests for configs
+  without variants. Suite: 2098 passed, ruff clean.
+
+---
+
 ## [v2.10.0] — 2026-07-20 (VSCode workspace scaffolder)
 
 ### Added
