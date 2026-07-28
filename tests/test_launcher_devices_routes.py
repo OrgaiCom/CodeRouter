@@ -103,6 +103,29 @@ _SAMPLE_DEVICES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _stub_device_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--list-devices`` を常に ``_SAMPLE_DEVICES`` に固定する。
+
+    ``POST /api/launcher/start`` は device_ids を受け取ると、そのビルドに実在
+    する id かをサーバ側で検証する (別ビルドの id を持ち越すと
+    ``--device CUDA0`` が Vulkan ビルドに渡って起動失敗するため)。この検証は
+    実バイナリの ``--list-devices`` を呼ぶので、スタブしないと **テストが
+    実行ホストの GPU 構成に依存する** —— PATH に Vulkan ビルドの
+    llama-server がある Linux 機では ``CUDA0`` が弾かれて 400 になり、
+    llama-server が無い機では検証がスキップされて 200 になる、という具合に
+    結果が変わってしまう。
+
+    個別に ``detect_llama_devices`` を monkeypatch しているテストは、この
+    autouse フィクスチャの後に自分で setattr するのでそちらが優先される。
+    """
+    monkeypatch.setattr(
+        launcher_routes,
+        "detect_llama_devices",
+        lambda binary, **kw: DeviceProbe(list(_SAMPLE_DEVICES), ok=True),
+    )
+
+
 class _AsyncLines:
     """bench 子プロセスの stdout を模した非同期イテレータ。"""
 

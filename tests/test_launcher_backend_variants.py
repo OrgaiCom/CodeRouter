@@ -34,9 +34,9 @@ from coderouter.launcher_devices import (
     DeviceProbe,
     LlamaDevice,
     base_backend,
+    foreign_device_ids,
     is_valid_backend_name,
     is_variant,
-    unknown_device_ids,
     variant_of,
 )
 from coderouter.launcher_speculative import resolve_speculative
@@ -384,20 +384,46 @@ def _probe(*ids: str) -> DeviceProbe:
     return DeviceProbe(devs, ok=True)
 
 
-def test_unknown_device_ids_detects_cross_variant_mismatch() -> None:
+def test_foreign_device_ids_detects_cross_variant_mismatch() -> None:
     """CUDA ビルドの ID を Vulkan ビルドで使おうとしたら検出する。"""
     vulkan = _probe("Vulkan0", "Vulkan1", "Vulkan2")
-    assert unknown_device_ids(["CUDA0"], vulkan) == ["CUDA0"]
-    assert unknown_device_ids(["Vulkan0", "CUDA1"], vulkan) == ["CUDA1"]
+    assert foreign_device_ids(["CUDA0"], vulkan) == ["CUDA0"]
+    assert foreign_device_ids(["Vulkan0", "CUDA1"], vulkan) == ["CUDA1"]
 
 
-def test_unknown_device_ids_accepts_matching_ids() -> None:
+def test_foreign_device_ids_accepts_matching_ids() -> None:
     cuda = _probe("CUDA0", "CUDA1")
-    assert unknown_device_ids(["CUDA0", "CUDA1"], cuda) == []
-    assert unknown_device_ids([], cuda) == []
+    assert foreign_device_ids(["CUDA0", "CUDA1"], cuda) == []
+    assert foreign_device_ids([], cuda) == []
 
 
-def test_unknown_device_ids_is_best_effort_when_probe_failed() -> None:
+def test_foreign_device_ids_is_best_effort_when_probe_failed() -> None:
     """プローブ自体が失敗した環境では検証をスキップして機能を殺さない。"""
     failed = DeviceProbe([], ok=False, error="バイナリが見つかりません")
-    assert unknown_device_ids(["CUDA0", "whatever"], failed) == []
+    assert foreign_device_ids(["CUDA0", "whatever"], failed) == []
+
+
+def test_foreign_device_ids_is_best_effort_when_probe_is_empty() -> None:
+    """ok=True でも 1 台も拾えなかったら判定しない(誤検知を避ける)。"""
+    empty = DeviceProbe([], ok=True)
+    assert foreign_device_ids(["CUDA0"], empty) == []
+
+
+def test_foreign_device_ids_matches_on_namespace_not_exact_id() -> None:
+    """判定はバックエンド接頭辞単位で、id の完全一致ではない。
+
+    同一ビルド内の番号ズレ (``CUDA5``) は通す。``--list-devices`` の出力形式が
+    変わって :func:`parse_list_devices` が一部の行を取りこぼしたときに、正しい
+    id を誤って拒否しないための緩さ。捕まえたいのは「ビルド違い」であって
+    番号違いではない。
+    """
+    cuda = _probe("CUDA0", "CUDA1")
+    assert foreign_device_ids(["CUDA5"], cuda) == []      # 同じ名前空間 → 通す
+    assert foreign_device_ids(["Vulkan0"], cuda) == ["Vulkan0"]  # 別名前空間 → 弾く
+
+
+def test_foreign_device_ids_handles_prefix_only_ids() -> None:
+    """末尾数字を持たない id (BLAS / CPU / Metal) も接頭辞として扱える。"""
+    metal = _probe("MTL0", "BLAS")
+    assert foreign_device_ids(["MTL0", "BLAS"], metal) == []
+    assert foreign_device_ids(["CUDA0"], metal) == ["CUDA0"]

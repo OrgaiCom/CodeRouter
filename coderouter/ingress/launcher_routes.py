@@ -51,6 +51,7 @@ from coderouter.launcher_devices import (
     build_auto_sweep_configs,
     build_sweep_steps,
     detect_llama_devices,
+    foreign_device_ids,
     group_by_backend,
     is_port_free,
     load_latest_results,
@@ -58,7 +59,6 @@ from coderouter.launcher_devices import (
     resolve_option_profiles,
     selectable_devices,
     suggest_tensor_split,
-    unknown_device_ids,
     variant_of,
 )
 from coderouter.launcher_speculative import resolve_speculative
@@ -1561,14 +1561,14 @@ async def _assert_device_ids_known(
     前に弾く。
 
     ``--list-devices`` 自体が失敗した環境では検証をスキップする
-    (:func:`unknown_device_ids` の best-effort 契約)。
+    (:func:`foreign_device_ids` の best-effort 契約)。
     """
     if not device_ids:
         return
     configured = _configured_binary_for(launcher_cfg, backend)
     binary = _resolve_binary(backend, configured)
     probe = await asyncio.to_thread(detect_llama_devices, binary)
-    unknown = unknown_device_ids(list(device_ids), probe)
+    unknown = foreign_device_ids(list(device_ids), probe)
     if unknown:
         known = [d.id for d in probe.devices]
         raise HTTPException(

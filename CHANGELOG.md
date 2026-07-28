@@ -52,7 +52,11 @@ are kept verbatim where the Japanese text itself is the subject).
   exist in the chosen build with a 400 instead of letting
   `--device CUDA0` reach a Vulkan build and fail at startup. Skipped
   when `--list-devices` itself fails (best-effort, per the
-  `hardware.py` invariant). New `launcher_devices.unknown_device_ids`.
+  `hardware.py` invariant). New `launcher_devices.foreign_device_ids`,
+  which compares the backend *prefix* (`backend_of`) rather than the
+  exact id — the mismatch worth catching is the wrong build, not a
+  number gap, and prefix matching stays correct if a future
+  `--list-devices` format change makes `parse_list_devices` miss a line.
 
 ### Changed
 

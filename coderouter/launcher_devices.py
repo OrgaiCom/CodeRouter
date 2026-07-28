@@ -43,6 +43,7 @@ __all__ = [
     "build_cross_variant_sweep_configs",
     "build_sweep_steps",
     "detect_llama_devices",
+    "foreign_device_ids",
     "group_by_backend",
     "is_port_free",
     "is_valid_backend_name",
@@ -55,7 +56,6 @@ __all__ = [
     "selectable_devices",
     "suggest_tensor_split",
     "summarize_results",
-    "unknown_device_ids",
     "variant_of",
 ]
 
@@ -369,22 +369,34 @@ class DeviceSelection:
         return args
 
 
-def unknown_device_ids(device_ids: Sequence[str], probe: DeviceProbe) -> list[str]:
-    """``device_ids`` のうち ``probe`` に存在しないものを返す(空なら健全)。
+def foreign_device_ids(device_ids: Sequence[str], probe: DeviceProbe) -> list[str]:
+    """``device_ids`` のうち **別ビルドの名前空間**に属するものを返す。
 
     バックエンドバリアントを切り替えるとデバイス ID の名前空間も変わる
     (``CUDA0`` と ``Vulkan0`` は同じ GPU を指さない)。CUDA ビルドで
     ``CUDA0`` を選んだまま Vulkan ビルドで起動すると ``--device CUDA0`` が
     Vulkan ビルドに渡って起動失敗するので、spawn 前に弾くための判定。
 
-    ``probe.ok`` が False (``--list-devices`` 自体が失敗) のときは **常に空
-    リスト** を返す。デバイスを列挙できない環境で機能を殺さないための
-    best-effort 原則 (``hardware.py`` の 5-deps 不変則と同じ姿勢)。
+    判定は **id の完全一致ではなくバックエンド接頭辞** (:func:`backend_of` —
+    ``"CUDA0"`` → ``"CUDA"``) で行う。理由は 2 つある:
+
+    1. 検出したいのは「ビルド違い」= 名前空間そのものの不一致であって、
+       同一ビルド内の番号ズレではない。UI はチェックボックスから id を渡す
+       ので番号ズレは実際には起きない。
+    2. 完全一致にすると ``--list-devices`` の出力形式が将来変わって
+       :func:`parse_list_devices` が一部の行だけ取りこぼした場合に、**正しい
+       id を誤って拒否してしまう**。接頭辞単位なら 1 行でも同じ接頭辞が
+       拾えていれば通る。
+
+    ``probe.ok`` が False (``--list-devices`` 自体が失敗) のときと、デバイス
+    を 1 つも拾えなかったときは **常に空リスト** を返す。列挙できない環境で
+    機能を殺さないための best-effort 原則 (``hardware.py`` の 5-deps 不変則と
+    同じ姿勢)。
     """
-    if not probe.ok:
+    if not probe.ok or not probe.devices:
         return []
-    known = {d.id for d in probe.devices}
-    return [d for d in device_ids if d not in known]
+    known_prefixes = {backend_of(d.id) for d in probe.devices}
+    return [d for d in device_ids if backend_of(d) not in known_prefixes]
 
 
 # ---------------------------------------------------------------------------

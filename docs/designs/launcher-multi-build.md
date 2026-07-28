@@ -369,7 +369,7 @@ Phase 1〜3 をまとめて実装した。テストは **2098 passed** (実装�
 | 横断スイープの API | `SweepRequest.backends: list[str]` | **`SweepConfigItem.backend: str \| None`** (構成ごと) | サーバ側で「ビルド × デバイス構成」の直積を組む必要がなくなり、構成ごとに自由なビルドを指せる。フロントは各ビルドの `auto_configs` を連結するだけで済む |
 | `build_sweep_steps` | 2 要素タプルのみ | **2 要素/3 要素の両対応** | 既存の呼び出し (`(label, selection)`) を無改修で通すため。3 要素形が横断用 |
 | `_assert_no_model_override` | 正規化するだけ | **fail-closed 化も追加** | 未知の基底名で `banned` が空集合になる既存の弱さを、正規化と同時に潰した (全 banned 集合の和を使う) |
-| デバイス ID 検証 | 設計 §7.2 のとおり | 同じ。共有関数を `unknown_device_ids` として `launcher_devices.py` に置いた | GUI からも同じ判定を使えるようにするため |
+| デバイス ID 検証 | 設計 §7.2 のとおり | 共有関数 `foreign_device_ids` を `launcher_devices.py` に置き、**判定を id の完全一致ではなくバックエンド接頭辞単位** (`backend_of`) にした | 捕まえたいのは「ビルド違い=名前空間の不一致」であって同一ビルド内の番号ズレではない。完全一致だと `--list-devices` の出力形式が変わって `parse_list_devices` が一部の行を取りこぼしたときに正しい id を誤って拒否する |
 | `option_profiles` マージ | 設計 §10 のとおり | 同じ。`resolve_option_profiles` を PEP 695 ジェネリックにした | pydantic の `LauncherOptionProfile` と GUI の dataclass `OptionProfile` の双方を 1 関数で受けるため |
 | GUI の正規化ヘルパ | 共有層から import | **import + standalone フォールバック実装** | `launcher_gui.py` は `coderouter` パッケージ無しでも動く要件がある。`_build_cmd` / `_backend_ready` は `_HAS_DEVICES` に関係なく通る経路なので `None` にできない |
 
@@ -391,7 +391,22 @@ Phase 1〜3 をまとめて実装した。テストは **2098 passed** (実装�
 
 見積り +1,145 行に対し、テストが厚くなった分だけ増えた。内訳はコード約 +560 行 / テスト 5 ファイル +1,050 行 (150 ケース) / ドキュメント・examples +260 行。
 
-### 14.4 残作業
+### 14.4 実機投入で判明した不具合 (2026-07-28 追記)
+
+Linux 実機 (PATH の `llama-server` が Vulkan ビルド) でテストを回したところ、**既存テスト `test_launcher_devices_routes.py::test_start_passes_device_args` が失敗**した。
+
+原因は本機能そのものではなく、**新しいデバイス ID 検証が既存テストを実行ホスト依存にしてしまった**こと。当該テストは `device_ids=["CUDA0","CUDA1"]` を渡すが `detect_llama_devices` をスタブしていないため、実バイナリの `--list-devices` が走る。llama-server が PATH に無い Mac ではプローブ失敗 → 検証スキップ → 200、Vulkan ビルドがある Linux では `Vulkan0/1/2` が返って `CUDA0` が弾かれ 400、と結果が環境で変わっていた。
+
+対処は 2 つ:
+
+1. `tests/test_launcher_devices_routes.py` に autouse フィクスチャを追加し、`detect_llama_devices` を `_SAMPLE_DEVICES` (CUDA0/CUDA1) に固定した。個別に monkeypatch しているテストは後から setattr するのでそちらが優先される。
+2. 併せて `foreign_device_ids` の判定を接頭辞単位に緩めた (上表参照)。
+
+検証は偽 `llama-server` を PATH に置いて実機環境を再現して行った。修正前は当該テストが再現性をもって失敗し、修正後は「Vulkan ビルドが PATH にある状態」「PATH に何も無い状態」の双方で 23 passed になることを確認した。
+
+**教訓**: 起動経路に新しく subprocess を伴う検証を足すと、それを想定していない既存テストが静かにホスト依存になる。同種の追加をするときは「device_ids を渡している既存テスト」を先に洗い出してスタブすること。
+
+### 14.5 残作業
 
 - `docs/README.md` の designs 索引への追記 (任意 — 既存も網羅的ではない)
 - リリース時に `[Unreleased]` を `v2.11.0` に確定し、破壊的変更 (§5.2-1) をリリースノート冒頭に出す

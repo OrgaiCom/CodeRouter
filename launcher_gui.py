@@ -100,7 +100,6 @@ try:
         resolve_option_profiles,
         selectable_devices,
         suggest_tensor_split,
-        unknown_device_ids,
         variant_of,
     )
     _HAS_DEVICES = True
@@ -123,7 +122,6 @@ except ImportError:  # standalone GUI (coderouter package not importable)
     render_bench_command = None  # type: ignore
     selectable_devices = None  # type: ignore
     suggest_tensor_split = None  # type: ignore
-    unknown_device_ids = None  # type: ignore
 
     # ★ バックエンド名の正規化だけは None にできない。_build_cmd /
     #   _backend_ready が _HAS_DEVICES に関係なく通る経路で使うため、
