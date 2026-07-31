@@ -236,93 +236,59 @@ launcher:
     #   * name が衝突した場合はバリアント側が **継承分と同じ位置で差し替え**
     #     ます (末尾に重複を作りません)。
     #
-    # ★ 継承される "ベンチ比較用 (条件固定)" は各ビルドで **--device だけを足して**
-    #   上書きします。他の値 (-ngl / ctx / parallel / batch) を触ると横並び比較に
-    #   ならないので動かさないでください。これで CUDA / Vulkan / ROCm を同一条件で
-    #   順に起動してベンチできます (Launcher のスイープはビルド横断で回せます)。
+    # ★ --device / --tensor-split はプロファイルに書かないでください。
+    #   デバイスは UI の「🔍 検出」→ チェックボックスで選ぶのが正しい流れで、
+    #   両方から指定すると argv に --device が二重に載って紛らわしくなります。
+    #   デバイス ID はビルドごとに別の名前空間 (CUDA0 と Vulkan0 は同じ GPU では
+    #   ない) なので、そもそもプロファイルに固定値として書けません。
+    #
+    # ★ 継承される "ベンチ比較用 (条件固定)" は **どのビルドでも上書きしない**のが
+    #   正解です。上書きしなければ 3 ビルドとも argv が完全に一致し、違いは UI で
+    #   選ぶデバイスだけになります (Launcher の「⚙ ビルド横断」スイープで
+    #   CUDA / Vulkan / ROCm を順に起動して比較できます)。
     #
     # ★ "CPU のみ (GPU未使用・低速)" も継承されます。GPU ビルドを選んでいても
     #   選べてしまうので、名前で見分けてください (-ngl 0 = GPU に載りません)。
     #
     # llama.cpp-cuda:
+    #   # 継承した "GPU フル活用" を CUDA ビルドだけ上書きする例。
+    #   # name を一致させると、継承分と同じ位置で置き換わります。
     #   - name: "GPU フル活用"
     #     args:
     #       "-ngl": 99
     #       "--ctx-size": 131072       # 5090 の 32GB なら伸ばせる
     #       "--batch-size": 1024
-    #       "--device": "CUDA0"        # ← id は CUDA ビルドの --list-devices が正
     #
-    #   - name: "ベンチ比較用 (条件固定)"
-    #     args:                        # ↓ --device 以外は基底と同一に保つこと
-    #       "-ngl": 99
-    #       "--ctx-size": 32768
-    #       "--parallel": 1
-    #       "--batch-size": 512
-    #       "--ubatch-size": 512
-    #       "--threads": 8
-    #       "--device": "CUDA0"
-    #
-    #   - name: "3090 + 5090 (2枚に分割)"
+    #   # ⚠ 世代混在の 2 枚使いは遅い側と GPU 間転送に律速されます。
+    #   #   単体で載るモデルなら 1 枚に寄せた方が速いことが多いので要計測。
+    #   #   tensor-split は UI が VRAM 比から提案値を入れてくれます。
+    #   - name: "2枚 tensor-split (64K)"
     #     args:
     #       "-ngl": 99
     #       "--ctx-size": 65536
-    #       "--device": "CUDA0,CUDA1"
-    #       "--tensor-split": "24,32"  # VRAM 比 (24GB : 32GB)。等分だと遅い側が溢れる
-    #       # ⚠ 世代混在の分割は遅い側 (3090) と GPU 間転送に律速されます。
-    #       #   単体で載るモデルなら 1 枚に寄せた方が速いことが多いので要計測。
+    #       "--batch-size": 1024
     #
     # llama.cpp-vulkan:
     #   - name: "GPU フル活用"
     #     args:
     #       "-ngl": 99
-    #       "--ctx-size": 131072       # Strix Halo の統合メモリ (114GB) なら通る
+    #       "--ctx-size": 131072       # 統合メモリ機 (Strix Halo 等) なら通る
     #       "--no-mmap": true          # ★Vulkan では実質必須。付け忘れると激遅
-    #       "--batch-size": 2048       # プロンプト処理を稼ぐ。VRAM と相談
+    #       "--batch-size": 2048       # プロンプト処理を稼ぐ。メモリと相談
     #       "--ubatch-size": 512
     #       "--threads": 4             # 全層 GPU なら CPU スレッドはほぼ効かない
-    #       "--device": "Vulkan2"      # ← id は Vulkan ビルドの --list-devices が正
-    #
-    #   - name: "ベンチ比較用 (条件固定)"
-    #     args:
-    #       "-ngl": 99
-    #       "--ctx-size": 32768
-    #       "--parallel": 1
-    #       "--batch-size": 512
-    #       "--ubatch-size": 512
-    #       "--threads": 8
-    #       "--no-mmap": true          # Vulkan の前提条件なので比較用でも付ける
-    #       "--device": "Vulkan2"
     #
     # llama.cpp-rocm:
     #   - name: "GPU フル活用"
     #     args:
     #       "-ngl": 99                 # ★ここが 0 だと ROCm 表示のまま CPU 実行になる
-    #       "--ctx-size": 131072       # Vulkan 側と揃えてある (比較したいなら必須)
-    #       "--no-mmap": true          # APU は GPU も同じ RAM を使う。要計測だが有効なことが多い
-    #       "--batch-size": 2048
-    #       "--ubatch-size": 512
-    #       "--threads": 4
-    #       "--device": "ROCm0"        # ← id は ROCm ビルドの --list-devices が正
+    #       "--ctx-size": 32768        # ROCm は total 表示より実効 free が小さいことがある
+    #       "--batch-size": 1024
     #
-    #   - name: "ベンチ比較用 (条件固定)"
-    #     args:
-    #       "-ngl": 99
-    #       "--ctx-size": 32768
-    #       "--parallel": 1
-    #       "--batch-size": 512
-    #       "--ubatch-size": 512
-    #       "--threads": 8
-    #       "--device": "ROCm0"
-    #
-    #   # ROCm は GPU の可視範囲を環境変数でも絞れます (HIP_VISIBLE_DEVICES など)。
+    #   # ROCm は GPU の可視範囲を環境変数でも絞れます (HIP_VISIBLE_DEVICES 等)。
     #   # option_profiles は CLI 引数しか渡さないので、必要なら coderouter 起動側の
-    #   # 環境変数で設定してください。--device と env の両方で絞ると、--device の
-    #   # 番号は「絞った後の並び」を指す点に注意 (ROCm0 が別の GPU になりえます)。
-    #
-    # ★ --device の id はビルドごとに別の名前空間です。CUDA0 と Vulkan0 は
-    #   同じ GPU を指しません。プロファイルに --device を書くときは、その
-    #   ビルドの --list-devices の出力に合わせてください (UI の「🔍 検出」で
-    #   確認できます)。
+    #   # 環境変数で設定してください。env で絞ると UI に出るデバイス番号も
+    #   # 「絞った後の並び」になる点に注意 (ROCm0 が別の GPU を指しえます)。
     #
     # ★ --ctx-size は全スロットの合計です。--parallel N を付けると 1 スロット
     #   あたりは ctx-size / N になります (例: 131072 を 4 並列 → 各 32768)。
