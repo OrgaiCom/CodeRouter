@@ -4,8 +4,10 @@
 
 Web 版とバイナリ解決ロジックが別実装なので、同じ分岐が GUI 側でも正規化
 されていることを独立に固定する。``tk.Tk()`` / ``LauncherApp`` は生成せず、
-Tk 非依存のモジュールレベル関数だけを叩く (既存 GUI テストと同じ方針・
-CI の uv Python に tkinter が無いため importorskip)。
+Tk 非依存のモジュールレベル関数だけを叩く (既存 GUI テストと同じ方針)。
+下の importorskip は CI 向けではない — CI の uv 管理 CPython には tkinter
+があり、GUI 系テストは実際に実行される。tkinter を持たないローカルの
+システム Python でも収集時に落ちないようにするためのもの。
 """
 
 from __future__ import annotations

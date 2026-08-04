@@ -9,6 +9,11 @@ secrets.env
 ~/.coderouter/
 CLAUDE.md
 
+# *.bak — pre-overwrite backups of the files above (e.g. `vscode-init --force`
+# saves `.envrc.bak` before clobbering `.envrc`; `doctor --apply` saves
+# `providers.yaml.bak`). Same secret-risk as the originals, so same rule.
+*.bak
+
 # ============================================================
 # Python
 # ============================================================

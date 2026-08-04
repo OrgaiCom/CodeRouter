@@ -846,10 +846,70 @@ def poll_until_ready(
     return "timeout"
 
 
+# ---------------------------------------------------------------------------
+# Tagged log-queue events (H-13: no in-band signaling)
+#
+# The launcher's log queue carries BOTH control events (spawn succeeded,
+# readiness passed, spawn failed, devices probed) and the raw stdout of the
+# child backend. Encoding control events as magic prefixes *inside the line*
+# ("_ERR_:...", "_READY_:...") meant any child that happened to print such a
+# line could drive the UI: a single "_ERR_:" line from llama-server would
+# ``del self.processes[proc_id]``, orphaning a still-live server (VRAM + port
+# held, and no longer stopped by ``_on_close``). A short "_SPAWNED_:x" line
+# raised ValueError inside the drain loop and dropped that whole tick's logs.
+# llama-server echoes GGUF metadata (chat templates and friends) verbatim, so
+# this was reachable from model data alone.
+#
+# So every queue item is now a ``(kind, proc_id, payload)`` triple and raw
+# child output is ALWAYS enqueued with ``LOG_KIND_LOG`` — it is never
+# inspected for markers. Same treatment for the CodeRouter queue, whose items
+# are ``(kind, payload)`` pairs. Mirrors ``SweepWindow._queue``'s
+# ("step"/"log"/"done") tagging, which already had this shape.
+#
+# Payload shapes (plain strings for now; dataclass payloads are a follow-up):
+#   LOG_KIND_LOG      -> the log line
+#   LOG_KIND_SPAWNED  -> "<name>:<port>"
+#   LOG_KIND_READY    -> "<name>:<port>"
+#   LOG_KIND_ERROR    -> the error text
+#   LOG_KIND_DEVICES  -> "" (the real payload is on ``app._pending_probe``)
+# ---------------------------------------------------------------------------
+
+LOG_KIND_LOG = "log"
+LOG_KIND_SPAWNED = "spawned"
+LOG_KIND_READY = "ready"
+LOG_KIND_ERROR = "error"
+LOG_KIND_DEVICES = "devices"
+
+CR_KIND_LOG = "log"
+CR_KIND_OK = "ok"
+CR_KIND_ERROR = "error"
+CR_KIND_EXIT = "exit"
+
+# (kind, proc_id, payload) — see the block comment above.
+LogEvent = tuple[str, str, str]
+# (kind, payload) — the CodeRouter supervisor queue has no proc_id.
+CrLogEvent = tuple[str, str]
+
+
+def parse_name_port(payload: str) -> tuple[str, int] | None:
+    """Split a ``"<name>:<port>"`` control payload; ``None`` if malformed.
+
+    ``rpartition`` (not ``split``) so a model name containing ``:`` still
+    parses — the port is always the last field. Returning ``None`` instead of
+    raising is deliberate: a malformed control payload must skip that one
+    event, never take down the drain loop for the whole tick (the old
+    ``line.split(":", 2)`` raised ValueError and did exactly that).
+    """
+    name, sep, port = payload.rpartition(":")
+    if not sep or not name or not port.isdigit():
+        return None
+    return name, int(port)
+
+
 def _readiness_worker(
     mp: ManagedProcess,
     cfg: LauncherConfig,
-    log_queue: queue.Queue[tuple[str, str]],
+    log_queue: queue.Queue[LogEvent],
     gen: int,
     *,
     backend_ready: Callable[..., bool] = _backend_ready,
@@ -892,12 +952,14 @@ def _readiness_worker(
             return
         mp.status = "running"
         mp.restart_count = 0
-        log_queue.put((mp.id, "[launcher] readiness check passed"))
-        log_queue.put((mp.id, f"_READY_:{mp.name}:{mp.port}"))
+        log_queue.put(
+            (LOG_KIND_LOG, mp.id, "[launcher] readiness check passed"))
+        log_queue.put((LOG_KIND_READY, mp.id, f"{mp.name}:{mp.port}"))
     elif outcome == "timeout":
         if mp.spawn_gen == gen and mp.status in ("starting", "loading"):
             mp.status = "error"
             log_queue.put((
+                LOG_KIND_LOG,
                 mp.id,
                 f"[launcher] readiness check timed out after "
                 f"{cfg.readiness_timeout_s:.0f}s — process left running but "
@@ -1034,14 +1096,17 @@ class LauncherApp(tk.Tk):
         self.selected_proc_id: str | None = None
         self._last_auto_name: str = ""   # _on_model_select が自動入力した名前を記録
         self._hw: dict[str, Any] = {}    # 検出済みハードウェア情報
-        self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        # (kind, proc_id, payload) — tagged events, never in-band markers.
+        # See the LOG_KIND_* block above _readiness_worker.
+        self._log_queue: queue.Queue[LogEvent] = queue.Queue()
 
         # ── CodeRouter プロセス管理 ─────────────────────────────────────────
         self._cr_proc: subprocess.Popen | None = None
         self._cr_status: str = "stopped"   # stopped / starting / running / error
         # 上限付き deque。常駐 CodeRouter の出力で無制限に増えるのを防ぐ。
         self._cr_log: deque[str] = deque(maxlen=_MAX_LOG_LINES)
-        self._cr_log_queue: queue.Queue[str] = queue.Queue()
+        # (kind, payload) — same tagging rationale as _log_queue.
+        self._cr_log_queue: queue.Queue[CrLogEvent] = queue.Queue()
         self._cr_port: int = _CODEROUTER_PORT
 
         # ttk style
@@ -1381,18 +1446,20 @@ class LauncherApp(tk.Tk):
                     bufsize=0,
                 )
             except Exception as exc:
-                self._cr_log_queue.put(f"_CR_ERR_:{exc}")
+                self._cr_log_queue.put((CR_KIND_ERROR, str(exc)))
                 return
 
             self._cr_proc = p
-            self._cr_log_queue.put(f"_CR_OK_:{p.pid}")
+            self._cr_log_queue.put((CR_KIND_OK, str(p.pid)))
 
             assert p.stdout
             for raw in iter(lambda: p.stdout.read(4096), b""):
                 for line in raw.decode("utf-8", errors="replace").splitlines():
-                    self._cr_log_queue.put(line)
+                    # Raw child output: ALWAYS a plain log event. Never
+                    # inspected for control markers (H-13).
+                    self._cr_log_queue.put((CR_KIND_LOG, line))
             p.wait()
-            self._cr_log_queue.put(f"_CR_EXIT_:{p.returncode}")
+            self._cr_log_queue.put((CR_KIND_EXIT, str(p.returncode)))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1775,8 +1842,10 @@ class LauncherApp(tk.Tk):
 
         The blocking subprocess call must never run on the Tk main thread (it
         would freeze the UI), so the probe is stored on ``self._pending_probe``
-        and a ``_DEVICES_`` marker is enqueued for the poll loop to render —
-        the same thread→UI handoff pattern used by the launch worker.
+        and a ``LOG_KIND_DEVICES`` event is enqueued for the poll loop to
+        render — the same thread→UI handoff pattern used by the launch
+        worker. The event carries no proc_id (it belongs to no process); it
+        used to abuse the proc_id slot as a ``"_DEVICES_"`` sentinel.
         """
         if not _HAS_DEVICES:
             return
@@ -1786,7 +1855,7 @@ class LauncherApp(tk.Tk):
         def work() -> None:
             probe = detect_llama_devices(binary)
             self._pending_probe = probe          # set BEFORE enqueuing marker
-            self._log_queue.put(("_DEVICES_", ""))
+            self._log_queue.put((LOG_KIND_DEVICES, "", ""))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2114,7 +2183,7 @@ class LauncherApp(tk.Tk):
                     )
                 except Exception as exc:
                     mp.status = "error"
-                    self._log_queue.put((proc_id, f"_ERR_:{exc}"))
+                    self._log_queue.put((LOG_KIND_ERROR, proc_id, str(exc)))
                     return
 
                 started_at = time.monotonic()
@@ -2132,20 +2201,26 @@ class LauncherApp(tk.Tk):
                 mp.status = "loading"
                 _spawn_readiness_worker()
                 if first:
-                    self._log_queue.put((proc_id, f"_SPAWNED_:{name}:{port}"))
+                    self._log_queue.put(
+                        (LOG_KIND_SPAWNED, proc_id, f"{name}:{port}"))
                     first = False
 
                 assert p.stdout
                 stdout = p.stdout
                 for raw in iter(lambda s=stdout: s.read(4096), b""):
                     for line in raw.decode("utf-8", errors="replace").splitlines():
-                        self._log_queue.put((proc_id, line))
+                        # Raw child output: ALWAYS a plain log event. Never
+                        # inspected for control markers (H-13) — llama-server
+                        # dumps GGUF metadata verbatim and may well emit a
+                        # line starting with "_ERR_:" or "_SPAWNED_:".
+                        self._log_queue.put((LOG_KIND_LOG, proc_id, line))
                 p.wait()
                 mp.returncode = p.returncode
                 mp.pid = None
                 mp.status = _exit_status(p.returncode, mp.stopping)
-                self._log_queue.put(
-                    (proc_id, f"[launcher] exited (code {p.returncode})"))
+                self._log_queue.put((
+                    LOG_KIND_LOG, proc_id,
+                    f"[launcher] exited (code {p.returncode})"))
 
                 if mp.stopping:
                     # Intentional stop (_do_stop / _do_kill). Never a crash
@@ -2163,13 +2238,15 @@ class LauncherApp(tk.Tk):
                 ):
                     fallback_done = True
                     self._log_queue.put((
+                        LOG_KIND_LOG,
                         proc_id,
                         f"[launcher] MTP startup failure detected "
                         f"(exit code {p.returncode}); retrying without "
                         "speculative decoding",
                     ))
-                    self._log_queue.put(
-                        (proc_id, f"[launcher] cmd: {' '.join(fallback_cmd)}"))
+                    self._log_queue.put((
+                        LOG_KIND_LOG, proc_id,
+                        f"[launcher] cmd: {' '.join(fallback_cmd)}"))
                     run_cmd = fallback_cmd
                     continue
 
@@ -2184,7 +2261,7 @@ class LauncherApp(tk.Tk):
                         has_cmd=bool(run_cmd),
                     )
                     for ln in plan.log_lines:
-                        self._log_queue.put((proc_id, ln))
+                        self._log_queue.put((LOG_KIND_LOG, proc_id, ln))
                     if plan.should_restart:
                         mp.restart_count += 1
                         time.sleep(plan.backoff_s)
@@ -2410,6 +2487,107 @@ class LauncherApp(tk.Tk):
             # UI に制御を返しつつ素早く追従する
             self.after(50 if backlog else 1000, self._poll)
 
+    # ── ログキューのイベント処理 (H-13: kind によるディスパッチ) ─────────
+
+    def _reset_launch_button(self) -> None:
+        """起動ボタンを既定状態に戻し、起動アニメーションを止める。"""
+        self._launch_anim_proc_id = None   # _launch_anim_tick が次回自動停止
+        self._launch_btn.configure(
+            text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
+        )
+
+    def _apply_cr_event(self, kind: str, payload: str) -> None:
+        """タグ付き CodeRouter キューイベントを1件適用する。
+
+        Dispatch is on ``kind`` alone — the payload is never pattern-matched,
+        so CodeRouter's own stdout can no longer forge a state transition by
+        printing a line that happens to start with ``_CR_EXIT_:`` (H-13).
+        """
+        if kind == CR_KIND_OK:
+            self._cr_status = "running"
+            self._cr_log.append(f"[coderouter] 起動しました (PID {payload})")
+            self._update_cr_ui()
+            self._set_status(f"CodeRouter 稼働中 (PID {payload})")
+
+        elif kind == CR_KIND_ERROR:
+            self._cr_status = "error"
+            self._cr_log.append(f"[coderouter] 起動エラー: {payload}")
+            self._cr_err_var.set(f"CodeRouter 起動失敗: {payload}")
+            self._update_cr_ui()
+
+        elif kind == CR_KIND_EXIT:
+            self._cr_status = "stopped" if payload == "0" else "error"
+            self._cr_proc = None
+            self._cr_log.append(f"[coderouter] 終了 (code {payload})")
+            self._update_cr_ui()
+
+        else:
+            # CR_KIND_LOG — and any unrecognised kind, which is treated as
+            # inert output rather than being interpreted.
+            self._cr_log.append(payload)
+
+    def _apply_log_event(
+        self, kind: str, proc_id: str, payload: str
+    ) -> str | None:
+        """タグ付きバックエンドログキューイベントを1件適用する。
+
+        Returns the line to append to the visible log pane (only when it
+        belongs to the selected process), or ``None``.
+
+        Dispatch is on ``kind`` alone. Raw child stdout always arrives as
+        ``LOG_KIND_LOG`` and therefore can never delete a live process from
+        ``self.processes`` or move the UI into a "ready"/"spawned" state, no
+        matter what the model's metadata happens to print (H-13).
+        """
+        # デバイス検出スレッドからの通知(実データは self._pending_probe)。
+        if kind == LOG_KIND_DEVICES:
+            self._render_devices(self._pending_probe)
+            return None
+
+        mp = self.processes.get(proc_id)
+        if mp is None:
+            return None
+
+        if kind == LOG_KIND_SPAWNED:
+            # OS プロセスの起動に成功した段階(readiness 未確認)。
+            # フォームは次の起動へ空けるが、mp.status は "loading" の
+            # ままで、実際に "稼働中" になるのは ready イベント受信時。
+            parsed = parse_name_port(payload)
+            if parsed is None:
+                mp.log_lines.append(
+                    f"[launcher] 不正な spawned イベントを無視しました: {payload!r}")
+                return None
+            pname, pport = parsed
+            self._set_status(f"読み込み中: {pname} (PID {mp.pid})")
+            self._port_var.set(str(pport + 1))
+            self._name_var.set("")
+            self._reset_launch_button()
+            return None
+
+        if kind == LOG_KIND_READY:
+            # readiness probe が通り、mp.status は既に "running"。
+            parsed = parse_name_port(payload)
+            if parsed is None:
+                mp.log_lines.append(
+                    f"[launcher] 不正な ready イベントを無視しました: {payload!r}")
+                return None
+            pname, _pport = parsed
+            if proc_id == self.selected_proc_id:
+                self._set_status(f"稼働中: {pname} (PID {mp.pid})")
+            return None
+
+        if kind == LOG_KIND_ERROR:
+            del self.processes[proc_id]
+            self._set_launch_err(f"起動エラー: {payload}")
+            self._set_status("起動失敗")
+            self._reset_launch_button()
+            return None
+
+        # LOG_KIND_LOG — and any unrecognised kind, which is treated as inert
+        # output rather than being interpreted.
+        mp.log_lines.append(payload)
+        return payload if proc_id == self.selected_proc_id else None
+
     def _poll_impl(self) -> bool:
         """キューを処理して UI を更新する。
 
@@ -2423,99 +2601,24 @@ class LauncherApp(tk.Tk):
         cr_processed = 0
         while cr_processed < _MAX_LINES_PER_TICK:
             try:
-                line = self._cr_log_queue.get_nowait()
+                cr_kind, cr_payload = self._cr_log_queue.get_nowait()
             except queue.Empty:
                 break
             cr_processed += 1
-
-            if line.startswith("_CR_OK_:"):
-                pid_str = line[len("_CR_OK_:"):]
-                self._cr_status = "running"
-                self._cr_log.append(f"[coderouter] 起動しました (PID {pid_str})")
-                self._update_cr_ui()
-                self._set_status(f"CodeRouter 稼働中 (PID {pid_str})")
-
-            elif line.startswith("_CR_ERR_:"):
-                err = line[len("_CR_ERR_:"):]
-                self._cr_status = "error"
-                self._cr_log.append(f"[coderouter] 起動エラー: {err}")
-                self._cr_err_var.set(f"CodeRouter 起動失敗: {err}")
-                self._update_cr_ui()
-
-            elif line.startswith("_CR_EXIT_:"):
-                rc = line[len("_CR_EXIT_:"):]
-                self._cr_status = "stopped" if rc == "0" else "error"
-                self._cr_proc = None
-                self._cr_log.append(f"[coderouter] 終了 (code {rc})")
-                self._update_cr_ui()
-
-            else:
-                self._cr_log.append(line)
+            self._apply_cr_event(cr_kind, cr_payload)
 
         # ── llama.cpp / vllm ログキュー処理 ──────────────────────────────
         lc_processed = 0
         while lc_processed < _MAX_LINES_PER_TICK:
             try:
-                proc_id, line = self._log_queue.get_nowait()
+                kind, proc_id, payload = self._log_queue.get_nowait()
             except queue.Empty:
                 break
             lc_processed += 1
-
-            # デバイス検出スレッドからの通知(実データは self._pending_probe)。
-            if proc_id == "_DEVICES_":
-                self._render_devices(self._pending_probe)
-                changed = True
-                continue
-
-            if proc_id not in self.processes:
-                changed = True
-                continue
-
-            mp = self.processes[proc_id]
-
-            if line.startswith("_SPAWNED_:"):
-                # OS プロセスの起動に成功した段階(readiness 未確認)。
-                # フォームは次の起動へ空けるが、mp.status は "loading" の
-                # ままで、実際に "稼働中" になるのは _READY_ 受信時。
-                parts = line.split(":", 2)
-                _, pname, pport = parts
-                self._set_status(f"読み込み中: {pname} (PID {mp.pid})")
-                self._port_var.set(str(int(pport) + 1))
-                self._name_var.set("")
-                # アニメーション停止(_launch_anim_tick が次回呼ばれたとき自動停止)
-                self._launch_anim_proc_id = None
-                self._launch_btn.configure(
-                    text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
-                )
-                changed = True
-                continue
-
-            if line.startswith("_READY_:"):
-                # readiness probe が通り、mp.status は既に "running"。
-                parts = line.split(":", 2)
-                _, pname, _pport = parts
-                if proc_id == self.selected_proc_id:
-                    self._set_status(f"稼働中: {pname} (PID {mp.pid})")
-                changed = True
-                continue
-
-            if line.startswith("_ERR_:"):
-                err = line[6:]
-                del self.processes[proc_id]
-                self._set_launch_err(f"起動エラー: {err}")
-                self._set_status("起動失敗")
-                # アニメーション停止
-                self._launch_anim_proc_id = None
-                self._launch_btn.configure(
-                    text="▶ llama.cpp / vllm / mlx 起動", state="normal", cursor="hand2"
-                )
-                changed = True
-                continue
-
-            mp.log_lines.append(line)
-            if proc_id == self.selected_proc_id:
-                pending_log_lines.append(line)
             changed = True
+            shown = self._apply_log_event(kind, proc_id, payload)
+            if shown is not None:
+                pending_log_lines.append(shown)
 
         # ログをまとめて1回だけ書き込む(行ごとに configure するとUI固まる)
         if pending_log_lines:
@@ -2564,17 +2667,26 @@ class LauncherApp(tk.Tk):
 # functions + the frozen launcher_devices logic, so it is unit-testable with
 # injected fakes (no live Tk app, no real subprocesses) — mirroring the
 # readiness/auto-restart split elsewhere in this module.
+#
+# The sweep queue was already kind-tagged; the constants below just name the
+# vocabulary so it lines up with LOG_KIND_* / CR_KIND_* above (the devices
+# event lost its stray "_" prefix in the process — H-13).
 # ---------------------------------------------------------------------------
+
+SWEEP_KIND_STEP = "step"
+SWEEP_KIND_LOG = "log"
+SWEEP_KIND_DEVICES = "devices"
+SWEEP_KIND_DONE = "done"
 
 
 class _SweepWorker(threading.Thread):
     """Drive a :class:`SweepPlan` step-by-step in a background thread.
 
-    Results are pushed to ``out_queue`` as ``("step", SweepStep)`` /
-    ``("log", str)`` / ``("done", None)`` tuples for the window's poll loop to
-    consume. ``popen`` / ``poll_ready`` / ``backend_ready`` are injectable so
-    tests can drive the state machine deterministically without spawning
-    anything.
+    Results are pushed to ``out_queue`` as ``(SWEEP_KIND_STEP, SweepStep)`` /
+    ``(SWEEP_KIND_LOG, str)`` / ``(SWEEP_KIND_DONE, None)`` tuples for the
+    window's poll loop to consume. ``popen`` / ``poll_ready`` /
+    ``backend_ready`` are injectable so tests can drive the state machine
+    deterministically without spawning anything.
     """
 
     def __init__(
@@ -2601,10 +2713,10 @@ class _SweepWorker(threading.Thread):
 
     # ── emit helpers ─────────────────────────────────────────────────────
     def _emit_step(self, step: SweepStep) -> None:
-        self.queue.put(("step", step))
+        self.queue.put((SWEEP_KIND_STEP, step))
 
     def _emit_log(self, line: str) -> None:
-        self.queue.put(("log", line))
+        self.queue.put((SWEEP_KIND_LOG, line))
 
     def run(self) -> None:
         try:
@@ -2615,7 +2727,7 @@ class _SweepWorker(threading.Thread):
                     continue
                 self._run_one(step)
         finally:
-            self.queue.put(("done", None))
+            self.queue.put((SWEEP_KIND_DONE, None))
 
     def _pump_logs(self, proc: Any, label: str) -> None:
         """Drain a child's stdout into the log queue in a daemon thread.
@@ -2848,7 +2960,7 @@ class SweepWindow(tk.Toplevel):
 
         def work() -> None:
             probe = detect_llama_devices(binary)
-            self._queue.put(("_devices", probe))
+            self._queue.put((SWEEP_KIND_DEVICES, probe))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2933,17 +3045,17 @@ class SweepWindow(tk.Toplevel):
                 except queue.Empty:
                     break
                 processed += 1
-                if kind == "step":
+                if kind == SWEEP_KIND_STEP:
                     self._update_step(payload)
-                elif kind == "log":
+                elif kind == SWEEP_KIND_LOG:
                     self._append_log(payload)
-                elif kind == "_devices":
+                elif kind == SWEEP_KIND_DEVICES:
                     self._render_configs(
                         payload.devices if payload.ok else [])
                     self._sweep_status.set(
                         f"デバイス {len(payload.devices)} 個を検出" if payload.ok
                         else f"検出失敗: {payload.error}")
-                elif kind == "done":
+                elif kind == SWEEP_KIND_DONE:
                     self._start_btn.configure(state="normal")
                     self._abort_btn.configure(state="disabled")
                     self._sweep_status.set(self._summary_text())

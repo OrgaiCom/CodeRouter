@@ -24,6 +24,8 @@ for this suite.
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -36,6 +38,15 @@ from coderouter.vscode_init import (
     format_result,
     run_vscode_init,
 )
+
+_SKIP_ON_WINDOWS = pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX mode bits are not meaningful on Windows",
+)
+
+
+def _mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
 
 # ---------------------------------------------------------------------------
 # run_vscode_init — happy paths
@@ -343,6 +354,175 @@ def test_existing_envrc_force_overwrites(tmp_path: Path) -> None:
     envrc = (tmp_path / ".envrc").read_text()
     assert "ANTHROPIC_BASE_URL" in envrc
     assert "FOO=bar" not in envrc
+
+
+# ---------------------------------------------------------------------------
+# H-11: --force must not destroy data, loosen permissions, or leave debris
+#
+# ``--force`` on .envrc is a whole-file replace, not a merge. Before
+# v2.11 the previous contents were simply gone — including the
+# ``source_env_if_exists .envrc.local`` line docs/guides/vscode.md tells
+# users to add — and os.replace reset the file's mode to the umask
+# default (0600 → 0644 for a file holding ANTHROPIC_AUTH_TOKEN).
+# ---------------------------------------------------------------------------
+
+
+def test_force_backs_up_existing_envrc(tmp_path: Path) -> None:
+    """--force stashes the exact previous bytes in .envrc.bak."""
+    original = (
+        "# hand-written\n"
+        'export ANTHROPIC_BASE_URL="http://localhost:9999"\n'
+        "source_env_if_exists .envrc.local\n"
+    )
+    (tmp_path / ".envrc").write_text(original, encoding="utf-8")
+
+    result = run_vscode_init(tmp_path, with_envrc=True, force=True)
+    assert exit_code_for(result) == 0
+
+    backup = tmp_path / ".envrc.bak"
+    assert backup.exists()
+    assert backup.read_text(encoding="utf-8") == original
+
+
+def test_existing_envrc_force_preserves_original_in_backup(tmp_path: Path) -> None:
+    """Companion to test_existing_envrc_force_overwrites.
+
+    That test pins "the live file no longer has FOO=bar". This one pins
+    the other half of the contract: FOO=bar is not *lost*, it moved to
+    the backup.
+    """
+    (tmp_path / ".envrc").write_text("export FOO=bar\n", encoding="utf-8")
+    run_vscode_init(tmp_path, with_envrc=True, force=True)
+
+    assert (tmp_path / ".envrc.bak").read_text(encoding="utf-8") == "export FOO=bar\n"
+
+
+def test_force_backup_not_created_in_dry_run(tmp_path: Path) -> None:
+    """--dry-run --force must not touch the filesystem, backups included."""
+    original = "export FOO=bar\n"
+    (tmp_path / ".envrc").write_text(original, encoding="utf-8")
+
+    result = run_vscode_init(tmp_path, with_envrc=True, force=True, dry_run=True)
+    assert exit_code_for(result) == 0
+
+    assert not (tmp_path / ".envrc.bak").exists()
+    assert (tmp_path / ".envrc").read_text(encoding="utf-8") == original
+
+
+def test_backup_path_reported_in_outcome(tmp_path: Path) -> None:
+    """The user has to be told where the old contents went."""
+    (tmp_path / ".envrc").write_text("export FOO=bar\n", encoding="utf-8")
+    result = run_vscode_init(tmp_path, with_envrc=True, force=True)
+
+    envrc_outcome = next(o for o in result.outcomes if o.path.name == ".envrc")
+    assert ".envrc.bak" in envrc_outcome.reason
+    # ...and it must survive into what the CLI actually prints.
+    text = format_result(result, dry_run=False, port=DEFAULT_PORT)
+    assert ".envrc.bak" in text
+
+
+def test_conflict_message_warns_whole_file_is_replaced(tmp_path: Path) -> None:
+    """"Re-run with --force to overwrite" undersold the blast radius."""
+    (tmp_path / ".envrc").write_text(
+        "source_env_if_exists .envrc.local\n", encoding="utf-8"
+    )
+    result = run_vscode_init(tmp_path, with_envrc=True)
+
+    envrc_outcome = next(o for o in result.outcomes if o.path.name == ".envrc")
+    assert envrc_outcome.action == "conflict"
+    assert ".envrc.bak" in envrc_outcome.reason
+
+
+@_SKIP_ON_WINDOWS
+def test_envrc_mode_preserved_on_force_overwrite(tmp_path: Path) -> None:
+    """os.replace swaps inodes — the 0600 must not decay to 0644."""
+    envrc = tmp_path / ".envrc"
+    envrc.write_text('export ANTHROPIC_AUTH_TOKEN="sk-REAL-SECRET"\n', encoding="utf-8")
+    envrc.chmod(0o600)
+
+    run_vscode_init(tmp_path, with_envrc=True, force=True)
+
+    assert _mode_of(envrc) == 0o600
+    # The backup holds the secret too, so it must be just as tight.
+    assert _mode_of(tmp_path / ".envrc.bak") == 0o600
+
+
+@_SKIP_ON_WINDOWS
+def test_new_envrc_created_with_0600(tmp_path: Path) -> None:
+    """A generated .envrc carries a token — 0600 even under a lax umask."""
+    previous = os.umask(0o022)
+    try:
+        run_vscode_init(tmp_path, with_envrc=True)
+    finally:
+        os.umask(previous)
+
+    assert _mode_of(tmp_path / ".envrc") == 0o600
+
+
+@_SKIP_ON_WINDOWS
+def test_settings_json_mode_preserved(tmp_path: Path) -> None:
+    """_atomic_write is shared, so settings.json must keep its mode too."""
+    vscode_dir = tmp_path / ".vscode"
+    vscode_dir.mkdir()
+    settings = vscode_dir / "settings.json"
+    settings.write_text(json.dumps({"editor.fontSize": 14}), encoding="utf-8")
+    settings.chmod(0o600)
+
+    result = run_vscode_init(tmp_path)
+    assert exit_code_for(result) == 0
+    assert _mode_of(settings) == 0o600
+
+
+def test_settings_json_backed_up_before_rewrite(tmp_path: Path) -> None:
+    """A merge bug must not be the last word on a hand-tuned settings.json."""
+    vscode_dir = tmp_path / ".vscode"
+    vscode_dir.mkdir()
+    original = json.dumps({"editor.fontSize": 14})
+    (vscode_dir / "settings.json").write_text(original, encoding="utf-8")
+
+    run_vscode_init(tmp_path)
+
+    assert (vscode_dir / "settings.json.bak").read_text(encoding="utf-8") == original
+
+
+def test_atomic_write_leaves_no_tmp_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed rename must not litter the workspace with tmp files."""
+    from coderouter import vscode_init as mod
+
+    def boom(src: object, dst: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(mod.os, "replace", boom)
+
+    result = run_vscode_init(tmp_path, with_envrc=True)
+    # Both writes failed → reported, not crashed.
+    assert exit_code_for(result) == 1
+
+    leftovers = [p.name for p in tmp_path.rglob("*") if p.name.endswith(".tmp")]
+    assert leftovers == []
+    assert not (tmp_path / ".envrc").exists()
+
+
+def test_atomic_write_does_not_follow_symlink_tmp(tmp_path: Path) -> None:
+    """CWE-377: a pre-planted <name>.tmp symlink must not be written through.
+
+    The old implementation wrote to a fully predictable
+    ``<name>.tmp`` with ``Path.write_text``, which follows a symlink to
+    wherever it points. Regression detector for the mkstemp rewrite.
+    """
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious\n", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / ".envrc.tmp").symlink_to(victim)
+
+    run_vscode_init(workspace, with_envrc=True)
+
+    assert victim.read_text(encoding="utf-8") == "precious\n"
+    assert not (workspace / ".envrc").is_symlink()
+    assert "ANTHROPIC_BASE_URL" in (workspace / ".envrc").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

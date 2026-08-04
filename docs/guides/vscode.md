@@ -64,6 +64,25 @@ coderouter vscode-init [--target PATH]
 - `--dry-run`: `.vscode/settings.json` に何を書くかの unified diff だけ表示
 - `--force`: 既存の `ANTHROPIC_BASE_URL` などが違う値だったとき上書き（既定はコンフリクト報告のみで書かない）
 
+#### `--force` の挙動（v2.11 以降）
+
+`--force` の効き方は 2 つのファイルで異なります。
+
+- `.vscode/settings.json`: **マージ**です。CodeRouter が管理する 3 キー（`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `CODEROUTER_MODE`）だけを上書きし、`editor.fontSize` などの無関係なキーはそのまま残ります
+- `.envrc`: **ファイル全体の置き換え**です。マージはしません。手で足した行（例: `source_env_if_exists .envrc.local`）は生成内容には含まれないため消えます
+
+そのため、既存ファイルを書き換える前に**必ず退避コピーを作ります**。
+
+| 元のファイル | 退避先 |
+|---|---|
+| `.envrc` | `.envrc.bak` |
+| `.vscode/settings.json` | `.vscode/settings.json.bak` |
+
+- 退避先のパスは実行結果の `→` 行に表示されます
+- `--dry-run` では退避も含めて**一切ファイルを作りません**
+- `.bak` は毎回上書きされます。2 世代前は残らないので、重要な `.envrc` は `--force` の前に自分でも控えを取るか、素直に `.envrc.local` へ分離してください
+- `*.bak` はプロジェクトの `.gitignore` に入れておくことを推奨します
+
 ### 再実行しても壊れない
 
 `vscode-init` は冪等です。同じ引数で再実行すれば `unchanged` を報告して終了。異なる値と衝突した場合は `conflict` を出して**ファイルに触りません**（`--force` 必要）。オンボーディングスクリプトに含めて安全です。
@@ -75,6 +94,13 @@ coderouter vscode-init --with-envrc
 ```
 
 これで `.envrc` も生成されます。生成後に **`direnv allow`** を 1 回実行してください。シークレットは `.envrc.local` に分けて `source_env_if_exists .envrc.local` の形が安全です（`.envrc` はプロジェクトに commit することが多いので）。
+
+パーミッションについて（v2.11 以降）:
+
+- **新規生成した `.envrc` は `0600`（所有者のみ読み書き）**で作られます。`ANTHROPIC_AUTH_TOKEN` を含むファイルなので、`coderouter --check-env` が `.env` に課しているのと同じ基準に揃えてあります
+- **既存ファイルを上書きするときは、そのファイルの現在の mode をそのまま維持**します（以前は `os.replace` で umask 既定＝多くの環境で `0644` に戻っていました）
+- Windows では POSIX の mode ビットに意味がないため、mode の設定・維持は行いません
+- なお `--force` で `source_env_if_exists .envrc.local` の行は消えます。消える前の内容は `.envrc.bak` に残るので、必要な行はそこから戻してください
 
 ### 注意点
 

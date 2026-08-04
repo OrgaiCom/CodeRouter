@@ -9,6 +9,95 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.11.2] — 2026-08-04 (file-write safety and launcher event hygiene)
+
+Two fixes from the same review round as v2.11.1, split out because they
+rewrite `_atomic_write` and the launcher GUI's event plumbing and deserved
+their own rollback unit. **No breaking changes**: no config-schema field
+changed, no CLI flag changed meaning, `--force` still replaces `.envrc`.
+Existing `.vscode/settings.json` merge semantics are unchanged.
+
+### Fixed
+
+- **`vscode-init --force` destroyed `.envrc` with no way back.** The
+  command replaced the file outright — no merge, no backup — so a
+  hand-added `source_env_if_exists .envrc.local`, the very pattern
+  `docs/guides/vscode.md` recommends, vanished silently. direnv then
+  looked healthy while exporting nothing, which is a hard failure to
+  trace back to its cause. The conflict message said only "Re-run with
+  `--force` to overwrite" and never mentioned that the whole file goes.
+  The previous contents are now copied to `.envrc.bak` before the write,
+  the path is reported in the command's output, and the conflict message
+  spells out that this is a whole-file replacement rather than a merge.
+  `--dry-run` makes no backup. Only one generation is kept, so a second
+  `--force` overwrites the first `.bak` (`vscode_init.py`).
+- **The launcher GUI could lose track of a running backend because of
+  that backend's own log output.** `_log_queue` carried control events
+  and raw child stdout in the same channel, with the drain loop
+  dispatching on `line.startswith("_ERR_:")` and friends. A child line
+  beginning `_ERR_:` ran `del self.processes[proc_id]`, so a live
+  llama-server dropped out of the process table — unstoppable from the
+  UI, missed by the shutdown handler, holding its port and VRAM until
+  killed by hand. A line beginning `_SPAWNED_:` with too few colons
+  raised `ValueError` inside the drain loop and discarded that tick's
+  log processing entirely. This is reachable in ordinary use: llama.cpp
+  echoes GGUF metadata such as the chat template verbatim at startup,
+  and `extra_args` wrappers put arbitrary text on the same stream.
+  Events are now `(kind, proc_id, payload)` with `kind` in
+  `log / spawned / ready / error / devices`; raw child output is
+  enqueued unconditionally as `log` and never inspected for markers.
+  `_cr_log_queue` got the same treatment, the `"_DEVICES_"` proc_id
+  sentinel is gone, and a malformed control payload now skips its own
+  event instead of killing the loop. While here, `_SPAWNED_` parsing
+  moved from `split(":", 2)` to `rpartition`, so model names containing
+  a colon no longer mangle the port (`launcher_gui.py`).
+
+### Security
+
+- **`vscode-init` widened the permissions of the files it rewrote.**
+  `_atomic_write` created its temp file under the process umask and
+  `os.replace`d it over the target, so an `.envrc` hardened to `0600` —
+  a file that holds `ANTHROPIC_AUTH_TOKEN` — came back `0644`. The temp
+  path was also fully predictable (`.envrc.tmp`, `settings.json.tmp`),
+  so a pre-planted symlink at that path was followed and its target
+  overwritten (CWE-377), and two concurrent runs in one workspace raced
+  on the same name. Writes now go through `tempfile.mkstemp` with
+  `O_EXCL`, are `fsync`ed, restore the original mode before the rename,
+  and clean up the temp file on failure. A newly created `.envrc` is
+  written `0600`, matching the standard `coderouter doctor --check-env`
+  already enforces for credential-bearing files; an existing file keeps
+  whatever mode the operator set. Mode handling is POSIX-only —
+  `os.chmod` on Windows only toggles the read-only bit and is skipped.
+  `.vscode/settings.json` is backed up before any rewrite too, not just
+  under `--force`, since the merge path also edits it in place
+  (`vscode_init.py`).
+
+### Changed
+
+- `.gitignore` now excludes `*.bak`, so the backups above and
+  `providers.yaml.bak` from `doctor --apply` stay out of commits. They
+  carry the same secrets as the files they shadow.
+- Three GUI test modules documented their `pytest.importorskip("tkinter")`
+  as a CI workaround, stating that the uv-managed Python on CI has no
+  tkinter and that these tests are therefore skipped there. Measured on
+  2026-08-04: `uv python install` ships Tk 8.6 on both 3.12.11 and
+  3.13.7, and all 93 cases in those files run and pass on CI. The
+  docstrings now say so, and record that the guards stay for local
+  system pythons built without Tk — which do exist.
+
+### Tests
+
+- 1 new file, 38 new cases (`test_launcher_gui_events.py`, plus
+  additions to `test_vscode_init.py`). Suite: 2345 passed, 1 skipped,
+  ruff clean.
+- Each fix has a regression test confirmed to fail against the pre-fix
+  tree — 10 for the write path, 7 for the event path. The headline one
+  asserts a live process survives its own `_ERR_:` stdout line; on the
+  old code `app.processes` comes back empty. Another plants a symlink at
+  the predictable temp path and asserts its target is untouched.
+
+---
+
 ## [v2.11.1] — 2026-08-04 (second-round review: correctness & hardening)
 
 Seven fixes from a full-source review of the 36k-line package, plus two
