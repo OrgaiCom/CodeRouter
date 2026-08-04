@@ -81,7 +81,9 @@ def test_gui_readiness_uses_health_for_variants(
 
     monkeypatch.setattr(lg.urllib.request, "urlopen", fake_urlopen)
     assert lg._backend_ready(backend, 18081, probe_timeout_s=0.5) is True
-    assert called == ["http://localhost:18081/health"]
+    # 127.0.0.1 リテラルであること (localhost ではない)。詳細は
+    # coderouter/ingress/launcher_routes.py::_backend_ready のコメント参照。
+    assert called == ["http://127.0.0.1:18081/health"]
 
 
 def test_gui_readiness_still_tcp_for_mlx(monkeypatch: pytest.MonkeyPatch) -> None:

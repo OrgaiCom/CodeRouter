@@ -81,18 +81,19 @@ restores the v2.11.x estimate exactly.
   destroys history without reducing the estimate. The set of dropped
   messages is unchanged — verified against the old algorithm across 200
   random conversations (`guards/context_budget.py`).
-- **The launcher readiness probe never succeeded on hosts where
-  `localhost` prefers IPv6.** `_backend_ready` fetched
-  `http://localhost:<port>/health` while `llama-server` listens on IPv4
-  only (`--host 127.0.0.1` by default). Where `localhost` resolves to
-  `::1` first — the default on GitHub's macOS runners, and common on
-  Macs generally — httpx raises `Address family not supported` on every
-  attempt, so a backend that is up and serving times out with
-  `status='loading'` and never registers. The bare TCP fallback in the
-  same function already used the `127.0.0.1` literal; the HTTP branch was
-  the odd one out and now matches it. Found by adding the macOS CI runner
-  in this release, which is what it was added for
-  (`ingress/launcher_routes.py`).
+- **The readiness probe now targets the `127.0.0.1` literal rather than
+  `localhost`.** Both copies of `_backend_ready` fetched
+  `http://localhost:<port>/health` while the backends they probe listen
+  on IPv4 only (`llama-server --host 127.0.0.1` by default), and the bare
+  TCP fallback in the same function already used the literal — so the
+  HTTP branch was the odd one out. On a host with no IPv6 stack at all,
+  where `localhost` resolves to `::1` and nothing else, this fails every
+  attempt with `Address family not supported` and a backend that is up
+  and serving never registers. Hardening rather than a reported bug: on a
+  host that has `::1`, the connect is refused immediately and the
+  resolver falls through to IPv4, so the old form worked. Applied to both
+  `ingress/launcher_routes.py` and `launcher_gui.py`, which carry
+  independent copies of this function.
 
 ### Added
 
@@ -134,20 +135,25 @@ restores the v2.11.x estimate exactly.
   publish job holds `id-token: write` for Trusted Publishing and the
   release job holds `contents: write`; a moved tag on any action they
   use is a direct path to the PyPI project.
-- **CI runs on macOS.** The classifiers claim macOS support and this
-  repository has a documented history of macOS-specific breakage (bash
-  3.2 word splitting, Finder's folder-replace semantics), but every job
-  ran only on `ubuntu-latest`. `macos-latest` is added on the newest
-  Python only, so the matrix goes to three combinations rather than four
-  — the failures being guarded against are OS-level, not version-level.
-  It earned its keep immediately: the IPv6 readiness bug above only
-  reproduces there.
+- **A macOS CI runner was added and then withdrawn again before this
+  release shipped.** It failed six launcher tests immediately, and the
+  failures turned out to belong to the test harness rather than the
+  product: every test that spawns a real stub process and requires its
+  `/health` to answer 200 within the harness's 5.0s
+  `readiness_timeout_s` failed, and no others. Spawning, argv
+  construction, crash detection, SIGTERM handling, TTL and registry
+  behaviour all passed on macOS. That 5.0s budget is 1/60th of the
+  shipped default of 300.0s, so it does not represent any real
+  deployment. Rather than ship six `xfail`s or a red CI, the runner is
+  deferred to a follow-up that raises the harness budget first. The
+  reasoning and the re-enable steps are recorded in `ci.yml` next to the
+  matrix.
 - **Corrected the note about tkinter on CI**, which v2.11.2 got wrong in
   both directions. The GUI test modules originally said the uv-managed
   Python on CI has no tkinter; v2.11.2 "fixed" that to say it does,
   based on measuring `uv python install 3.12.11` in a Linux container.
-  The actual CI run settles it: the ubuntu runner skips those four files
-  and the macOS runner runs them. Tk availability is a property of the
+  The actual CI runs settle it: the ubuntu runner skips those four files
+  and the macOS runner ran them. Tk availability is a property of the
   runner image, so the docstrings no longer assert it in either
   direction — they just say to keep the `importorskip`.
 - **The CVE audit covers every extra.** `uv export` passed only

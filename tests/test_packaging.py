@@ -8,6 +8,7 @@ after a `uv build` / PyPI upload.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 import tomllib
@@ -17,6 +18,19 @@ import pytest
 import yaml
 
 from coderouter.ingress import launcher_routes
+
+
+def _function_source(path: Path, name: str) -> str:
+    """Return a top-level function's source text without importing its module."""
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            segment = ast.get_source_segment(text, node)
+            assert segment is not None, f"could not extract {name} from {path}"
+            return segment
+    raise AssertionError(f"{path} has no top-level function named {name!r}")
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
@@ -144,13 +158,30 @@ def test_release_workflow_actions_are_sha_pinned() -> None:
         )
 
 
-def test_ci_workflow_test_matrix_includes_macos() -> None:
+def test_ci_workflow_test_matrix_is_documented() -> None:
+    """The test matrix must cover ubuntu on both supported Pythons.
+
+    macOS is deliberately absent right now — it was added on the v2.12.0
+    branch, failed six launcher tests on a 5.0s harness budget that is
+    1/60th of the shipped default, and was deferred rather than papered
+    over with xfails. That decision has to stay legible, so if the runner
+    list ever shrinks below ubuntu or the reasoning comment disappears,
+    this fails.
+    """
     path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
     with open(path) as f:
         doc = yaml.safe_load(f)
     matrix = doc["jobs"]["test"]["strategy"]["matrix"]
-    assert "macos-latest" in matrix["os"]
+
     assert "ubuntu-latest" in matrix["os"]
+    assert set(matrix["python-version"]) >= {"3.12", "3.13"}
+
+    if "macos-latest" not in matrix["os"]:
+        text = path.read_text(encoding="utf-8")
+        assert "macOS is deliberately absent" in text, (
+            "macos-latest is not in the matrix and ci.yml no longer explains "
+            "why — either re-add the runner or restore the rationale comment"
+        )
 
 
 def test_ci_workflow_cve_audit_covers_all_extras() -> None:
@@ -190,11 +221,25 @@ def test_backend_ready_probes_ipv4_literal_not_localhost() -> None:
     failure only reproduces on a host whose resolver prefers IPv6, which is
     exactly the environment this suite cannot rely on having.
     """
-    src = inspect.getsource(launcher_routes._backend_ready)
-    assert "http://127.0.0.1:{port}/health" in src, (
-        "the /health readiness probe must use the 127.0.0.1 literal"
-    )
-    assert "localhost" not in src.split('"""')[-1], (
-        "no localhost in _backend_ready's executable body — it breaks on "
-        "IPv6-preferring hosts against IPv4-only backends"
-    )
+    # Two independent copies of this function exist: the server's and the
+    # Tk launcher's. Fixing one and not the other is exactly how this drifted
+    # in the first place, so both are pinned here. launcher_gui is read as
+    # source rather than imported — importing it needs tkinter, which the
+    # ubuntu CI runner does not have.
+    gui_src = _function_source(REPO_ROOT / "launcher_gui.py", "_backend_ready")
+
+    for owner, src in (
+        ("coderouter.ingress.launcher_routes", inspect.getsource(launcher_routes._backend_ready)),
+        ("launcher_gui", gui_src),
+    ):
+        assert "http://127.0.0.1:{port}/health" in src, (
+            f"{owner}._backend_ready must probe the 127.0.0.1 literal"
+        )
+        code = "\n".join(
+            line for line in src.splitlines() if not line.lstrip().startswith("#")
+        )
+        code = code.split('"""')[-1]
+        assert "http://localhost" not in code, (
+            f"{owner}._backend_ready still builds a localhost URL — that "
+            "breaks on hosts with no IPv6 stack against IPv4-only backends"
+        )

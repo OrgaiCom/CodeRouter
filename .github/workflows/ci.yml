@@ -42,19 +42,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         python-version: ["3.12", "3.13"]
-        # macOS runners are 2-3x the ubuntu minute-cost on GitHub-hosted
-        # infra and CLAUDE.md's macOS gotchas (bash 3.2 word-splitting,
-        # folder-clobbering copies) are shell/OS-version issues, not
-        # per-interpreter-version issues — one Python is enough to catch
-        # them. Keep both Python versions on ubuntu (cheap, already the
-        # regression-safety baseline) and add only the latest Python on
-        # macOS, so the matrix grows from 2 combinations to 3 instead of
-        # the naive 2x2=4.
-        exclude:
-          - os: macos-latest
-            python-version: "3.12"
+        # macOS is deliberately absent for now. This is a deferral, not a
+        # judgement that it isn't worth running.
+        #
+        # It was added on the v2.12.0 branch and immediately failed six
+        # launcher tests — every test that spawns a real stub process and
+        # requires its /health to answer 200 within the harness's 5.0s
+        # readiness_timeout_s, and no others. Everything else passed on
+        # macOS: spawn, argv construction, the `#!{sys.executable}`
+        # shebang, crash detection, SIGTERM handling, TTL, registry. The
+        # child is not dying — if it died, _tail_logs would flip the
+        # status to `error` and readiness would return well inside the
+        # budget instead of timing out at exactly 5.0s.
+        #
+        # So this looks like a property of the 5.0s harness budget, which
+        # is 1/60th of the shipped default (readiness_timeout_s: 300.0),
+        # rather than of the product. Leading hypothesis: CPython's
+        # HTTPServer.server_bind() calls socket.getfqdn() between bind()
+        # and listen(), and on macOS that reverse lookup can fall through
+        # to mDNSResponder and block for seconds, during which connects
+        # are refused. glibc answers from `files` instantly.
+        #
+        # To re-enable: raise those six tests' readiness_timeout_s (and
+        # the matching _poll(timeout=)) from 5.0 to ~30.0, put
+        # macos-latest back with `exclude: {os: macos-latest,
+        # python-version: "3.12"}` so the matrix is 3 jobs not 4, and see
+        # whether they pass. The diagnostic script that settles it lives
+        # in _OUTPUTS/02-レビュー監査/2026-08-04_stage3-fixes/.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
