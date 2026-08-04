@@ -37,7 +37,17 @@ jobs:
   # update committed to the repo.
   # -------------------------------------------------------------------
   test:
-    name: Tests & Lint (${{ matrix.os }}, py ${{ matrix.python-version }})
+    # ⚠️ This string is a required status check on main. Branch protection
+    # matches check names *exactly*, so renaming it means the old name is
+    # never reported again and every PR sits at "Expected — waiting for
+    # status to be reported" until someone edits the protection rules.
+    # That is not hypothetical: adding `${{ matrix.os }}` here for the
+    # macOS runner made PR #80 unmergeable on 2026-08-04.
+    #
+    # If you re-add macOS, the name has to grow an os component (two jobs
+    # cannot share one check name) — do that and update the required
+    # checks in the same change, not after.
+    name: Tests & Lint (py ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
