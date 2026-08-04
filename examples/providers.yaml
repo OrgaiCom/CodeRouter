@@ -1037,10 +1037,19 @@ profiles:
       When using tools, batch independent operations in parallel.
     # v2.0.0: Context Budget Management — 長時間 session の context overflow 防止
     # 8h+ の agentic session で context window に漸近 → 400 で死ぬ問題を自動防止。
-    # "trim" にすると 90% 超過時に古い messages を自動削除 (tool pair は保全)。
     # 詳細: docs/concepts/context-budget.md
-    context_budget_action: trim            # off | warn | trim
+    #
+    # v2.12 (H-5): token 推定が tool_result / tool_use / thinking を数える
+    # ようになり、Claude Code 型 (tool 主体) の session では推定値が従来の
+    # 5〜29 倍になった。つまりこの guard は「ようやく本来の対象で発火する」。
+    # 配布サンプルの既定は trim ではなく warn にしてある:
+    #   - trim にすると【実際に会話履歴が削られる】(戻せない)
+    #   - まず warn で X-CodeRouter-Context-Budget ヘッダと
+    #     context-budget-warning ログを観察し、閾値が自分の使い方に
+    #     合っていることを確認してから trim に切り替えるのを推奨
+    context_budget_action: warn            # off | warn | trim
     context_budget_warn_threshold: 0.80    # 80% で warning (header + log)
+    # ↓ 以下 3 つは action: trim のときだけ効く (warn では inert)
     context_budget_trim_threshold: 0.90    # 90% で自動 trim
     context_budget_trim_target: 0.75       # trim 後 75% まで削減
     context_budget_preserve_last_n: 4      # 直近 4 msg は常に保持

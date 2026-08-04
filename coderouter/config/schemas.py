@@ -27,6 +27,7 @@ from pydantic import (
 )
 
 from coderouter.logging import get_logger
+from coderouter.token_estimation import set_include_tool_content
 
 logger = get_logger(__name__)
 
@@ -2306,6 +2307,36 @@ class CodeRouterConfig(BaseModel):
         ),
     )
 
+    # H-5 escape hatch: token-estimation scope.
+    #
+    # Deliberately top-level rather than per-``FallbackChain``, even
+    # though ``context_budget_action`` lives on the chain. The shared
+    # char/4 estimator has four consumers and three of them run with no
+    # profile in hand: the auto-router runs *before* a profile exists
+    # (it is what picks one), ``POST /v1/messages/count_tokens`` answers
+    # a client question that must not depend on which chain would have
+    # served it, and language-tax measurement is profile-agnostic. A
+    # per-profile switch would let the router and the guard disagree
+    # about the size of the very same request — exactly the class of bug
+    # this key exists to let operators back out of.
+    token_estimation_include_tool_content: bool = Field(
+        default=True,
+        description=(
+            "v2.12 (H-5): count ``tool_result`` / ``tool_use`` / "
+            "``thinking`` content blocks in the shared char/4 token "
+            "estimator. True (default) is the correct behavior — up to "
+            "v2.11.x these blocks estimated to 0 chars, under-counting a "
+            "Claude Code style session by 5x at 20 turns and ~29x at 200. "
+            "Image blocks stay at 0 either way. Set to false as an escape "
+            "hatch to restore v2.11.x-identical estimates (and therefore "
+            "v2.11.x context-budget firing, auto-router "
+            "``content_token_count_min`` matching and "
+            "``/v1/messages/count_tokens`` numbers) if the corrected "
+            "estimate disrupts a tuned deployment. Compatibility shim "
+            "only — scheduled for removal in a future release."
+        ),
+    )
+
     # v2.0-I: Continuous probing — background health checks for idle periods.
     continuous_probe: Literal["off", "active"] = Field(
         default="off",
@@ -2814,6 +2845,25 @@ class CodeRouterConfig(BaseModel):
                 f"Fix the typo in profiles[].providers or add the missing "
                 f"provider(s)."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _apply_token_estimation_scope(self) -> CodeRouterConfig:
+        """Publish ``token_estimation_include_tool_content`` process-wide.
+
+        The char/4 estimator is a dependency-free leaf module that every
+        consumer imports directly as a plain function; there is no
+        object graph to thread a flag through, and three of the four
+        consumers have no profile/config handle at their call site. So
+        the loaded config pushes the setting into the module once, here.
+
+        Idempotent and deterministic: the value always reflects the most
+        recently constructed config, which in a server process is the
+        single config that was loaded at startup. Declared last so a
+        config that fails any other validator never takes effect. Tests
+        that flip it should restore the default (True) afterwards.
+        """
+        set_include_tool_content(self.token_estimation_include_tool_content)
         return self
 
     def provider_by_name(self, name: str) -> ProviderConfig:

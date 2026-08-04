@@ -101,6 +101,32 @@ auto_router:
     # 3) 超長尺リクエスト (~32K token 超) — Pi 上の小型モデルは context
     #    が 8K-32K 程度しか無いことが多く、prefill も遅い。1M ctx の
     #    Gemini Flash に逃がす。
+    #
+    # 【v2.12 (H-5) で挙動が大きく変わる箇所】
+    #   token 推定が tool_result / tool_use / thinking を数えるように
+    #   なったため、この閾値の実効的な発火頻度が跳ね上がる。実測
+    #   (tool 主体の agentic session、tool_result 1800 文字/ターン):
+    #     v2.11.2 : 800 ターン回しても 32,000 に到達しない (200 ターンで 1,083)
+    #     v2.12   : 69 ターン目で 32,000 を突破 (200 ターンで 93,183)
+    #   つまり長時間の agentic session は「ある時点から以後ずっと」この
+    #   ルールに合致し、local-chat ではなく longcontext (= 下記 profile の
+    #   openrouter-gemini-flash-free) に流れ続ける。
+    #
+    #   閾値 32000 自体は据え置いてある。Pi のローカルモデルは実際に
+    #   8K-32K しか context を持たないので、「32K を本当に使っている
+    #   リクエストは Pi では捌けない」という当初の意図に対しては、推定が
+    #   正確になった v2.12 のほうが正しい。従来これが一度も発火しなかった
+    #   のは意図ではなくバグ (過小評価) だった。
+    #
+    #   ただしクラウド送りが増えるのが困る場合の調整口は 2 つ:
+    #     a) この閾値を上げる (例 131072 = local を諦める点まで遅らせる)
+    #     b) トップレベルに token_estimation_include_tool_content: false を
+    #        書いて v2.11.x の推定に戻す (docs/concepts/context-budget.md)
+    #
+    #   なお下記 longcontext profile の宛先は google/gemini-2.5-flash:free
+    #   (paid: false / allow_paid: false) なので課金は発生しないが、
+    #   ローカル処理からクラウド無料枠へ実質的な既定経路が移る点は要注意
+    #   (レート制限・レイテンシ・データがローカルに留まらないこと)。
     - id: user:longcontext-go-cloud
       profile: longcontext
       match:

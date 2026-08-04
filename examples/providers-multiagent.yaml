@@ -140,8 +140,16 @@ profiles:
       You are the CODER. Implement exactly what the plan specifies.
       Prefer code blocks over prose. Use tools precisely; batch independent ops.
     # 長時間 session の context overflow 自動防止 (例の coding プロファイル準拠)
-    context_budget_action: trim
+    #
+    # v2.12 (H-5): token 推定が tool_result / tool_use / thinking を数える
+    # ようになったため、tool 主体の coder session では推定値が跳ね上がり
+    # guard が実際に発火する。trim にすると【会話履歴が本当に削られる】ので、
+    # 配布サンプルの既定は warn。ログ (context-budget-warning) と
+    # X-CodeRouter-Context-Budget ヘッダを見て閾値を確認してから
+    # trim へ切り替えること。
+    context_budget_action: warn
     context_budget_warn_threshold: 0.80
+    # ↓ 以下 3 つは action: trim のときだけ効く (warn では inert)
     context_budget_trim_threshold: 0.90
     context_budget_trim_target: 0.75
     context_budget_preserve_last_n: 4

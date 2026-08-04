@@ -37,17 +37,29 @@ jobs:
   # update committed to the repo.
   # -------------------------------------------------------------------
   test:
-    name: Tests & Lint (py ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Tests & Lint (${{ matrix.os }}, py ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13"]
+        # macOS runners are 2-3x the ubuntu minute-cost on GitHub-hosted
+        # infra and CLAUDE.md's macOS gotchas (bash 3.2 word-splitting,
+        # folder-clobbering copies) are shell/OS-version issues, not
+        # per-interpreter-version issues — one Python is enough to catch
+        # them. Keep both Python versions on ubuntu (cheap, already the
+        # regression-safety baseline) and add only the latest Python on
+        # macOS, so the matrix grows from 2 combinations to 3 instead of
+        # the naive 2x2=4.
+        exclude:
+          - os: macos-latest
+            python-version: "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
 
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
@@ -79,13 +91,13 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history — gitleaks scans every commit, not just HEAD.
           fetch-depth: 0
 
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -104,10 +116,10 @@ jobs:
     name: Dependency CVE audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
 
       - name: Set up Python
         run: uv python install 3.12
@@ -117,7 +129,13 @@ jobs:
         # itself), which is not published on PyPI. The resulting
         # requirements.txt is exactly the pinned transitive set from
         # uv.lock — no editable install, no unpublished names.
-        run: uv export --frozen --no-emit-project --no-hashes --extra dev --format requirements-txt -o requirements-audit.txt
+        #
+        # `--all-extras` (was `--extra dev` only): `pip install
+        # coderouter-cli[accuracy]` (tokenizers) and `[repair]`
+        # (json-repair) are real, user-facing install combinations, so
+        # their dependencies must be in the audited set too — not just
+        # the dev/test toolchain.
+        run: uv export --frozen --no-emit-project --no-hashes --all-extras --format requirements-txt -o requirements-audit.txt
 
       - name: pip-audit (requirements)
         # Audits the exported requirements file. `--strict` fails the
@@ -132,7 +150,7 @@ jobs:
         # the v1.x docker images on GHCR have rotated out. v2.x ships the
         # scanner binary inline so docker-pull is no longer in the loop;
         # the `scan-args` input is unchanged.
-        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
+        uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
         with:
           scan-args: |-
             --lockfile=./uv.lock
@@ -146,10 +164,10 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           # Fail on any new Critical/High severity finding introduced
           # by the PR. The cve-audit job re-checks the full installed

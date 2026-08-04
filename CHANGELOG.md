@@ -9,6 +9,178 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.12.0] — 2026-08-04 (the context-budget guard actually fires now)
+
+**This release changes behaviour you can observe.** The token estimator
+counted `tool_result`, `tool_use` and `thinking` blocks as zero
+characters, which meant the L1 context-budget guard stayed silent on
+exactly the sessions it exists to protect — agent conversations, where
+tool output is most of the context. Fixing the estimator makes the guard
+fire, the auto-router's `content_token_count_min` rules match earlier,
+and `POST /v1/messages/count_tokens` return larger numbers.
+
+Nothing was removed and no field changed meaning, so configs load
+unchanged. But if you set `context_budget_action: trim`, or wrote a
+`content_token_count_min` threshold, **read the migration note below
+before upgrading.** `token_estimation_include_tool_content: false`
+restores the v2.11.x estimate exactly.
+
+### Fixed
+
+- **The token estimator ignored tool blocks, so the context-budget guard
+  never fired for agent sessions.** `_extract_text_from_content` only
+  summed `type: "text"` blocks. A `tool_result` carrying 5,000 characters
+  of file content counted as 0, and so did a `tool_use` input. In a
+  Claude Code shaped session — short assistant text, large tool results —
+  that under-counted by 8x at 20 turns, 14x at 50 and **24x at 200**, so
+  a conversation genuinely at 96,311 tokens was reported as 4,011 and the
+  0.80 / 0.90 thresholds were never approached. `context_budget_action:
+  trim` was, in practice, inert for the workload it was written for. The
+  estimator now walks blocks by type: `text`, `tool_result` (recursing
+  into a list-shaped `content`), `tool_use` (name plus its serialised
+  input) and `thinking` are counted. **`image` blocks and
+  `redacted_thinking.data` stay at zero** and this is load-bearing — a
+  naive `json.dumps` over the whole block would have inflated a session
+  holding one 400 KB base64 PNG by 7.1x. Unknown block types are skipped
+  rather than raising, and a self-referential structure terminates
+  (`token_estimation.py`).
+- **Trimming could empty the conversation entirely.** `_normalize_head`
+  drops leading `assistant` messages and `user` messages that carry a
+  `tool_result`, because neither is a valid opening turn. When the
+  preserved tail was `[assistant(tool_use), user(tool_result), …]` — the
+  normal shape of an agent conversation — every message matched and the
+  trimmer returned an empty list. `AnthropicRequest.messages` has no
+  `min_length`, so pydantic accepted it and the upstream API answered
+  400. Measured on the shipped code: 81 messages in, 0 out. This was
+  reachable before this release too, but only for text-heavy sessions,
+  because tool blocks estimated as zero meant trimming rarely engaged.
+  Making the estimator honest would have made it routine. There is now
+  no path through the trimmer that returns an empty list for a non-empty
+  input (`guards/context_budget.py`).
+- **Restoring a head message could undo the entire trim.** When
+  normalisation left no valid opening turn, the trimmer restored the most
+  recent clean `user` message it had just dropped. If that message was
+  the reason the request was over budget — a pasted file, a log dump —
+  restoring it put the request straight back over the window while
+  reporting `status: "trimmed"`. On a 200 KB paste followed by 25 tool
+  turns: 67,066 tokens in, 67,060 out, against a 32,768 window. Across a
+  300-session sweep, **89% of the results that still exceeded the window
+  were caused by this restore**, none by the preserve floor. Restoration
+  now checks the budget: the most recent *affordable* dropped clean user
+  wins, and if none fits, a synthetic
+  `[earlier conversation trimmed to fit the context budget]` head is
+  used instead. Same fixture: 67,066 → 17,062, inside both the window and
+  the trim target. The sweep goes to 0% (`guards/context_budget.py`).
+- **The trim loop was quadratic.** It rebuilt the surviving message list
+  and re-scanned every character for each unit it considered dropping.
+  With the corrected estimator that is 217 ms of blocked event loop for
+  an 801-message conversation, and it is called synchronously from the
+  request path. Per-message character counts are now computed once and
+  decremented as units are dropped: 217 ms → 4 ms. Units that would free
+  nothing are skipped rather than dropped, so the trimmer no longer
+  destroys history without reducing the estimate. The set of dropped
+  messages is unchanged — verified against the old algorithm across 200
+  random conversations (`guards/context_budget.py`).
+
+### Added
+
+- **`token_estimation_include_tool_content`** (top level, default
+  `true`). Set it to `false` to get the v2.11.x estimate back, byte for
+  byte — verified identical across 300 fuzzed request bodies on all three
+  estimator entry points. It is an escape hatch for operators who tuned
+  thresholds against the old numbers and need time to retune; expect it
+  to be removed in a future major. It is deliberately not per-profile:
+  the auto-router runs *before* a profile is chosen, and `count_tokens`
+  answers a client question that must not depend on which chain would
+  have served the request (`config/schemas.py`).
+- **`coderouter/py.typed`.** The package has advertised
+  `Typing :: Typed` in its classifiers without shipping a PEP 561
+  marker, so type checkers treated it as untyped. Verified present in the
+  built wheel (`pyproject.toml`).
+- **Release-time version and changelog checks.** `release.yml` now fails
+  the build if the pushed tag does not match `pyproject.toml`'s version,
+  or if `CHANGELOG.md` has no section for it — the awk that extracts
+  release notes silently falls back to a placeholder otherwise. Skipped
+  on `workflow_dispatch`, where `github.ref_name` is a branch.
+
+### Changed
+
+- **`examples/providers.yaml` and `examples/providers-multiagent.yaml`
+  now ship `context_budget_action: warn` instead of `trim`.** README
+  tells new users to `curl` the first of those, so shipping `trim`
+  together with a newly-working guard would have started deleting
+  history in conversations for people who never opted into it. Warn
+  first, read the logs, then decide. `docs/concepts/context-budget.md`
+  was updated to match.
+- **`thinking` blocks are now counted.** Extended-thinking content is
+  replayed to the model on the following turn — it has to be, or tool-use
+  signatures break — so it occupies the window exactly like text.
+  `redacted_thinking.data` is still not counted: it is opaque ciphertext,
+  the same category as base64 image data.
+- **Third-party GitHub Actions are pinned to commit SHAs**, with the
+  version in a trailing comment so dependabot still tracks them. The
+  publish job holds `id-token: write` for Trusted Publishing and the
+  release job holds `contents: write`; a moved tag on any action they
+  use is a direct path to the PyPI project.
+- **CI runs on macOS.** The classifiers claim macOS support and this
+  repository has a documented history of macOS-specific breakage (bash
+  3.2 word splitting, Finder's folder-replace semantics), but every job
+  ran only on `ubuntu-latest`. `macos-latest` is added on the newest
+  Python only, so the matrix goes to three combinations rather than four
+  — the failures being guarded against are OS-level, not version-level.
+- **The CVE audit covers every extra.** `uv export` passed only
+  `--extra dev`, leaving `accuracy` (tokenizers) and `repair`
+  (json-repair) — both installable by users — outside pip-audit's view.
+  Now `--all-extras`.
+- **The sdist no longer allow-lists `docs` wholesale.** `only-include`
+  named the whole directory, so a local `uv build` swept in
+  `docs/inside/` and `docs/articles/` — private notes and article drafts
+  that `.gitignore` exists to keep out. A CI build from a clean checkout
+  was never affected, since those files are untracked, but a maintainer
+  building from a working tree would have shipped them. The list now
+  names the public subdirectories, and `release.yml` fails the build if
+  either directory reappears in the tarball.
+
+### Migration
+
+Only two settings change meaning. If you set neither, upgrading is a
+no-op beyond larger `count_tokens` responses.
+
+**`context_budget_action: trim` or `warn`** — the guard was effectively
+inert for tool-heavy sessions and now works. Expect
+`context-budget-warning` in the logs, the
+`X-CodeRouter-Context-Budget` response header, and — under `trim` —
+conversation history actually being dropped, with a
+`[earlier conversation trimmed to fit the context budget]` message
+appearing at the head when nothing else fits. Measured against a 32 K
+window, a tool-driven session now warns around turn 32 and trims around
+turn 36; before, it never did either. Start with `warn` and read the
+logs before enabling `trim`.
+
+**`content_token_count_min`** — auto-router rules using it will match far
+earlier. A tool-driven session that reported 1,083 tokens after 200 turns
+under v2.11.x reports 93,183 now, so a `32000` threshold moves from never
+firing to firing around turn 69. Check where such a rule routes:
+`examples/providers.raspberrypi.yaml` sends matching traffic to a cloud
+free tier rather than the local model. Retune the threshold, or set
+`token_estimation_include_tool_content: false` while you do.
+
+### Tests
+
+- 3 new files, 47 new cases. Suite: 2382 passed, 1 skipped, ruff clean.
+- Each fix has a regression test confirmed to fail against the pre-fix
+  tree, including `test_trim_never_returns_empty_messages` (81 in, 0 out
+  on the old code) and `test_trim_lands_inside_the_window_across_budgets`,
+  which asserts that if a trimmed request is still over the window, the
+  preserve floor alone must account for it — structurally forbidding the
+  restore branch from being the cause.
+- The incremental trim loop is pinned against the old full-recompute
+  implementation across 200 random conversations (identical dropped
+  sets), and the opt-out is pinned against v2.11.2 across 300 fuzzed
+  bodies.
+
+---
+
 ## [v2.11.2] — 2026-08-04 (file-write safety and launcher event hygiene)
 
 Two fixes from the same review round as v2.11.1, split out because they

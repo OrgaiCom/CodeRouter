@@ -402,3 +402,476 @@ class TestEngineApplyContextBudget:
         result_req, status = engine.apply_context_budget(request)
         assert status == "warning"
         assert len(result_req.messages) == 1  # not trimmed
+
+
+# ---------------------------------------------------------------------------
+# Group 5: H-5 — tool-heavy sessions (the case the guard was written for)
+#
+# Up to v2.11.x the estimator counted only ``text`` blocks, so a Claude
+# Code style conversation (context almost entirely in tool_result /
+# tool_use) never crossed a threshold and the trim path was effectively
+# dead code for exactly its target workload.
+# ---------------------------------------------------------------------------
+
+import time  # noqa: E402
+
+from coderouter.token_estimation import (  # noqa: E402
+    chars_to_tokens,
+    count_message_chars,
+    count_system_chars,
+    estimate_tokens_from_anthropic_request,
+)
+
+
+def _tool_turn(
+    index: int,
+    *,
+    assistant_text_chars: int = 200,
+    tool_result_chars: int = 4000,
+) -> list[tuple[str, str | list]]:
+    """One agentic turn: assistant(text + tool_use) → user(tool_result)."""
+    return [
+        (
+            "assistant",
+            [
+                {"type": "text", "text": "step " + "t" * assistant_text_chars},
+                {
+                    "type": "tool_use",
+                    "id": f"toolu_{index}",
+                    "name": "Read",
+                    "input": {"file_path": f"/repo/src/mod_{index}.py"},
+                },
+            ],
+        ),
+        (
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": f"toolu_{index}",
+                    "content": "f" * tool_result_chars,
+                }
+            ],
+        ),
+    ]
+
+
+def _tool_heavy_request(
+    turns: int,
+    *,
+    lead_user: bool = True,
+    assistant_text_chars: int = 200,
+    tool_result_chars: int = 4000,
+    system: str | None = "You are a coding agent. " + "s" * 200,
+) -> AnthropicRequest:
+    messages: list[tuple[str, str | list]] = []
+    if lead_user:
+        messages.append(("user", "please refactor the repo " + "q" * 100))
+    for i in range(turns):
+        messages.extend(
+            _tool_turn(
+                i,
+                assistant_text_chars=assistant_text_chars,
+                tool_result_chars=tool_result_chars,
+            )
+        )
+    return _make_request(messages, system=system)
+
+
+class TestToolHeavySessions:
+    def test_tool_heavy_session_crosses_warn_threshold(self):
+        """60 tool-driven turns cross 80% of a 32K window (v2.11.x: never).
+
+        The same conversation scored under 6% with the old text-only
+        estimator, which is why the guard never fired for agent clients.
+        """
+        request = _tool_heavy_request(60)
+        estimate = estimate_context_usage(
+            request, max_context_tokens=32768, warn_threshold=0.80
+        )
+        assert estimate.over_warn_threshold, (
+            f"tool-heavy session estimated at only {estimate.estimated_tokens} "
+            "tokens — tool_result content is not being counted"
+        )
+
+        # v2.11.x reference: the exact same request with tool content off.
+        v2_11 = estimate_tokens_from_anthropic_request(
+            system=request.system,
+            messages=request.messages,
+            include_tool_content=False,
+        )
+        assert v2_11 / 32768 < 0.80, "fixture no longer isolates the H-5 delta"
+        assert estimate.estimated_tokens > v2_11 * 5
+
+    def test_trim_never_returns_empty_messages(self):
+        """Regression: trim must never hand back ``messages: []``.
+
+        With a preserved tail of ``[assistant(tool_use),
+        user(tool_result), assistant(tool_use), user(tool_result)]``
+        every surviving message matches ``_normalize_head``'s drop
+        condition, so the naive loop returned ``[]``.
+        ``AnthropicRequest`` declares no ``min_length`` on ``messages``,
+        so pydantic forwards it and the upstream API answers 400 —
+        killing the very session the guard exists to protect.
+        """
+        request = _tool_heavy_request(40, assistant_text_chars=2000)
+        trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=8000,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        assert result.messages_removed > 0, "fixture did not trigger a trim"
+        assert len(trimmed.messages) >= 1, (
+            f"trim emptied the conversation: {result}"
+        )
+        assert trimmed.messages != []
+
+    def test_trim_head_is_clean_user_with_tool_heavy_tail(self):
+        """The surviving head is a ``user`` message without a tool_result."""
+        request = _tool_heavy_request(40, assistant_text_chars=2000)
+        trimmed, _result = trim_to_budget(
+            request,
+            max_context_tokens=8000,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        head = trimmed.messages[0]
+        assert head.role == "user"
+        assert not _msg_has_tool_result(head)
+
+    def test_trim_head_clean_user_under_aggressive_budget(self):
+        """Same invariant with an impossibly small window."""
+        request = _tool_heavy_request(20, assistant_text_chars=1000)
+        trimmed, _result = trim_to_budget(
+            request,
+            max_context_tokens=100,
+            trim_target=0.50,
+            preserve_last_n=4,
+        )
+        assert len(trimmed.messages) >= 1
+        assert trimmed.messages[0].role == "user"
+        assert not _msg_has_tool_result(trimmed.messages[0])
+
+    def test_trim_keeps_tool_pairs_intact_when_tool_content_counted(self):
+        """No orphaned tool_result survives the tool-heavy trim path."""
+        request = _tool_heavy_request(30, assistant_text_chars=800)
+        trimmed, _result = trim_to_budget(
+            request,
+            max_context_tokens=6000,
+            trim_target=0.60,
+            preserve_last_n=4,
+        )
+        live_use_ids: set[str] = set()
+        for msg in trimmed.messages:
+            content = msg.content
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    live_use_ids.add(block["id"])
+        for msg in trimmed.messages:
+            content = msg.content
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    assert block["tool_use_id"] in live_use_ids, (
+                        "orphaned tool_result survived the trim"
+                    )
+
+
+def _msg_has_tool_result(msg) -> bool:
+    content = msg.content
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+    )
+
+
+# ---------------------------------------------------------------------------
+# Group 6: trim cost + incremental-estimate equivalence
+# ---------------------------------------------------------------------------
+
+
+class TestTrimPerformance:
+    def test_trim_is_linear_in_message_count(self):
+        """800 messages must trim in well under 50ms.
+
+        The old loop rebuilt the kept list and re-walked every surviving
+        message's characters after each dropped unit — O(units x chars).
+        On this fixture (a realistic tool-heavy session, now that
+        tool_result content actually has weight) that measured 217ms of
+        blocked event loop, which the ingress pays synchronously on the
+        request path. The incremental version does it in ~4ms.
+        """
+        request = _tool_heavy_request(400)  # 801 messages
+        start = time.perf_counter()
+        trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=8000,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        elapsed = time.perf_counter() - start
+        assert result.messages_removed > 700, "fixture did not exercise the loop"
+        assert len(trimmed.messages) >= 1
+        assert elapsed < 0.05, f"trim of 801 messages took {elapsed * 1000:.1f}ms"
+
+    def test_trim_is_linear_for_plain_text_history_too(self):
+        """Same cost bound for a plain (non-tool) 800-message history."""
+        request = _make_long_request(800, chars_per_msg=400)
+        start = time.perf_counter()
+        _trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=1000,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        elapsed = time.perf_counter() - start
+        assert result.messages_removed > 700
+        assert elapsed < 0.05, f"trim of 800 messages took {elapsed * 1000:.1f}ms"
+
+    def test_trim_estimate_matches_full_recompute(self):
+        """Incremental char accounting == a full re-estimate, exactly.
+
+        The loop subtracts per-message character counts as it drops
+        units instead of re-summing. That is only equivalent because the
+        char/4 floor division is applied once to the grand total — this
+        test pins that invariant (and the reported ``estimated_tokens_
+        after``) rather than trusting it.
+        """
+        for turns, budget in ((10, 4000), (25, 8000), (60, 20000)):
+            request = _tool_heavy_request(turns, assistant_text_chars=300)
+            trimmed, result = trim_to_budget(
+                request,
+                max_context_tokens=budget,
+                trim_target=0.75,
+                preserve_last_n=4,
+            )
+            full = estimate_tokens_from_anthropic_request(
+                system=trimmed.system, messages=trimmed.messages
+            )
+            assert result.estimated_tokens_after == full
+
+            incremental = chars_to_tokens(
+                count_system_chars(trimmed.system)
+                + sum(count_message_chars(m) for m in trimmed.messages)
+            )
+            assert incremental == full
+
+            before_incremental = chars_to_tokens(
+                count_system_chars(request.system)
+                + sum(count_message_chars(m) for m in request.messages)
+            )
+            assert result.estimated_tokens_before == before_incremental
+
+    def test_zero_char_units_are_not_dropped(self):
+        """A unit that frees no budget is not sacrificed for nothing."""
+        image_block = {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "Z" * 2000},
+        }
+        messages: list[tuple[str, str | list]] = [
+            ("user", "A" * 8000),
+            # A pasted screenshot with no prose: 0 chars by design, so
+            # dropping it frees no budget whatsoever.
+            ("user", [image_block]),
+            ("user", "B" * 8000),
+            # preserve_last_n=4 pins the four messages below.
+            ("user", "x" * 400),
+            ("assistant", "y" * 400),
+            ("user", "z" * 400),
+            ("assistant", "w" * 400),
+        ]
+        request = _make_request(messages, system="sys")
+        trimmed, _result = trim_to_budget(
+            request,
+            max_context_tokens=1000,
+            trim_target=0.50,
+            preserve_last_n=4,
+        )
+        kept_is_image_only = [
+            m
+            for m in trimmed.messages
+            if isinstance(m.content, list)
+            and m.content
+            and all(
+                isinstance(b, dict) and b.get("type") == "image" for b in m.content
+            )
+        ]
+        assert kept_is_image_only, "an image-only turn was dropped for zero budget gain"
+
+
+# ---------------------------------------------------------------------------
+# Group 7: the restored head must itself fit the budget
+#
+# Re-attaching a dropped clean ``user`` message keeps the request legal,
+# but picking the *newest* one unconditionally is a trap: in an agent
+# session the newest clean user message is very often a huge pasted
+# file, so restoring it undoes the whole trim and reports
+# ``status="trimmed"`` on a request that the upstream API still rejects.
+# ---------------------------------------------------------------------------
+
+
+def _paste_then_tool_loop(
+    paste_chars: int = 200_000,
+    turns: int = 25,
+    *,
+    lead: str | None = "help me refactor this",
+) -> AnthropicRequest:
+    """The canonical Claude Code shape: big paste, then a tool loop.
+
+    Every message after the paste is either an assistant ``tool_use`` or
+    a ``tool_result``-carrying user turn, so once the paste is dropped
+    nothing in the surviving window can serve as the request head.
+    """
+    messages: list[tuple[str, str | list]] = []
+    if lead is not None:
+        messages.append(("user", lead))
+    messages.append(("user", "Here is the file:\n" + "x" * paste_chars))
+    for i in range(turns):
+        messages.append(
+            (
+                "assistant",
+                [
+                    {
+                        "type": "tool_use",
+                        "id": f"t{i}",
+                        "name": "Read",
+                        "input": {"file_path": "/a/b.py"},
+                    }
+                ],
+            )
+        )
+        messages.append(
+            (
+                "user",
+                [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": f"t{i}",
+                        "content": "src line\n" * 300,
+                    }
+                ],
+            )
+        )
+    return _make_request(messages, system="sys")
+
+
+class TestRestoredHeadRespectsBudget:
+    def test_trim_restore_head_stays_within_budget(self):
+        """Restoring a head must not undo the trim.
+
+        Budget-blind "newest clean user wins" put the 200 KB paste back
+        on the front: 67,066 tokens in, 67,061 tokens out, against a
+        24,576 target and a 32,768 window — logged as ``trimmed`` and
+        then 400'd upstream.
+        """
+        request = _paste_then_tool_loop()
+        trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=32768,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        target_tokens = int(32768 * 0.75)
+        assert result.estimated_tokens_before > 32768, "fixture is not over budget"
+        assert result.estimated_tokens_after <= target_tokens, (
+            f"trim did not reach its target: {result}"
+        )
+        assert result.estimated_tokens_after <= 32768
+        # And the head is still a legal opening turn.
+        assert len(trimmed.messages) >= 1
+        assert trimmed.messages[0].role == "user"
+        assert not _msg_has_tool_result(trimmed.messages[0])
+
+    def test_trim_restores_an_affordable_clean_user_not_the_newest(self):
+        """Among dropped clean users, pick the newest one that *fits*."""
+        request = _paste_then_tool_loop(lead="help me refactor this")
+        trimmed, _result = trim_to_budget(
+            request,
+            max_context_tokens=32768,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        head = trimmed.messages[0]
+        assert head.content == "help me refactor this"
+
+    def test_trim_prefers_most_recent_affordable_candidate(self):
+        """Recency still wins between two candidates that both fit."""
+        messages: list[tuple[str, str | list]] = [
+            ("user", "OLD standing instruction"),
+            ("user", "NEW standing instruction"),
+            ("user", "Here is the file:\n" + "x" * 200_000),
+        ]
+        for i in range(25):
+            messages.append(
+                (
+                    "assistant",
+                    [{"type": "tool_use", "id": f"t{i}", "name": "Read", "input": {}}],
+                )
+            )
+            messages.append(
+                (
+                    "user",
+                    [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": f"t{i}",
+                            "content": "src line\n" * 300,
+                        }
+                    ],
+                )
+            )
+        request = _make_request(messages, system="sys")
+        trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=32768,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        assert trimmed.messages[0].content == "NEW standing instruction"
+        assert result.estimated_tokens_after <= int(32768 * 0.75)
+
+    def test_trim_uses_synthetic_head_when_no_candidate_fits(self):
+        """No affordable real head → a tiny synthetic one, still in budget."""
+        from coderouter.guards.context_budget import TRIM_PLACEHOLDER_HEAD_TEXT
+
+        # The only clean user message in the whole conversation is the
+        # 200 KB paste, so nothing droppable can be afforded back.
+        request = _paste_then_tool_loop(lead=None)
+        trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=32768,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        head = trimmed.messages[0]
+        assert head.role == "user"
+        assert head.content == TRIM_PLACEHOLDER_HEAD_TEXT
+        assert not _msg_has_tool_result(head)
+        assert result.estimated_tokens_after <= int(32768 * 0.75)
+
+    @pytest.mark.parametrize("window", [4096, 8192, 16384, 32768, 65536])
+    def test_trim_lands_inside_the_window_across_budgets(self, window: int):
+        """Whatever the window, the trimmed request fits inside it."""
+        request = _paste_then_tool_loop()
+        trimmed, result = trim_to_budget(
+            request,
+            max_context_tokens=window,
+            trim_target=0.75,
+            preserve_last_n=4,
+        )
+        assert len(trimmed.messages) >= 1
+        if result.estimated_tokens_after > window:
+            # Only ever acceptable when the preserve floor alone cannot
+            # fit — never because of the restored head.
+            floor = estimate_tokens_from_anthropic_request(
+                system=request.system, messages=request.messages[-4:]
+            )
+            assert floor > window, (
+                f"over-window at {window} but the preserve floor ({floor}) fits — "
+                f"the restored head caused it: {result}"
+            )

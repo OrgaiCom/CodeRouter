@@ -36,12 +36,22 @@ profiles:
     providers:
       - ollama-qwen3
     # Context Budget Guard (v2.0.0)
-    context_budget_action: trim          # off | warn | trim
+    context_budget_action: warn          # off | warn | trim
     context_budget_warn_threshold: 0.80  # warning at 80% usage
+    # the three below only apply when action is trim (inert under warn)
     context_budget_trim_threshold: 0.90  # auto trim at 90% usage
     context_budget_trim_target: 0.75     # target usage after trim
     context_budget_preserve_last_n: 4    # always keep the last N messages
 ```
+
+> **Start with `warn`.** `trim` really does delete conversation history, irreversibly.
+> Since v2.12 (H-5) the token estimate counts tool_result / tool_use / thinking, so a
+> tool-driven session now scores 5-29x higher than it used to — meaning this guard is in
+> the position of firing suddenly in deployments where it previously never fired at all.
+> Watch the `context-budget-warning` logs and the `X-CodeRouter-Context-Budget` header
+> under `warn` for a while, confirm the thresholds match how you actually work, and only
+> then switch to `trim`. For the same reason the shipped defaults in
+> `examples/providers.yaml` and `examples/providers-multiagent.yaml` were lowered to `warn`.
 
 ### Parameters
 
@@ -91,11 +101,36 @@ estimate_context_usage()
 The char/4 heuristic with no external dependency:
 
 ```
-estimated_tokens ≈ len(request_json) // 4
+estimated_tokens ≈ (total characters of the counted blocks) // 4
 ```
 
+What counts is decided per content-block `type` (v2.12 / H-5):
+
+| block type | contribution |
+|---|---|
+| `text` | the `text` verbatim |
+| `tool_result` | `content` verbatim when it is a `str`; the same rules applied recursively when it is a block list |
+| `tool_use` | length of `name` + `json.dumps(input)` |
+| `thinking` | the `thinking` string (it is replayed to the model on the next turn, so it really does occupy context) |
+| `image` | **0** |
+| `redacted_thinking` | 0 (opaque ciphertext the model never reads) |
+| anything else (unknown type) | 0 |
+
+- **The `image` zero is deliberate.** Counting base64 images via a naive `json.dumps` inflates the estimate ~35x for a single 400 KB PNG, which would make trim shred the history of any session that ever pasted a screenshot. Images are billed on their own axis and stay at 0
+- Up to v2.11.x only `text` blocks were counted. Tool-driven clients such as Claude Code keep almost all of their context in `tool_result` / `tool_use`, so the estimate was 5.1x low at 20 turns and 28.6x low at 200 turns. v2.12 fixes this — meaning the guard finally fires on the sessions it was written for
 - Within ±10% of the measured value for English text
 - For CJK (Japanese / Chinese) it tends to underestimate, so setting the threshold 5–10% lower is safer
+- Tool **definitions** (the request's `tools[]`) are not included in the estimate. `POST /v1/messages/count_tokens` does additionally append the JSON of `tools`, so the two numbers disagree for requests with large tool schemas (known cross-path inconsistency, still open as of v2.12)
+
+### Restoring the v2.11.x estimate (compatibility shim)
+
+If the corrected estimate disrupts a deployment tuned against the old numbers, a top-level key restores the previous behavior:
+
+```yaml
+token_estimation_include_tool_content: false   # estimates identical to v2.11.x
+```
+
+With `false`, `tool_result` / `tool_use` / `thinking` count as 0 characters again, so the context-budget guard's firing rate, the auto-router's `content_token_count_min` matching and the `/v1/messages/count_tokens` response all match v2.11.x exactly. It is top-level rather than per-profile because three of the estimator's four consumers (auto-router, count_tokens, language tax) run before a profile is resolved or independently of one, and per-path disagreement about a request's size is precisely the failure mode this key exists to avoid. **This is a migration escape hatch and is scheduled for removal in a future release.**
 
 `max_context_tokens` for major models is already bundled in `model-capabilities.yaml`:
 
@@ -126,6 +161,8 @@ providers:
 3. Old messages are removed from the front
 4. **Tool-pair preservation**: identifies the corresponding `tool_use` / `tool_result` by `tool_use_id` and prevents a state where only one half remains (fixpoint algorithm)
 5. Re-estimate after removal → if still over `trim_target`, decrement `preserve_last_n` by 1 and retry (minimum floor: 2)
+6. **Head normalization**: Anthropic requires the first message to be a `user` message, and that message must not open with a dangling `tool_result`. Leading messages are dropped until that holds
+7. **Never an empty list**: in a tool-driven conversation the preserved last-N can be entirely `assistant(tool_use)` / `user(tool_result)`, so step 6 taken literally empties `messages` (pydantic accepts it; the upstream API answers 400). In that case the **most recent dropped clean `user` message that still fits the budget** is re-attached as the head; if no candidate fits, a short synthetic `[earlier conversation trimmed to fit the context budget]` user message is inserted instead. Picking the newest candidate without a budget check is a trap — it restores the huge paste that was just dropped and voids the entire trim
 
 ## Observability
 

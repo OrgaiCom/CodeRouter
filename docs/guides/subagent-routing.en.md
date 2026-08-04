@@ -141,6 +141,8 @@ A `RuleMatcher` allows **exactly one matcher per rule** — a load-time validato
 
 `model_pattern`, `content_token_count_min`, and `has_tools` can fire even without a user message (e.g. a system-only request, or a body carrying just `model` + `tools`). Every other matcher requires a user message to be present. Boolean matchers (`has_image` / `has_tools`) reject an explicit `false` at load time (dead-rule prevention — omit the field instead if unused).
 
+> **`content_token_count_min` means something very different as of v2.12.0.** The estimator now counts `tool_result`, `tool_use` and `thinking` blocks, which v2.11.x treated as zero characters, so the same conversation estimates an order of magnitude higher. Measured on a tool-driven session: v2.11.x reported 1,083 tokens after 200 turns; v2.12.0 reports 93,183. **An existing threshold will fire far earlier than you tuned it for** — including the `32000` used in the examples below. Retune it, or set `token_estimation_include_tool_content: false` to restore the v2.11.x estimate. See [context-budget.md](../concepts/context-budget.en.md).
+
 ### The X-CodeRouter-Profile header
 
 Use this when there's no `profile` field in the body and your own orchestrator wants to drive each sub-call deterministically via header.

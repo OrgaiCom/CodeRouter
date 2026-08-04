@@ -11,7 +11,7 @@
 # in plan.md §11.B; once granted, this name will become an alias and
 # `coderouter` will become the canonical distribution name.
 name = "coderouter-cli"
-version = "2.11.2"
+version = "2.12.0"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -103,6 +103,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["coderouter"]
+# PEP 561 marker (classifiers carries "Typing :: Typed" — this is what
+# backs that claim up). `packages = ["coderouter"]` already sweeps the
+# whole package directory into the wheel, so py.typed is included
+# implicitly, but force-include makes that explicit and keeps the file
+# present even if the packaging strategy above ever changes.
+force-include = { "coderouter/py.typed" = "coderouter/py.typed" }
 
 # v1.7-A: strict sdist allowlist (`only-include`) so a developer's
 # local virtualenv (.venv / .venv-test / .venv-v16), build artifacts
@@ -112,12 +118,36 @@ packages = ["coderouter"]
 # didn't match my OS-specific path" footgun. Keep the list tight:
 # we ship the runtime package, examples, tests (so users can run
 # the suite from sdist), docs, and the standard root files.
+#
+# `docs` is intentionally NOT listed as a bare entry — docs/inside/
+# (private scratch notes) and docs/articles/ (externally-published
+# article drafts) are declared "NEVER commit" in .gitignore and must
+# never end up in a published tarball. They are untracked by git, so
+# GitHub Actions' fresh checkout (release.yml) never picks them up —
+# but `uv build` run from a maintainer's local working tree does not
+# know that and would happily include whatever is on disk. Listing the
+# public docs/ subdirectories explicitly means docs/inside and
+# docs/articles are excluded structurally, not just by convention: even
+# if hatch's `docs` handling ever changed, there is no bare "docs" entry
+# left to accidentally sweep them in.
 [tool.hatch.build.targets.sdist]
 only-include = [
     "coderouter",
     "examples",
     "tests",
-    "docs",
+    "docs/README.md",
+    "docs/README.en.md",
+    "docs/low-memory-integration.md",
+    "docs/low-memory-integration.en.md",
+    "docs/assets",
+    "docs/backends",
+    "docs/concepts",
+    "docs/designs",
+    "docs/evidence",
+    "docs/guides",
+    "docs/openrouter-roster",
+    "docs/retrospectives",
+    "docs/start",
     "scripts",
     "README.md",
     "README.en.md",

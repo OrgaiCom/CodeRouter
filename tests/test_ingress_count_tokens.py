@@ -148,3 +148,138 @@ def test_count_tokens_block_list_content_counted(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["input_tokens"] == 32 // 4
+
+
+# ----------------------------------------------------------------------
+# H-5: tool_result content reaches the count, base64 images do not
+# ----------------------------------------------------------------------
+
+
+def test_count_tokens_includes_tool_result(client: TestClient) -> None:
+    """A tool_result payload raises ``input_tokens`` (v2.11.x: it did not).
+
+    Agent clients send most of their context as tool_result blocks, so
+    the old text-only walk answered this endpoint with a number that
+    bore no relation to what the model would actually be billed.
+    """
+    baseline = client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": "m",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        },
+    ).json()["input_tokens"]
+
+    with_tool_result = client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": "m",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "Read",
+                            "input": {"file_path": "/repo/main.py"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "F" * 4000,
+                        }
+                    ],
+                },
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            ],
+        },
+    ).json()["input_tokens"]
+
+    assert with_tool_result > baseline
+    # 4000 chars of tool output alone is ~1000 tokens.
+    assert with_tool_result >= baseline + 1000
+
+
+def test_count_tokens_excludes_base64_image(client: TestClient) -> None:
+    """A 400 KB base64 PNG must not move the number.
+
+    Guards against the naive ``json.dumps(block)`` implementation, which
+    over-counts this body ~35x.
+    """
+    text = "X" * 40
+    without_image = client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": text}]}
+            ],
+        },
+    ).json()["input_tokens"]
+
+    with_image = client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": "m",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "Q" * 400_000,
+                            },
+                        },
+                    ],
+                }
+            ],
+        },
+    ).json()["input_tokens"]
+
+    assert with_image == without_image == len(text) // 4
+
+
+def test_count_tokens_excludes_base64_image_inside_tool_result(
+    client: TestClient,
+) -> None:
+    """Recursion into tool_result.content must not pick up nested images."""
+    resp = client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": "m",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {"type": "text", "text": "T" * 40},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "Q" * 400_000,
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["input_tokens"] == 40 // 4
