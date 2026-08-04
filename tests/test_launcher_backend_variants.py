@@ -208,7 +208,11 @@ async def test_readiness_uses_health_endpoint_for_variants(
     monkeypatch.setattr("coderouter.ingress.launcher_routes.httpx.AsyncClient", _Client)
 
     assert await _backend_ready(backend, 18081, probe_timeout_s=0.5) is True
-    assert called == ["http://localhost:18081/health"]
+    # 127.0.0.1 の literal であること (localhost ではない)。localhost が ::1 に
+    # 先に解決される環境 (GitHub の macOS ランナー、Mac 一般) では、IPv4 のみで
+    # listen する llama-server に届かず readiness が永久に失敗する。2026-08-04 の
+    # macOS CI で実際に踏んだ回帰。
+    assert called == ["http://127.0.0.1:18081/health"]
 
 
 async def test_readiness_still_falls_back_to_tcp_for_mlx(

@@ -81,6 +81,18 @@ restores the v2.11.x estimate exactly.
   destroys history without reducing the estimate. The set of dropped
   messages is unchanged — verified against the old algorithm across 200
   random conversations (`guards/context_budget.py`).
+- **The launcher readiness probe never succeeded on hosts where
+  `localhost` prefers IPv6.** `_backend_ready` fetched
+  `http://localhost:<port>/health` while `llama-server` listens on IPv4
+  only (`--host 127.0.0.1` by default). Where `localhost` resolves to
+  `::1` first — the default on GitHub's macOS runners, and common on
+  Macs generally — httpx raises `Address family not supported` on every
+  attempt, so a backend that is up and serving times out with
+  `status='loading'` and never registers. The bare TCP fallback in the
+  same function already used the `127.0.0.1` literal; the HTTP branch was
+  the odd one out and now matches it. Found by adding the macOS CI runner
+  in this release, which is what it was added for
+  (`ingress/launcher_routes.py`).
 
 ### Added
 
@@ -128,6 +140,16 @@ restores the v2.11.x estimate exactly.
   ran only on `ubuntu-latest`. `macos-latest` is added on the newest
   Python only, so the matrix goes to three combinations rather than four
   — the failures being guarded against are OS-level, not version-level.
+  It earned its keep immediately: the IPv6 readiness bug above only
+  reproduces there.
+- **Corrected the note about tkinter on CI**, which v2.11.2 got wrong in
+  both directions. The GUI test modules originally said the uv-managed
+  Python on CI has no tkinter; v2.11.2 "fixed" that to say it does,
+  based on measuring `uv python install 3.12.11` in a Linux container.
+  The actual CI run settles it: the ubuntu runner skips those four files
+  and the macOS runner runs them. Tk availability is a property of the
+  runner image, so the docstrings no longer assert it in either
+  direction — they just say to keep the `importorskip`.
 - **The CVE audit covers every extra.** `uv export` passed only
   `--extra dev`, leaving `accuracy` (tokenizers) and `repair`
   (json-repair) — both installable by users — outside pip-audit's view.
@@ -139,7 +161,11 @@ restores the v2.11.x estimate exactly.
   was never affected, since those files are untracked, but a maintainer
   building from a working tree would have shipped them. The list now
   names the public subdirectories, and `release.yml` fails the build if
-  either directory reappears in the tarball.
+  either directory reappears in the tarball. Every entry has to be
+  git-tracked: `docs/evidence` exists only in a maintainer's working tree
+  and made the allowlist claim to ship something a fresh checkout does
+  not have. `tests/test_packaging.py` now asserts each listed path
+  exists, which is how that was caught.
 
 ### Migration
 
@@ -167,7 +193,7 @@ free tier rather than the local model. Retune the threshold, or set
 
 ### Tests
 
-- 3 new files, 47 new cases. Suite: 2382 passed, 1 skipped, ruff clean.
+- 3 new files, 48 new cases. Suite: 2393 passed, 1 skipped, ruff clean.
 - Each fix has a regression test confirmed to fail against the pre-fix
   tree, including `test_trim_never_returns_empty_messages` (81 in, 0 out
   on the old code) and `test_trim_lands_inside_the_window_across_budgets`,

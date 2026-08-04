@@ -130,6 +130,12 @@ force-include = { "coderouter/py.typed" = "coderouter/py.typed" }
 # docs/articles are excluded structurally, not just by convention: even
 # if hatch's `docs` handling ever changed, there is no bare "docs" entry
 # left to accidentally sweep them in.
+#
+# Every entry below must be git-tracked. A directory that only exists in
+# a maintainer's working tree (docs/evidence was one) makes this list
+# lie: it looks shipped, but a fresh checkout has nothing to ship and
+# tests/test_packaging.py fails. Check with `git ls-files docs/` before
+# adding to this list, not `ls docs/`.
 [tool.hatch.build.targets.sdist]
 only-include = [
     "coderouter",
@@ -143,7 +149,6 @@ only-include = [
     "docs/backends",
     "docs/concepts",
     "docs/designs",
-    "docs/evidence",
     "docs/guides",
     "docs/openrouter-roster",
     "docs/retrospectives",

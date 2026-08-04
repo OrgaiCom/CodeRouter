@@ -5,9 +5,10 @@
 Web 版とバイナリ解決ロジックが別実装なので、同じ分岐が GUI 側でも正規化
 されていることを独立に固定する。``tk.Tk()`` / ``LauncherApp`` は生成せず、
 Tk 非依存のモジュールレベル関数だけを叩く (既存 GUI テストと同じ方針)。
-下の importorskip は CI 向けではない — CI の uv 管理 CPython には tkinter
-があり、GUI 系テストは実際に実行される。tkinter を持たないローカルの
-システム Python でも収集時に落ちないようにするためのもの。
+下の importorskip は実際に効いている: CI 実測 (2026-08-04, v2.12.0 の PR)
+では ubuntu ランナーで GUI テスト4ファイルが skip され、macOS ランナーでは
+実行された。uv 管理 CPython に tkinter があるかはランナー環境依存なので、
+「CI にはある/ない」と決めつけずに importorskip を必ず残すこと。
 """
 
 from __future__ import annotations

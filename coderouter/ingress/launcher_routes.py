@@ -714,11 +714,21 @@ async def _backend_ready(backend: str, port: int, *, probe_timeout_s: float) -> 
     Falling through to the bare TCP connect here would silently re-introduce
     the bug readiness gating was added to fix (provider registered before the
     model finished loading).
+
+    The probe targets ``127.0.0.1`` literally, never ``localhost``. On a host
+    where ``localhost`` resolves to ``::1`` first — the default on GitHub's
+    macOS runners, and common on Macs generally — an httpx request to
+    ``http://localhost:<port>`` fails with ``Address family not supported``
+    against a backend listening on IPv4 only, which is what ``llama-server``
+    does by default (``--host 127.0.0.1``). Readiness then never succeeds and
+    the spawn times out with ``status='loading'`` even though the backend is
+    up and serving. The bare TCP fallback below already used ``127.0.0.1``;
+    this branch was the odd one out.
     """
     if base_backend(backend) in ("llama.cpp", "vllm"):
         try:
             async with httpx.AsyncClient(timeout=probe_timeout_s) as client:
-                resp = await client.get(f"http://localhost:{port}/health")
+                resp = await client.get(f"http://127.0.0.1:{port}/health")
             return resp.status_code == 200
         except Exception:
             return False

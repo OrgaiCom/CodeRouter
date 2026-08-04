@@ -65,9 +65,10 @@ import pytest
 # launcher_gui imports tkinter at module level (it IS a Tk app). Every test
 # in this module exercises Tk-free pure helpers, but the import itself still
 # needs the tkinter package to exist. Skip cleanly on pythons built without
-# Tk support instead of erroring at collection time. Note this is NOT the CI
-# case: uv-managed CPython ships tkinter, so these tests do run on CI. It is
-# local system pythons (e.g. a distro python3 without python3-tk) that skip.
+# Tk support instead of erroring at collection time. This fires on CI too:
+# measured 2026-08-04, the ubuntu runner skips these four files and the
+# macOS runner runs them. Tk availability is a property of the runner image
+# — don't assert it in either direction, just keep the guard.
 pytest.importorskip("tkinter", reason="launcher_gui requires the tkinter package (python3-tk)")
 
 import launcher_gui as lg

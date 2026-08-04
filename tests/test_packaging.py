@@ -8,12 +8,15 @@ after a `uv build` / PyPI upload.
 
 from __future__ import annotations
 
+import inspect
 import re
 import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
+
+from coderouter.ingress import launcher_routes
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
@@ -164,4 +167,34 @@ def test_ci_workflow_cve_audit_covers_all_extras() -> None:
     # explicitly — either satisfies "accuracy/repair extras are audited".
     assert "--all-extras" in combined or (
         "--extra accuracy" in combined and "--extra repair" in combined
+    )
+
+
+# ---------------------------------------------------------------------------
+# Readiness probe must not depend on how `localhost` resolves
+# ---------------------------------------------------------------------------
+
+
+def test_backend_ready_probes_ipv4_literal_not_localhost() -> None:
+    """The llama.cpp/vllm ``/health`` probe must target 127.0.0.1 literally.
+
+    Regression guard for the macOS CI failure of 2026-08-04: the probe used
+    ``http://localhost:<port>/health`` while llama-server listens on IPv4
+    only (``--host 127.0.0.1`` by default). On a host where ``localhost``
+    resolves to ``::1`` first — GitHub's macOS runners, and Macs generally —
+    httpx raises ``Address family not supported`` and readiness never
+    succeeds, so the spawn times out with ``status='loading'`` against a
+    backend that is up and serving.
+
+    Asserting on the source rather than the behaviour is deliberate: the
+    failure only reproduces on a host whose resolver prefers IPv6, which is
+    exactly the environment this suite cannot rely on having.
+    """
+    src = inspect.getsource(launcher_routes._backend_ready)
+    assert "http://127.0.0.1:{port}/health" in src, (
+        "the /health readiness probe must use the 127.0.0.1 literal"
+    )
+    assert "localhost" not in src.split('"""')[-1], (
+        "no localhost in _backend_ready's executable body — it breaks on "
+        "IPv6-preferring hosts against IPv4-only backends"
     )
