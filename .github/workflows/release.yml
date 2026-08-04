@@ -50,12 +50,42 @@ jobs:
     name: Build sdist + wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0  # full history so version inference works
 
+      - name: Verify tag matches pyproject.toml version
+        # Only meaningful for an actual tag push — `workflow_dispatch`
+        # sets `github.ref_name` to the branch name (see the comment
+        # block above), so this would always "fail" on a manual run
+        # against a branch even though nothing is actually wrong. Gate
+        # on the ref being a tag ref at all.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pyproject_version="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/^version = "([^"]+)".*/\1/')"
+
+          if [ "$tag_version" != "$pyproject_version" ]; then
+            echo "::error::Tag/version mismatch: tag '${GITHUB_REF_NAME}' implies version '${tag_version}', but pyproject.toml has version = \"${pyproject_version}\". Either re-tag to match pyproject.toml, or bump pyproject.toml's version and push a new tag."
+            exit 1
+          fi
+          echo "OK: tag ${GITHUB_REF_NAME} matches pyproject.toml version ${pyproject_version}"
+
+          # Belt-and-braces: the github-release job later in this
+          # workflow awk-slices CHANGELOG.md for "## [v$version]" and
+          # silently falls back to a placeholder if that section is
+          # missing. Catch the missing section here, before publishing
+          # to PyPI, instead of discovering it in the published release
+          # notes.
+          changelog_heading="## [v${pyproject_version}]"
+          if ! grep -qF "$changelog_heading" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '${changelog_heading}' section for this release. The github-release job's notes-extraction step will fall back to a placeholder. Add the section to CHANGELOG.md before releasing."
+            exit 1
+          fi
+          echo "OK: CHANGELOG.md has a ${changelog_heading} section"
+
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
@@ -77,6 +107,17 @@ jobs:
             tar -tzf dist/*.tar.gz | grep -E '\.venv|__pycache__' | head
             exit 1
           fi
+          # sanity: ensure the private docs/ subtrees never leak in. They
+          # are git-untracked (.gitignore'd) so a fresh Actions checkout
+          # can't pick them up — this is a backstop against
+          # only-include regressing back to a bare "docs" entry in
+          # pyproject.toml, not a check we expect to ever actually fire
+          # in CI.
+          if tar -tzf dist/*.tar.gz | grep -qE '^[^/]+/docs/(inside|articles)/'; then
+            echo "::error::sdist contains docs/inside or docs/articles — these are private/unpublished and must be excluded via tool.hatch.build.targets.sdist.only-include in pyproject.toml"
+            tar -tzf dist/*.tar.gz | grep -E '^[^/]+/docs/(inside|articles)/' | head
+            exit 1
+          fi
 
       - name: Run tests against the built wheel
         run: |
@@ -86,7 +127,7 @@ jobs:
           /tmp/wheel-test/bin/python -m pytest -q
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
@@ -105,13 +146,19 @@ jobs:
       id-token: write  # required for Trusted Publishing OIDC token
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist
           path: dist/
 
       - name: Publish via Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # Upstream track this action as "release/v1" (a moving branch,
+        # not a tag) — pinned here to that branch's current tip commit,
+        # which is the v1.14.2 release. Dependabot's github-actions
+        # ecosystem still tracks `owner/repo@<sha>` refs against the
+        # repo's tags, so it can still open a bump PR when a newer
+        # 1.x release ships.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           # Trusted Publishing — no API token in repo secrets.
           # The action picks up the OIDC token automatically.
@@ -132,9 +179,9 @@ jobs:
     permissions:
       contents: write  # creating releases
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist
           path: dist/
@@ -161,7 +208,7 @@ jobs:
           echo "wrote $(wc -l < release_notes.md) lines"
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           # Draft = true so you review the release on GitHub before
           # publishing it. This prevents botched notes from going out

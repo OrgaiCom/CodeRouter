@@ -5,10 +5,11 @@ bench-sweep pure logic was deliberately factored into Tk-independent
 module-level functions / dataclasses (mirroring the readiness/auto-restart
 split covered by tests/test_launcher_gui_readiness.py) so every case below
 exercises them without ever instantiating ``tk.Tk()`` / ``LauncherApp`` /
-``SweepWindow`` — no display server needed. The importorskip below is not
-for CI: uv-managed CPython does ship tkinter, so these tests really do run
-there. It is for local system pythons built without Tk, which would
-otherwise fail at collection time.
+``SweepWindow`` — no display server needed. The importorskip below does
+real work: measured on CI (2026-08-04, the v2.12.0 PR), the four GUI test
+files skip on the ubuntu runner and run on the macOS one. Whether the
+uv-managed CPython carries tkinter is a property of the runner image, not
+something to assert either way — keep the guard.
 
 Subprocess spawning is fully mocked: no real llama-server / llmbench ever
 runs. The shared, frozen core logic lives in coderouter.launcher_devices and

@@ -141,6 +141,8 @@ auto_router:
 
 `model_pattern` / `content_token_count_min` / `has_tools` は user メッセージが無くても発火できる(system-only なリクエストや model+tools のみの body)。それ以外の matcher は user メッセージが必須。ブール matcher(`has_image` / `has_tools`)に `false` を明示すると読み込みエラーになる(死にルール防止のため、未使用は省略する)。
 
+> **v2.12.0 で `content_token_count_min` の実効値が大きく変わりました。** 推定器が `tool_result` / `tool_use` / `thinking` を数えるようになったため(v2.11.x は 0 文字扱い)、同じ会話でも推定値が桁で増えます。実測では tool 主体のセッションで、v2.11.x なら 200 ターンでも 1,083 tokens だったものが v2.12.0 では 93,183 tokens です。**既存の閾値を書いている場合、想定よりずっと早くルールが発火します。** 本ページ以下の例で使っている `32000` も同様です。閾値を見直すか、`token_estimation_include_tool_content: false` で v2.11.x の推定に戻してください。詳細は [context-budget.md](../concepts/context-budget.md) を参照。
+
 ### X-CodeRouter-Profile ヘッダ
 
 body に `profile` フィールドが無く、自前 orchestrator がサブ呼び出しごとにヘッダで確定的に駆動したい場合に使う。

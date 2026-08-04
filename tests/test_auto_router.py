@@ -1204,3 +1204,78 @@ def test_has_tools_false_rejected_at_load() -> None:
         RuleMatcher(has_tools=False)
     with pytest.raises(ValidationError):
         RuleMatcher(has_image=False)
+
+
+# ---------------------------------------------------------------------------
+# H-5: ``content_token_count_min`` sees tool_result / tool_use content
+# ---------------------------------------------------------------------------
+
+
+def test_content_token_count_min_sees_tool_results(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """A tool_result-driven body crosses the token threshold.
+
+    Up to v2.11.x the estimator counted only ``text`` blocks, so an
+    agent client whose entire context lived in tool_result payloads was
+    scored near zero and never reached a ``longcontext`` rule — the
+    matcher silently did nothing for exactly the traffic it was built
+    for.
+    """
+    cfg = _longcontext_config(three_profile_config, threshold=10_000)
+    messages: list[dict] = [{"role": "user", "content": "audit the repo"}]
+    for i in range(12):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "reading"},
+                    {
+                        "type": "tool_use",
+                        "id": f"toolu_{i}",
+                        "name": "Read",
+                        "input": {"file_path": f"/repo/mod_{i}.py"},
+                    },
+                ],
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": f"toolu_{i}",
+                        "content": "f" * 4000,
+                    }
+                ],
+            }
+        )
+    body = {"messages": messages}
+    assert classify(body, cfg) == "longcontext"
+
+
+def test_content_token_count_min_ignores_base64_images(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """A pasted screenshot must not fake its way past the threshold."""
+    cfg = _longcontext_config(three_profile_config, threshold=10_000)
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this?"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "Q" * 400_000,
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    assert classify(body, cfg) == "writing"

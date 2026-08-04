@@ -799,7 +799,12 @@ def _backend_ready(backend: str, port: int, *, probe_timeout_s: float) -> bool:
     """
     if base_backend(backend) in ("llama.cpp", "vllm"):
         try:
-            req = urllib.request.Request(f"http://localhost:{port}/health")
+            # 127.0.0.1 literal, never `localhost` — see the matching note in
+            # coderouter/ingress/launcher_routes.py::_backend_ready. The
+            # backends this probes listen on IPv4 only by default, and the
+            # bare TCP fallback below already uses the literal; this branch
+            # was the odd one out in both copies of this function.
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
             with urllib.request.urlopen(req, timeout=probe_timeout_s) as resp:
                 return resp.status == 200
         except (urllib.error.URLError, OSError, ValueError, TimeoutError):

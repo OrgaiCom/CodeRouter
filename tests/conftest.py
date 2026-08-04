@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,28 @@ from coderouter.config.schemas import (
     FallbackChain,
     ProviderConfig,
 )
+from coderouter.token_estimation import (
+    get_include_tool_content,
+    set_include_tool_content,
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_token_estimation_scope() -> Iterator[None]:
+    """Undo any test that flipped the H-5 tool-content escape hatch.
+
+    ``token_estimation_include_tool_content`` is published into a module
+    global by ``CodeRouterConfig``'s validator, so merely *constructing*
+    a config with the key set to false — in any test module — silently
+    changes what every later test's estimator returns. That is an
+    order-dependent flake waiting to happen: a test asserting the guard
+    sees tool_result content fails only when it runs after an opt-out
+    test. Autouse here (rather than in one module) because the leak
+    crosses module boundaries.
+    """
+    previous = get_include_tool_content()
+    yield
+    set_include_tool_content(previous)
 
 
 @pytest.fixture(autouse=True)

@@ -38,6 +38,11 @@ Uses the shared :func:`~coderouter.token_estimation.estimate_tokens_from_anthrop
 (char/4 heuristic, 5-deps invariant). See that module's docstring
 for the CJK caveat and recommended threshold compensation.
 
+Since H-5 the estimator also counts ``tool_result`` / ``tool_use`` /
+``thinking`` blocks, so a Claude-Code-shaped session now reports a
+number 5-29x larger than it did in v2.11.x — i.e. the guard finally
+fires on the sessions it was written for.
+
 Trim algorithm
 ==============
 
@@ -49,6 +54,16 @@ Trim algorithm
      ``tool_use`` assistant message (and vice versa).
   5. After removal, re-estimate; if still over ``trim_target``,
      reduce ``preserve_last_n`` by 1 and retry (minimum floor: 2).
+  6. The result is **never** an empty message list — see
+     :func:`_normalize_head`.
+
+Cost
+====
+
+The incremental loop pre-computes each message's character count once
+and subtracts as units are dropped, so a trim is O(total chars) rather
+than O(messages x total chars). Before that change an 800-message trim
+blocked the event loop for ~0.2s.
 """
 
 from __future__ import annotations
@@ -57,6 +72,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from coderouter.token_estimation import (
+    chars_to_tokens,
+    count_message_chars,
+    count_system_chars,
     estimate_tokens_from_anthropic_request,
 )
 
@@ -398,7 +416,37 @@ def _group_removable_units(
     return units
 
 
-def _normalize_head(messages: list[Any]) -> list[Any]:
+def _role_of(msg: Any) -> Any:
+    """Role of a message (Pydantic model or dict)."""
+    if hasattr(msg, "role"):
+        return msg.role
+    if isinstance(msg, dict):
+        return msg.get("role")
+    return None
+
+
+def _is_clean_user(msg: Any) -> bool:
+    """True for a ``user`` message that does not open with a tool_result."""
+    return _role_of(msg) == "user" and not _has_tool_result(msg)
+
+
+#: Content of the synthetic head inserted when no real clean ``user``
+#: message can be re-attached within budget. Short on purpose (~17
+#: tokens): its only job is to give Anthropic the valid opening turn the
+#: wire format demands while telling the model why history is missing.
+TRIM_PLACEHOLDER_HEAD_TEXT = "[earlier conversation trimmed to fit the context budget]"
+
+
+def _synthetic_head() -> dict[str, Any]:
+    """A minimal, always-affordable clean ``user`` message."""
+    return {"role": "user", "content": TRIM_PLACEHOLDER_HEAD_TEXT}
+
+
+def _normalize_head(
+    messages: list[Any],
+    *,
+    fallback_head: Any | None = None,
+) -> list[Any]:
     """Drop leading messages until the first is a clean ``user`` message.
 
     Anthropic requires the first message to be a ``user`` message, and a
@@ -407,18 +455,77 @@ def _normalize_head(messages: list[Any]) -> list[Any]:
     any assistant message and any user message that contains a
     tool_result, stopping at the first ``user`` message with no
     tool_result block.
+
+    **Never returns an empty list for a non-empty input.** In a
+    tool-heavy agent session the preserved tail can legitimately look
+    like ``[assistant(tool_use), user(tool_result), assistant(tool_use),
+    user(tool_result)]`` — every single message matches the drop
+    condition, and the naive loop returned ``[]``. ``AnthropicRequest``
+    declares no ``min_length`` on ``messages``, so pydantic happily
+    forwarded that and the upstream API answered 400, destroying the
+    session the guard exists to protect. (Latent before H-5 only
+    because ``tool_result`` blocks estimated to 0 chars, so trim never
+    fired on exactly those conversations.)
+
+    When no surviving message can serve as the head, ``fallback_head``
+    is prepended. The caller picks it under the token budget — see
+    :func:`_pick_fallback_head`; this function deliberately does no
+    budget arithmetic of its own.
     """
-    start = 0
-    n = len(messages)
-    while start < n:
-        msg = messages[start]
-        role = msg.role if hasattr(msg, "role") else (
-            msg.get("role") if isinstance(msg, dict) else None
-        )
-        if role == "user" and not _has_tool_result(msg):
-            break
-        start += 1
-    return messages[start:]
+    if not messages:
+        return list(messages)
+
+    for start, msg in enumerate(messages):
+        if _is_clean_user(msg):
+            return messages[start:]
+
+    # Every surviving message is an assistant turn or a tool_result-
+    # carrying user turn: normalizing by dropping would empty the list.
+    if fallback_head is not None:
+        return [fallback_head, *messages]
+    return list(messages)
+
+
+def _pick_fallback_head(
+    messages: list[Any],
+    msg_chars: list[int],
+    dropped: set[int],
+    *,
+    before: int,
+    kept_chars: int,
+    target_tokens: int,
+) -> Any:
+    """Choose a head message that keeps the result inside the budget.
+
+    Called only when nothing in the surviving window is a clean ``user``
+    message, so *something* has to be put in front or the request is a
+    guaranteed 400.
+
+    Selection order:
+
+    1. The **most recent** dropped clean ``user`` message that still
+       fits under ``target_tokens`` — recency matters because it is
+       usually the operator's latest standing instruction.
+    2. Failing that, a synthetic placeholder (:func:`_synthetic_head`).
+
+    The budget check is the whole point. Re-attaching the *newest*
+    candidate unconditionally is a trap: the most recent clean user
+    message in an agent session is very often a huge pasted file, and
+    restoring it undoes the entire trim. Measured on the canonical
+    "200 KB paste then 25 tool calls" shape, that path turned a
+    67,066-token request into a 67,061-token request against a 24,576
+    target — reported as ``status="trimmed"`` and then rejected
+    upstream. A budget-blind restore does not avoid the 400, it
+    guarantees it.
+    """
+    for idx in sorted(dropped, reverse=True):
+        if idx >= before:
+            continue
+        if not _is_clean_user(messages[idx]):
+            continue
+        if chars_to_tokens(kept_chars + msg_chars[idx]) <= target_tokens:
+            return messages[idx]
+    return _synthetic_head()
 
 
 def _do_trim(
@@ -437,12 +544,23 @@ def _do_trim(
     hard floor that is never removed. After trimming, the head is
     normalized so the first surviving message is a ``user`` message
     without a leading ``tool_result`` (avoids upstream 400s). Bug H5.
+
+    The loop is incremental in *characters*: every message's character
+    contribution is computed exactly once up front and subtracted as
+    units are dropped, instead of rebuilding the kept list and
+    re-walking the whole conversation on every iteration (the old
+    O(messages x chars) shape cost ~0.2s of event-loop time for an
+    800-message session). Because the char/4 heuristic floor-divides
+    the grand total exactly once, the running sum stays bit-identical
+    to a full recompute.
     """
     if not messages:
         return messages
 
-    already = estimate_tokens_from_anthropic_request(system=system, messages=messages)
-    if already <= target_tokens:
+    system_chars = count_system_chars(system)
+    msg_chars = [count_message_chars(m) for m in messages]
+    total_chars = system_chars + sum(msg_chars)
+    if chars_to_tokens(total_chars) <= target_tokens:
         # Nothing to do — return the input unchanged.
         return messages
 
@@ -453,14 +571,41 @@ def _do_trim(
     # Indices we have decided to drop; peel atomic units from the front.
     dropped: set[int] = set()
     for unit in units:
-        kept = [messages[i] for i in range(len(messages)) if i not in dropped]
-        estimated = estimate_tokens_from_anthropic_request(system=system, messages=kept)
-        if estimated <= target_tokens:
+        if chars_to_tokens(total_chars) <= target_tokens:
             break
+        unit_chars = sum(msg_chars[i] for i in unit)
+        if unit_chars <= 0:
+            # Dropping this unit would not move the estimate at all
+            # (e.g. an image-only turn, which counts as 0 chars by
+            # design). Destroying history for no budget gain is pure
+            # loss — skip it and try the next unit.
+            continue
         dropped.update(unit)
+        total_chars -= unit_chars
 
-    trimmed = [messages[i] for i in range(len(messages)) if i not in dropped]
-    return _normalize_head(trimmed)
+    kept_indices = [i for i in range(len(messages)) if i not in dropped]
+    trimmed = [messages[i] for i in kept_indices]
+    if not trimmed:
+        # Structural fail-safe: never hand back an empty history.
+        return list(messages[-max(preserve_last_n, 1) :])
+
+    if any(_is_clean_user(m) for m in trimmed):
+        # A real head survives — no fallback needed, and computing one
+        # would only cost time.
+        return _normalize_head(trimmed)
+
+    # Nothing in the surviving window can open the request. Pick a head
+    # that fits the remaining budget (``total_chars`` already reflects
+    # every drop above), falling back to a synthetic marker.
+    fallback_head = _pick_fallback_head(
+        messages,
+        msg_chars,
+        dropped,
+        before=kept_indices[0],
+        kept_chars=total_chars,
+        target_tokens=target_tokens,
+    )
+    return _normalize_head(trimmed, fallback_head=fallback_head)
 
 
 __all__ = [
