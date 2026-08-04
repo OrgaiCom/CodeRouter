@@ -16,11 +16,21 @@ The design contract:
   without ``--force`` and print a unified diff so the operator decides.
 * ``--dry-run`` is byte-identical to the write path minus the actual
   ``os.replace`` at the end.
-* All writes are atomic (tmp file + ``os.replace``) so a partial write
-  cannot corrupt an existing ``settings.json``. This matters more here
-  than in most CodeRouter modules because the file we're editing is
-  workspace-critical: a broken JSON blob would silently break every
-  VSCode terminal env until a human debugged it.
+* All writes are atomic (``tempfile.mkstemp`` + ``fsync`` +
+  ``os.replace``) so a partial write cannot corrupt an existing
+  ``settings.json``. This matters more here than in most CodeRouter
+  modules because the file we're editing is workspace-critical: a
+  broken JSON blob would silently break every VSCode terminal env
+  until a human debugged it.
+* Nothing an operator wrote is destroyed without a copy: before any
+  existing file is rewritten, its previous bytes (and mode) land in
+  ``<name>.bak``. ``--force`` on ``.envrc`` is a whole-file replace,
+  not a merge, so this is the only thing standing between the user and
+  a lost ``source_env_if_exists .envrc.local`` line.
+* A freshly generated ``.envrc`` is created 0600 — it carries
+  ``ANTHROPIC_AUTH_TOKEN`` and sits next to the operator's real
+  secrets. An existing file's mode is preserved across rewrites
+  instead of being reset to the umask default by ``os.replace``.
 
 Files touched (opt-in per flag):
 
@@ -40,8 +50,12 @@ directly without argparse in the way.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shutil
+import stat
+import tempfile
 from dataclasses import dataclass
 from difflib import unified_diff
 from pathlib import Path
@@ -61,6 +75,15 @@ DEFAULT_PORT = 8088
 # because this project doesn't enable that ruff rule — RUF100 would
 # then flag the unused directive.)
 DEFAULT_TOKEN = "dummy"
+
+# v2.11 (H-11): a generated .envrc carries ANTHROPIC_AUTH_TOKEN, and
+# users routinely add their real key next to it (or point
+# ``source_env_if_exists .envrc.local`` at one). ``env_security``
+# already WARNs on any ``.env`` whose mode has 0o077 bits set and tells
+# the operator to ``chmod 0600``; a file we generate ourselves should
+# not be born failing that check. Applies to newly created files only —
+# an existing file keeps whatever mode its owner chose.
+_ENVRC_MODE = 0o600
 
 # VSCode reads terminal env from a separate key per host OS. Writing all
 # three means the same ``.vscode/`` folder works whether the developer
@@ -261,7 +284,9 @@ def _apply_settings_json(
             diff=diff,
             reason=(
                 "existing settings.json has different value(s) for "
-                f"{', '.join(sorted(conflicts))}. Re-run with --force to overwrite."
+                f"{', '.join(sorted(conflicts))}. Re-run with --force to "
+                "overwrite those keys (unrelated keys are preserved; the "
+                f"previous file is saved to {_backup_path(path).name})."
             ),
         )
 
@@ -270,7 +295,24 @@ def _apply_settings_json(
         return FileOutcome(path=path, action="unchanged")
 
     diff = _text_diff(old_text, new_text, path)
+    reason = ""
     if not dry_run:
+        # H-11: same deal as .envrc. The merge preserves unrelated keys
+        # by design, but a bug in _merge_terminal_env would rewrite a
+        # hand-tuned settings.json with no way back — so keep the old
+        # bytes. Unlike .envrc this is not gated on --force: an additive
+        # merge rewrites the file without --force too, and that is
+        # exactly the path a merge bug would take.
+        if old_text:
+            backup = _make_backup(path)
+            reason = (
+                f"previous contents backed up to {backup}"
+                if backup is not None
+                else (
+                    f"could not write {_backup_path(path).name} — "
+                    "previous contents were NOT preserved"
+                )
+            )
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(path, new_text)
@@ -281,11 +323,14 @@ def _apply_settings_json(
                 reason=f"write failed: {exc}",
                 diff=diff,
             )
+    elif old_text:
+        reason = f"would back up previous contents to {_backup_path(path)}"
 
     return FileOutcome(
         path=path,
         action="updated" if old_text else "created",
         diff=diff,
+        reason=reason,
     )
 
 
@@ -374,15 +419,32 @@ def _apply_envrc(
             diff=diff,
             reason=(
                 ".envrc already exists and its contents differ. "
-                "Re-run with --force to overwrite. "
+                "Re-run with --force to replace the WHOLE file with the "
+                "generated contents (this is not a merge — custom lines "
+                "such as `source_env_if_exists .envrc.local` are dropped); "
+                f"the previous contents are saved to {_backup_path(path).name}. "
                 "(Tip: keep secrets in a separate .envrc.local and "
                 "``source_env_if_exists`` from .envrc.)"
             ),
         )
 
+    reason = ""
     if not dry_run:
+        # H-11: --force replaces the whole file, so stash the old bytes
+        # (mode included) before they are gone. Inside the dry_run guard
+        # on purpose — --dry-run must not touch the filesystem at all.
+        if old_text:
+            backup = _make_backup(path)
+            reason = (
+                f"previous contents backed up to {backup}"
+                if backup is not None
+                else (
+                    f"could not write {_backup_path(path).name} — "
+                    "previous contents were NOT preserved"
+                )
+            )
         try:
-            _atomic_write(path, new_text)
+            _atomic_write(path, new_text, mode=_ENVRC_MODE)
         except OSError as exc:
             return FileOutcome(
                 path=path,
@@ -390,11 +452,14 @@ def _apply_envrc(
                 reason=f"write failed: {exc}",
                 diff=diff,
             )
+    elif old_text:
+        reason = f"would back up previous contents to {_backup_path(path)}"
 
     return FileOutcome(
         path=path,
         action="updated" if old_text else "created",
         diff=diff,
+        reason=reason,
     )
 
 
@@ -538,21 +603,112 @@ def _dump_json(obj: object) -> str:
     return json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
 
 
-def _atomic_write(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically (tmp + os.replace).
+def _default_file_mode() -> int:
+    """Return the mode a plain ``open(..., "w")`` would produce.
+
+    ``tempfile.mkstemp`` deliberately creates its file 0600. That is the
+    right default for a secret-bearing ``.envrc``, but it would silently
+    tighten ``settings.json`` (previously umask-derived, typically
+    0644). Reading the umask back keeps the pre-existing behaviour for
+    files that have no explicit mode requirement.
+    """
+    current = os.umask(0)
+    os.umask(current)
+    return 0o666 & ~current
+
+
+def _atomic_write(path: Path, text: str, *, mode: int | None = None) -> None:
+    """Write ``text`` to ``path`` atomically (tmp + ``os.replace``).
 
     A partial write cannot corrupt the target file: the tmp file lives
     on the same filesystem (same parent directory) so ``os.replace`` is
     an atomic inode swap on POSIX. On Windows ``os.replace`` is also
     atomic since Python 3.3.
 
-    The tmp file uses the parent + ``<name>.tmp`` pattern rather than
-    ``Path.with_suffix`` because ``.envrc`` has no stem/suffix in the
-    ``Path`` sense and ``with_suffix`` would silently misbehave.
+    v2.11 hardening (H-11). The tmp file used to be the predictable
+    ``<name>.tmp`` next to the target, written with ``Path.write_text``:
+
+    * a pre-planted symlink at that exact path was *followed*, so the
+      write landed on the link's target (CWE-377);
+    * two concurrent ``vscode-init`` runs on the same workspace
+      clobbered each other's tmp file;
+    * ``os.replace`` swaps inodes, so the target's mode was reset to the
+      umask default — a 0600 ``.envrc`` holding ``ANTHROPIC_AUTH_TOKEN``
+      silently became 0644;
+    * without ``fsync`` a crash right after the rename could leave a
+      zero-length file.
+
+    So: ``tempfile.mkstemp`` (random name, ``O_EXCL``, no symlink
+    following), ``fsync`` before the rename, mode restored from the
+    file being replaced (or from ``mode`` for a fresh file), and the tmp
+    file unlinked in ``finally`` so a failed write leaves no debris.
+
+    Parameters
+    ----------
+    mode:
+        POSIX mode for a *newly created* file. Ignored when ``path``
+        already exists — an existing file's own mode wins, so we never
+        loosen (or tighten) what the operator chose. ``None`` means
+        "whatever the umask would have given us".
     """
-    tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    existing_mode: int | None = None
+    try:
+        existing_mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        existing_mode = None
+
+    target_mode = existing_mode if existing_mode is not None else mode
+    if target_mode is None:
+        target_mode = _default_file_mode()
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Windows has no POSIX mode bits worth honouring; os.chmod there
+        # only toggles the read-only flag, which would be a surprising
+        # side effect of "preserve the mode".
+        if os.name != "nt":
+            os.chmod(tmp, target_mode)
+        os.replace(tmp, path)
+    finally:
+        # Best effort: a leftover tmp file is noise, not corruption, and
+        # cleaning it up must never mask the original exception.
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+
+
+def _backup_path(path: Path) -> Path:
+    """Return the ``.bak`` sibling used to preserve ``path``'s old bytes."""
+    return path.with_name(path.name + ".bak")
+
+
+def _make_backup(path: Path) -> Path | None:
+    """Copy ``path`` to ``<name>.bak``, preserving mode and mtime.
+
+    Returns the backup path, or ``None`` when the copy failed (the
+    caller then proceeds without a backup rather than refusing to write
+    — but the failure is not silent, see the ``reason`` plumbing).
+
+    The destination is unlinked first: ``shutil.copy2`` opens the
+    destination for writing and would happily follow a symlink planted
+    at ``<name>.bak``. ``Path.unlink`` removes the link itself, so the
+    subsequent copy always creates a fresh regular file.
+    """
+    backup = _backup_path(path)
+    try:
+        backup.unlink(missing_ok=True)
+        shutil.copy2(path, backup)
+    except OSError:
+        return None
+    return backup
 
 
 def _text_diff(old: str, new: str, path: Path) -> str:

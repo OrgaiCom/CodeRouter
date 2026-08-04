@@ -5,8 +5,10 @@ bench-sweep pure logic was deliberately factored into Tk-independent
 module-level functions / dataclasses (mirroring the readiness/auto-restart
 split covered by tests/test_launcher_gui_readiness.py) so every case below
 exercises them without ever instantiating ``tk.Tk()`` / ``LauncherApp`` /
-``SweepWindow`` — no display server, matching the desktop CI constraint
-(uv-managed CPython has no tkinter, hence the importorskip below).
+``SweepWindow`` — no display server needed. The importorskip below is not
+for CI: uv-managed CPython does ship tkinter, so these tests really do run
+there. It is for local system pythons built without Tk, which would
+otherwise fail at collection time.
 
 Subprocess spawning is fully mocked: no real llama-server / llmbench ever
 runs. The shared, frozen core logic lives in coderouter.launcher_devices and

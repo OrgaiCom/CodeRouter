@@ -65,8 +65,9 @@ import pytest
 # launcher_gui imports tkinter at module level (it IS a Tk app). Every test
 # in this module exercises Tk-free pure helpers, but the import itself still
 # needs the tkinter package to exist. Skip cleanly on pythons built without
-# Tk support (e.g. uv-managed CPython on CI runners) instead of erroring at
-# collection time.
+# Tk support instead of erroring at collection time. Note this is NOT the CI
+# case: uv-managed CPython ships tkinter, so these tests do run on CI. It is
+# local system pythons (e.g. a distro python3 without python3-tk) that skip.
 pytest.importorskip("tkinter", reason="launcher_gui requires the tkinter package (python3-tk)")
 
 import launcher_gui as lg
@@ -256,9 +257,16 @@ def test_readiness_worker_marks_running_and_resets_restart_count() -> None:
 
     assert mp.status == "running"
     assert mp.restart_count == 0
+    # H-13: the queue now carries (kind, proc_id, payload) triples — the
+    # "readiness passed" note is ordinary log output, and "ready" is a
+    # separately tagged control event (it used to be an in-band "_READY_:"
+    # prefix on a log line, indistinguishable from child stdout).
     items = [q.get_nowait() for _ in range(q.qsize())]
-    assert any("readiness check passed" in ln for _pid, ln in items)
-    assert any(ln.startswith("_READY_:") for _pid, ln in items)
+    assert any(
+        kind == lg.LOG_KIND_LOG and "readiness check passed" in payload
+        for kind, _pid, payload in items
+    )
+    assert any(kind == lg.LOG_KIND_READY for kind, _pid, _payload in items)
 
 
 def test_readiness_worker_times_out_marks_error() -> None:
@@ -270,7 +278,10 @@ def test_readiness_worker_times_out_marks_error() -> None:
 
     assert mp.status == "error"
     items = [q.get_nowait() for _ in range(q.qsize())]
-    assert any("timed out" in ln for _pid, ln in items)
+    assert any(
+        kind == lg.LOG_KIND_LOG and "timed out" in payload
+        for kind, _pid, payload in items
+    )
 
 
 def test_readiness_worker_bails_when_already_resolved() -> None:
@@ -637,7 +648,7 @@ def test_stale_ready_worker_does_not_clobber_newer_generation(monkeypatch) -> No
     assert mp.status == "loading"  # gen=2's state intact — not "running"
     assert mp.restart_count == 1   # not clobbered back to 0
     assert mp.spawn_gen == 2
-    assert q.empty()               # and no _READY_ emitted by the stale worker
+    assert q.empty()               # and no ready event from the stale worker
 
 
 def test_ready_worker_bails_when_stopping_set_during_final_gap(monkeypatch) -> None:
