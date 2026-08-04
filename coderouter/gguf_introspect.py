@@ -34,7 +34,19 @@ The parser treats the file as **untrusted input**:
     :data:`_MAX_STR_BYTES` / :data:`_MAX_ARRAY_LEN` so a corrupt or
     hostile header cannot trigger a multi-GB allocation (DoS).
   * Reads past EOF raise :class:`GGUFParseError`, never an unbounded
-    loop.
+    loop. This includes ``seek`` past EOF: every skip (array element
+    count x element size, or a lone scalar) is checked against the
+    file's actual size *before* the seek happens, so a truncated file
+    that declares a huge array count fails fast instead of spinning a
+    multi-million-iteration loop over bytes that were never written.
+  * Array nesting depth is capped at :data:`_MAX_ARRAY_DEPTH`. Skipping
+    a value uses an explicit work-stack (``_skip_value``), not Python
+    recursion, so there is no ``RecursionError`` failure mode to begin
+    with — the depth cap is a belt-and-suspenders DoS guard (a
+    pathological file can otherwise spend 12 bytes per nesting level to
+    force millions of stack-machine iterations), not a stack-overflow
+    guard. Every llama.cpp-written GGUF array (tokenizer tokens/scores/
+    merges, etc.) nests exactly one level deep.
   * No ``mmap``, no tensor payload read, no code execution path — we
     only seek/read a small prefix.
 """
@@ -86,6 +98,16 @@ _SCALAR: dict[int, tuple[str, int]] = {
 _MAX_STR_BYTES: int = 1 << 20  # 1 MiB key/value string ceiling
 _MAX_ARRAY_LEN: int = 1 << 24  # element-count ceiling for arrays
 _MAX_KV_PAIRS: int = 1 << 20  # metadata pair ceiling
+# Array-of-array nesting ceiling. Every array we've ever seen llama.cpp
+# emit (tokenizer.ggml.tokens / token_type / scores / merges, ...) nests
+# exactly one level deep, and this repo's synthetic test fixtures never
+# exceed that either — real headers are nowhere near this limit. It exists
+# purely as a DoS guard: each extra nesting level costs an attacker only
+# 12 bytes (elem_type u32 + count u64), so an unbounded depth lets a
+# ~12 KiB file blow the interpreter's C stack. ``_skip_value`` walks an
+# explicit work-stack rather than recursing, so this cap is enforced
+# directly (no reliance on hitting Python's recursion limit).
+_MAX_ARRAY_DEPTH: int = 8
 
 # Human-readable names for the GGUF ``general.file_type`` enum (subset).
 _FILE_TYPE_NAMES: dict[int, str] = {
@@ -197,31 +219,97 @@ def _read_gguf_string(fh: BinaryIO) -> str:
     return _read_exact(fh, length).decode("utf-8", errors="replace")
 
 
-def _skip_value(fh: BinaryIO, type_tag: int) -> None:
-    """Consume a metadata value of ``type_tag`` without retaining it."""
-    if type_tag == _GGUF_TYPE_STRING:
-        _read_gguf_string(fh)
-        return
-    if type_tag == _GGUF_TYPE_ARRAY:
-        elem_type = _read_u32(fh)
-        count = _read_u64(fh)
-        if count > _MAX_ARRAY_LEN:
-            raise GGUFParseError(f"array length {count} exceeds cap")
-        for _ in range(count):
-            _skip_value(fh, elem_type)
-        return
-    fmt_size = _SCALAR.get(type_tag)
-    if fmt_size is None:
-        raise GGUFParseError(f"unknown value type tag {type_tag}")
-    fh.seek(fmt_size[1], 1)  # skip scalar bytes
+def _seek_checked(fh: BinaryIO, nbytes: int, file_size: int) -> None:
+    """Skip ``nbytes`` forward, refusing to seek past the file's real end.
+
+    ``seek`` never fails on a plain file even when the target offset is
+    past EOF — the OS happily "succeeds" and a subsequent read just
+    returns fewer bytes than expected. That silence is what let a
+    49-byte file with a declared 16M-element array parse "successfully"
+    (see module docstring). Checking the target offset against the
+    ``file_size`` captured once via ``stat()`` at the top of
+    :func:`read_gguf_metadata` turns that into an immediate, cheap
+    :class:`GGUFParseError` instead of either an unbounded loop or a
+    silently-wrong result.
+    """
+    pos = fh.tell()
+    if pos + nbytes > file_size:
+        raise GGUFParseError(
+            f"value extends past EOF (offset {pos} + {nbytes} bytes "
+            f"> file size {file_size})"
+        )
+    fh.seek(nbytes, 1)
 
 
-def _read_scalar_value(fh: BinaryIO, type_tag: int) -> object:
+def _skip_value(fh: BinaryIO, type_tag: int, file_size: int, *, depth: int = 0) -> None:
+    """Consume a metadata value of ``type_tag`` without retaining it.
+
+    Iterative (explicit work-stack), not recursive: a metadata value can
+    be an array of arrays, and a corrupt/hostile file can nest that
+    arbitrarily deep for only 12 bytes per level (``elem_type`` u32 +
+    ``count`` u64). Recursing one Python frame per level let a
+    ~12 KiB file blow the interpreter's stack with an uncaught
+    ``RecursionError`` (see module docstring) — the C-level exception
+    that walks straight through :class:`GGUFParseError`'s ``except``
+    clauses. Doing the walk with a stack of ``(type_tag, remaining,
+    depth)`` frames instead makes ``RecursionError`` structurally
+    impossible here, and :data:`_MAX_ARRAY_DEPTH` still bounds how deep
+    a legitimate-looking nested array is allowed to go (DoS guard,
+    independent of the recursion fix).
+
+    Arrays of fixed-width scalars (the common case: token ids, scores,
+    ``token_type``, ...) are skipped with a single bounds-checked
+    ``seek`` for the whole array rather than one iteration per element —
+    this is what turns an 8s parse of a 150K-element array into a
+    sub-millisecond one.
+    """
+    # Each frame: (type_tag_to_process, how_many_times_left, nesting_depth).
+    stack: list[tuple[int, int, int]] = [(type_tag, 1, depth)]
+    while stack:
+        tag, remaining, d = stack.pop()
+        if remaining > 1:
+            stack.append((tag, remaining - 1, d))
+
+        if tag == _GGUF_TYPE_STRING:
+            _read_gguf_string(fh)
+            continue
+
+        if tag == _GGUF_TYPE_ARRAY:
+            if d >= _MAX_ARRAY_DEPTH:
+                raise GGUFParseError(
+                    f"array nesting depth exceeds cap ({_MAX_ARRAY_DEPTH}); "
+                    "refusing to descend further"
+                )
+            elem_type = _read_u32(fh)
+            count = _read_u64(fh)
+            if count > _MAX_ARRAY_LEN:
+                raise GGUFParseError(f"array length {count} exceeds cap")
+            fmt_size = _SCALAR.get(elem_type)
+            if fmt_size is not None:
+                # Fixed-width elements: one bounds-checked bulk seek,
+                # not a per-element loop.
+                _seek_checked(fh, count * fmt_size[1], file_size)
+            elif elem_type in (_GGUF_TYPE_STRING, _GGUF_TYPE_ARRAY):
+                if count > 0:
+                    stack.append((elem_type, count, d + 1))
+            else:
+                raise GGUFParseError(f"unknown value type tag {elem_type}")
+            continue
+
+        # Lone scalar (only reachable if _skip_value is ever invoked
+        # directly on a scalar type_tag; kept for defense in depth).
+        fmt_size = _SCALAR.get(tag)
+        if fmt_size is None:
+            raise GGUFParseError(f"unknown value type tag {tag}")
+        _seek_checked(fh, fmt_size[1], file_size)
+
+
+def _read_scalar_value(fh: BinaryIO, type_tag: int, file_size: int) -> object:
     """Read (and return) a value, skipping arrays/strings we don't need."""
     if type_tag == _GGUF_TYPE_STRING:
         return _read_gguf_string(fh)
     if type_tag == _GGUF_TYPE_ARRAY:
-        _skip_value(fh, type_tag)
+        _skip_value(fh, type_tag, file_size)
         return None
     return _read_scalar(fh, type_tag)
 
@@ -262,7 +350,16 @@ def read_gguf_metadata(path: str | Path) -> GGUFInfo:
     file_type: int | None = None
     n_nextn: int | None = None
 
-    with p.open("rb") as fh:
+    try:
+        fh = p.open("rb")
+    except OSError as exc:
+        # TOCTOU: the file can vanish (or become unreadable) between the
+        # stat() above and this open() — e.g. a concurrent model-directory
+        # scan racing a download/cleanup. Convert to GGUFParseError so
+        # callers only need to catch one exception type.
+        raise GGUFParseError(f"cannot open {path}: {exc}") from exc
+
+    with fh:
         magic = fh.read(4)
         if magic != _GGUF_MAGIC:
             raise GGUFParseError(f"bad magic {magic!r} (not a GGUF file)")
@@ -277,7 +374,7 @@ def read_gguf_metadata(path: str | Path) -> GGUFInfo:
         for _ in range(kv_count):
             key = _read_gguf_string(fh)
             value_type = _read_u32(fh)
-            value = _read_scalar_value(fh, value_type)
+            value = _read_scalar_value(fh, value_type, file_size)
 
             if key == "general.architecture" and isinstance(value, str):
                 arch = value
@@ -308,10 +405,20 @@ def read_gguf_metadata(path: str | Path) -> GGUFInfo:
 
 def try_read_gguf_metadata(path: str | Path) -> GGUFInfo | None:
     """Like :func:`read_gguf_metadata` but returns None on any parse
-    failure — convenient for best-effort advisory paths."""
+    failure — convenient for best-effort advisory paths.
+
+    Catches ``OSError`` in addition to :class:`GGUFParseError` because a
+    TOCTOU race can still surface a raw ``OSError`` from ``open()`` in
+    principle, and ``RecursionError`` / ``MemoryError`` as defense in
+    depth: with the iterative :func:`_skip_value` walk and the depth cap
+    above, neither should actually be reachable from this module
+    anymore, but a caller in a best-effort advisory path (e.g. scanning
+    every ``.gguf`` in a model directory) should never be taken down by
+    one regardless.
+    """
     try:
         return read_gguf_metadata(path)
-    except GGUFParseError:
+    except (GGUFParseError, OSError, RecursionError, MemoryError):
         return None
 
 

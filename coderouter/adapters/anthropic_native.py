@@ -53,11 +53,16 @@ from coderouter.translation.anthropic import (
     AnthropicResponse,
     AnthropicStreamEvent,
 )
-from coderouter.translation.convert import (
-    stream_anthropic_to_chat_chunks,
-    to_anthropic_request,
-    to_chat_response,
-)
+
+# NOTE: `coderouter.translation.convert` is intentionally NOT imported here
+# at module scope (see H-7). The import chain is:
+#   translation/__init__.py -> convert.py -> adapters/__init__.py
+#     -> registry.py -> anthropic_native.py -> translation.convert (again)
+# A top-level import here closes that cycle and makes standalone imports of
+# `coderouter.translation.*` fail with a partial-initialization ImportError
+# unless `coderouter.adapters` happened to be imported first. The three
+# symbols used from `convert` are imported lazily inside `generate()` /
+# `stream()` instead, which breaks the cycle without changing behavior.
 
 logger = get_logger(__name__)
 
@@ -210,6 +215,12 @@ class AnthropicAdapter(BaseAdapter):
         ``to_chat_response``. The ``coderouter_provider`` tag is preserved
         on both sides.
         """
+        # Local import to avoid a circular import at module load time (H-7):
+        # convert.py transitively imports coderouter.adapters, which imports
+        # this module. Importing convert.py here (call time, not load time)
+        # keeps `coderouter.translation.*` importable standalone.
+        from coderouter.translation.convert import to_anthropic_request, to_chat_response
+
         anth_req = to_anthropic_request(request)
         anth_resp = await self.generate_anthropic(anth_req, overrides=overrides)
         chat_resp = to_chat_response(anth_resp)
@@ -241,6 +252,13 @@ class AnthropicAdapter(BaseAdapter):
             - Anthropic ``event: error`` → translator raises
               AdapterError(retryable=False), same treatment as above.
         """
+        # Local import to avoid a circular import at module load time (H-7);
+        # see the matching comment in generate() above.
+        from coderouter.translation.convert import (
+            stream_anthropic_to_chat_chunks,
+            to_anthropic_request,
+        )
+
         anth_req = to_anthropic_request(request)
         events = self.stream_anthropic(anth_req, overrides=overrides)
         async for chunk in stream_anthropic_to_chat_chunks(events, provider_name=self.name):

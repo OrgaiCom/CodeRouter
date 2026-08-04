@@ -624,6 +624,24 @@ def _resolve_config_path(explicit: str | None) -> Path:
     return candidates[-1]
 
 
+def _write_verdict_line(*, write: bool, files_written: int) -> None:
+    """Print the one-line "did we touch the disk?" verdict.
+
+    Called on **every** exit path of :func:`_run_apply_or_dry_run`.
+    The v1.x regression this guards against: an ``--apply`` run that
+    silently rewrote providers.yaml while the summary said "already
+    applied" and printed neither a diff nor a ``Backup:`` line. Making
+    the statement unconditional means no future early-return can go
+    quiet about a write again.
+    """
+    if not write:
+        print("  0 files written (dry-run).")
+    elif files_written == 0:
+        print("  0 files written — no file contents changed.")
+    else:
+        print(f"  {files_written} file(s) written.")
+
+
 def _run_apply_or_dry_run(
     *,
     report: object,
@@ -655,9 +673,13 @@ def _run_apply_or_dry_run(
         )
     except MissingDependencyError as exc:
         print(f"doctor --apply: {exc}", file=sys.stderr)
+        _write_verdict_line(write=write, files_written=0)
         return 1
     except DoctorApplyError as exc:
+        # Every merge happens before the first byte is written, so an
+        # abort here always leaves the disk untouched.
         print(f"doctor --apply: {exc}", file=sys.stderr)
+        _write_verdict_line(write=write, files_written=0)
         return 1
 
     label = "Apply" if write else "Dry-run"
@@ -680,6 +702,8 @@ def _run_apply_or_dry_run(
                 f"  All {result.no_op_patches} patch(es) already applied "
                 f"— providers.yaml is up to date."
             )
+        _write_verdict_line(write=write, files_written=len(result.written_paths))
+        _print_reformat_notice(result, write=write)
         return 0
 
     print(
@@ -694,14 +718,39 @@ def _run_apply_or_dry_run(
         print()
         print(diff, end="" if diff.endswith("\n") else "\n")
 
+    _write_verdict_line(write=write, files_written=len(result.written_paths))
     if write:
         for orig, bak in result.backups.items():
             print(f"  Backup: {orig} → {bak}")
     else:
+        _print_reformat_notice(result, write=write)
         print()
         print("  (dry-run — no files were modified. Re-run with --apply to write.)")
 
     return 0
+
+
+def _print_reformat_notice(result: object, *, write: bool) -> None:
+    """Dry-run-only heads-up about cosmetic re-serialization deltas.
+
+    ``reformat_only`` holds targets whose re-dump differs from disk
+    without any patch having changed a value — today that is explicit
+    ``key: null`` scalars, which ruamel re-emits as empty scalars.
+    These bytes are never written, so the note is purely so an operator
+    comparing "the diff I expected" with "the file I have" is not
+    surprised. Suppressed under ``--apply``, where nothing about them
+    is actionable.
+    """
+    reformat = getattr(result, "reformat_only", None) or {}
+    if write or not reformat:
+        return
+    print(
+        f"  note: {len(reformat)} file(s) would re-serialize with cosmetic "
+        "differences (e.g. explicit `null` → empty scalar). These are NOT "
+        "written — --apply only rewrites files whose values actually changed."
+    )
+    for path in sorted(reformat):
+        print(f"    - {path}")
 
 
 

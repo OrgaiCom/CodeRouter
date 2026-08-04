@@ -2911,7 +2911,15 @@ class FallbackEngine:
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
                     chat_resp = await adapter.generate(chat_req, overrides=overrides)
-                    resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
+                    # H-4: the translation hop runs the tool-call repair
+                    # scanners over the whole assistant message. That is CPU
+                    # work, not I/O, so it is pushed onto a worker thread —
+                    # a pathological message must not stall the event loop
+                    # for every other in-flight request. `to_anthropic_response`
+                    # itself stays synchronous (many callers depend on it).
+                    resp = await asyncio.to_thread(
+                        to_anthropic_response, chat_resp, allowed_tool_names=tool_names
+                    )
             except AdapterError as exc:
                 # v1.9-C: record the failure with its observed latency.
                 # Auth-flavored failures (401 / 403) carry no useful
@@ -3223,7 +3231,11 @@ class FallbackEngine:
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
                     chat_resp = await adapter.generate(chat_req, overrides=overrides)
-                    anth_resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
+                    # H-4: same as the non-streaming branch — keep the
+                    # CPU-bound repair scan off the event loop.
+                    anth_resp = await asyncio.to_thread(
+                        to_anthropic_response, chat_resp, allowed_tool_names=tool_names
+                    )
                     event_iter = synthesize_anthropic_stream_from_response(anth_resp)
                     first = await anext(event_iter)
                 else:

@@ -321,23 +321,59 @@ def _patch_model_capabilities_yaml(*, match: str, kind: str, key: str, value: bo
 
 
 def _patch_providers_yaml_output_filters(provider_name: str, filters: list[str]) -> str:
-    """v1.0-A: Emit a providers.yaml patch adding/extending ``output_filters``.
+    """v1.0-A: Emit a providers.yaml patch setting the full ``output_filters`` chain.
 
-    Lists the filters verbatim so copy-paste yields a valid YAML list.
-    The comment block above the stanza hints that this is additive with
-    any existing filter chain — users with a bespoke chain should merge
-    rather than replace.
+    ``filters`` must already be the **complete** post-fix chain — the
+    provider's existing filters in their existing order, plus whatever
+    the probe found missing appended at the end. Callers build that
+    union; see :func:`_union_output_filters`.
+
+    Why the complete chain and not just the additions: ``--apply``
+    merges this patch with ``deep_merge_dicts``, which replaces lists
+    wholesale (documented contract, pinned by
+    ``test_deep_merge_replaces_lists_wholesale``). Emitting only the
+    missing filters would therefore *delete* every filter the operator
+    already had — including ``strip_tool_call_xml`` /
+    ``repair_byte_fallback``, which this probe never recommends and so
+    could never add back. Keeping "patch YAML == the desired end state"
+    also means the copy-paste path and the ``--apply`` path agree, and
+    the ``--dry-run`` diff reads as the literal final value.
     """
     items = "\n".join(f"      - {f}" for f in filters)
     return (
         "# providers.yaml — update the entry for "
-        f"{provider_name!r} (merge if a chain already exists):\n"
+        f"{provider_name!r}. This is the COMPLETE chain (existing filters "
+        "plus the additions) —\n"
+        "# it replaces `output_filters` wholesale rather than appending "
+        "to it. Order is significant:\n"
+        "# filters run left to right.\n"
         "providers:\n"
         f"  - name: {provider_name}\n"
         "    # ... existing fields ...\n"
         "    output_filters:\n"
         f"{items}\n"
     )
+
+
+def _union_output_filters(existing: list[str], additions: list[str]) -> list[str]:
+    """Existing chain + the filters it is missing, order-preserving.
+
+    ``OutputFilterChain.feed()`` applies filters left to right, so the
+    chain is a pipeline, not a set: reordering it changes the output
+    (e.g. ``strip_thinking`` before vs. after ``strip_tool_call_xml``
+    decides whether a tool call nested inside ``<think>`` survives).
+    Never sort this — the operator's existing order is authoritative and
+    the additions go on the end, which is the only placement that cannot
+    change the behavior of the filters already there.
+
+    Duplicates are dropped so a re-run of the probe cannot grow the
+    chain unboundedly.
+    """
+    chain = list(existing)
+    for name in additions:
+        if name not in chain:
+            chain.append(name)
+    return chain
 
 
 def _patch_providers_yaml_num_ctx(provider_name: str, desired_ctx: int = 32768) -> str:
@@ -470,6 +506,23 @@ _STREAMING_PROBE_MAX_TOKENS_THINKING = 1024
 # probes (same _is_reasoning_model gate).
 _TOOL_CALLS_PROBE_MAX_TOKENS_DEFAULT = 256
 _TOOL_CALLS_PROBE_MAX_TOKENS_THINKING = 1024
+# How much assistant text the tool_calls probe feeds to
+# ``repair_tool_calls_in_text``. This has to be sized against the token
+# budgets above, not against a "preview" length: 1024 tokens is roughly
+# 3-4k characters, and a thinking model routinely spends several hundred
+# of them on a preamble before writing its JSON call. Scanning only the
+# first 200 characters (the pre-fix behavior) made the probe conclude
+# "nothing tool-shaped at all" for a model that had in fact emitted a
+# perfectly repairable call — and the remediation for that verdict is a
+# ``capabilities.tools: false`` patch, i.e. ``--apply`` would have
+# permanently disabled tool calling for a provider that supports it.
+# Bounded rather than unlimited so a pathological multi-megabyte
+# response cannot turn the probe into a CPU sink; 16 KiB comfortably
+# covers the largest response either budget can produce.
+_TOOL_PROBE_SCAN_CHARS = 16384
+# Length of the human-facing excerpt embedded in probe ``detail`` text.
+# Display only — never the input to a verdict.
+_TOOL_PROBE_DETAIL_PREVIEW_CHARS = 200
 # Default ``num_predict`` suggested in the emitted patch. -1 would be
 # optimal (uncapped) but "4096" communicates intent more clearly to
 # operators unfamiliar with Ollama's sentinel value, and covers Claude
@@ -1191,7 +1244,12 @@ async def _probe_tool_calls(
 
     native_tool_call = False
     text_json_tool_call = False
-    content_sample = ""
+    # ``scan_text`` is what the verdict is computed from — the assistant
+    # text up to _TOOL_PROBE_SCAN_CHARS. ``content_preview`` is a short
+    # excerpt used only inside human-readable ``detail`` strings. Keeping
+    # these two separate is the whole point: they used to be one 200-char
+    # string, so the preview length silently became the detection window.
+    scan_text = ""
     if provider.kind == "anthropic":
         blocks = parsed.get("content")
         if isinstance(blocks, list):
@@ -1199,11 +1257,11 @@ async def _probe_tool_calls(
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     native_tool_call = True
                     break
-            content_sample = " ".join(
+            scan_text = " ".join(
                 str(b.get("text", ""))
                 for b in blocks
                 if isinstance(b, dict) and b.get("type") == "text"
-            )[:200]
+            )[:_TOOL_PROBE_SCAN_CHARS]
     else:
         msg = _extract_openai_assistant_choice(parsed)
         if msg is not None:
@@ -1211,10 +1269,13 @@ async def _probe_tool_calls(
                 native_tool_call = True
             content = msg.get("content")
             if isinstance(content, str):
-                content_sample = content[:200]
+                scan_text = content[:_TOOL_PROBE_SCAN_CHARS]
 
-    if not native_tool_call and content_sample:
-        _, repaired = repair_tool_calls_in_text(content_sample, ["echo"])
+    content_preview = scan_text[:_TOOL_PROBE_DETAIL_PREVIEW_CHARS]
+    scanned_chars = len(scan_text)
+
+    if not native_tool_call and scan_text:
+        _, repaired = repair_tool_calls_in_text(scan_text, ["echo"])
         text_json_tool_call = bool(repaired)
 
     # Resolve the declared support:
@@ -1293,14 +1354,24 @@ async def _probe_tool_calls(
                 "the model produced no tool-shaped output at all."
             )
         )
+        # State the detection window explicitly. This verdict's
+        # remediation permanently disables tool calling, so an operator
+        # who disagrees with it needs to be able to tell "the model
+        # really emitted nothing" from "the probe only looked at the
+        # first N characters" without reading the source.
+        scan_note = (
+            f"Scanned {scanned_chars} chars of assistant text "
+            f"(window {_TOOL_PROBE_SCAN_CHARS})"
+            + (f"; begins: {content_preview!r}." if content_preview else "; text was empty.")
+        )
         return ProbeResult(
             name="tool_calls",
             verdict=ProbeVerdict.NEEDS_TUNING,
             detail=(
                 "declaration says tools=true but model produced neither "
                 "native `tool_calls` nor repairable tool JSON. "
-                f"{budget_note} Common for quantized small models "
-                "(plan.md §9.4 symptom #2)."
+                f"{budget_note} {scan_note} Common for quantized small "
+                "models (plan.md §9.4 symptom #2)."
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_capability(provider.name, "tools", False),
@@ -1526,7 +1597,10 @@ async def _probe_reasoning_leak(
     content_text = content if isinstance(content, str) else ""
     has_think = "<think>" in content_text
     leaked_markers: list[str] = [m for m in DEFAULT_STOP_MARKERS if m in content_text]
-    configured_filters = set(provider.output_filters)
+    # Order matters (the chain is a left-to-right pipeline), so keep the
+    # operator's list as a list — a set here would lose the order we have
+    # to reproduce in the patch.
+    configured_filters: list[str] = list(provider.output_filters)
     needs_strip_thinking = has_think and "strip_thinking" not in configured_filters
     needs_strip_markers = bool(leaked_markers) and "strip_stop_markers" not in configured_filters
 
@@ -1542,6 +1616,11 @@ async def _probe_reasoning_leak(
         if needs_strip_markers:
             recommended.append("strip_stop_markers")
 
+        # The patch must carry the WHOLE chain: --apply replaces the
+        # list wholesale, so emitting only ``recommended`` would drop
+        # every filter the operator already configured.
+        merged_chain = _union_output_filters(configured_filters, recommended)
+
         found_desc: list[str] = []
         if has_think:
             found_desc.append("<think>...</think>")
@@ -1555,11 +1634,11 @@ async def _probe_reasoning_leak(
                 "content-embedded leak detected ("
                 + " + ".join(found_desc)
                 + "). v1.0-A `output_filters` would scrub this; current "
-                f"provider chain = {sorted(configured_filters)}. Recommended: "
-                f"add {recommended}."
+                f"provider chain = {configured_filters}. Recommended: "
+                f"add {recommended} → resulting chain {merged_chain}."
             ),
             target_file="providers.yaml",
-            suggested_patch=_patch_providers_yaml_output_filters(provider.name, recommended),
+            suggested_patch=_patch_providers_yaml_output_filters(provider.name, merged_chain),
         )
 
     passthrough_on = (

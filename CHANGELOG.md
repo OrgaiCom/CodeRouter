@@ -9,6 +9,191 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.11.1] — 2026-08-04 (second-round review: correctness & hardening)
+
+Seven fixes from a full-source review of the 36k-line package, plus two
+deprecation warnings that pre-announce the behaviour changes queued for
+v2.12.0. **No breaking changes**: no config-schema field was removed or
+narrowed, no CLI flag changed meaning, and every default is unchanged.
+The two new warnings do not alter behaviour — they only tell you which
+of your settings will need editing before v2.12.0.
+
+### Fixed
+
+- **Brace scanning in `tool_repair` was quadratic and blocked the event
+  loop for minutes.** `_find_balanced_json_objects` and
+  `_find_candidate_object_spans` restarted a full scan to end-of-text at
+  every `{`, so an assistant reply carrying unclosed braces — the
+  ordinary shape of a deep nested JSON truncated by `max_tokens` — cost
+  O(k·n). Measured on the old code: 3.997 s for 8 KiB of `{`, 22.199 s
+  for a 48 KiB reply, 139.019 s for 48 KiB of bare `{`. Both scanners
+  are called synchronously from `to_anthropic_response`, which
+  `FallbackEngine._generate_anthropic_impl` / `._stream_anthropic_impl`
+  invoke from inside `async` handlers, so the whole server stalled for
+  the duration — every concurrent request, not just the offending one.
+  Replaced with a single right-to-left sweep that builds a depth-0
+  closing-brace table (`table[j]` = the first depth-0 `}` reached when
+  scanning from offset `j` outside any string); the answer for an
+  opening brace at `q` is `table[q+1]`, which is by definition the
+  fresh-restart semantics the old code had. Same inputs now take
+  0.004 s / 0.016 s / 0.024 s. The strict (`"` only) and lenient (`'`
+  too) quoting rules live in separate tables and cannot bleed into each
+  other. Scan output is unchanged — see Tests. Added
+  `_MAX_BARE_SCAN_CHARS` (256 KiB); above it the bare-JSON pass is
+  skipped with a `tool-repair-input-too-large` warning while the fenced
+  / XML / R4c passes still run. The two `to_anthropic_response` call
+  sites moved to `asyncio.to_thread`; the function itself stays
+  synchronous (`tool_repair.py`, `routing/fallback.py`).
+- **`doctor --apply` dropped `output_filters` a user had configured.**
+  The probe emitted only the filters that were *missing*, but
+  `deep_merge_dicts` replaces lists wholesale, so applying
+  `output_filters: [strip_thinking]` to a provider already carrying
+  `[strip_stop_markers, my_filter]` left it with `[strip_thinking]`
+  alone. `strip_tool_call_xml` and `repair_byte_fallback` were dropped
+  100% of the time, since no probe ever recommends them. The patch now
+  carries the union — existing chain first, missing filters appended.
+  Order is load-bearing (`OutputFilterChain.feed` applies left to
+  right), so the union never sorts; `deep_merge_dicts` semantics are
+  untouched (`doctor.py`).
+- **`doctor --check-model` could write `capabilities: tools: false` for
+  a model that supports tools.** The tool-call probe judged on
+  `content[:200]` — a display-oriented truncation — while the probe
+  budget is 256 tokens, or 1024 for thinking models (roughly 3–4 k
+  chars). A model that emits a preamble before its tool JSON, which is
+  exactly what thinking models do, fell through to the "nothing
+  tool-shaped at all" branch and got a `tools: false` patch that
+  `--apply` then wrote. This re-created, by a different route, the
+  false positive the v1.8.3 budget increase was meant to remove.
+  Detection now reads the full body up to `_TOOL_PROBE_SCAN_CHARS`
+  (16 KiB) and the 200-char slice is display-only; the detail line
+  reports how many chars were actually scanned (`doctor.py`).
+- **Stray `stop_reason` values from Anthropic were treated as malformed
+  responses.** `AnthropicResponse.stop_reason` was a closed `Literal`,
+  and `ConfigDict(extra="allow")` does not widen a declared field, so
+  `pause_turn` (server-tool turns), `refusal` and
+  `model_context_window_exceeded` raised `ValidationError`.
+  `AnthropicAdapter` converts that to a retryable `AdapterError`, so a
+  perfectly good — and already billed — reply was discarded and the
+  chain fell through to the next provider, or to
+  `NoProvidersAvailableError` if it was the last. Streaming was
+  unaffected (`AnthropicStreamEvent` keeps its payload as a plain
+  dict), so only non-streaming requests were hit. The field is now
+  `str | None`, deliberately open: Anthropic has added stop reasons
+  three times and a closed `Literal` reproduces this bug on the next
+  one. `_REVERSE_FINISH_REASON_MAP` gained `pause_turn` → `stop`,
+  `refusal` → `content_filter`, `model_context_window_exceeded` →
+  `length`. While here, `drift_detection._EXPECTED_STOP` gained
+  `stop_sequence` — it was counting a documented, ordinary stop reason
+  as an anomaly (`translation/anthropic.py`, `translation/convert.py`,
+  `guards/drift_detection.py`).
+- **`import coderouter.translation` failed on its own.** The package
+  reached `adapters` → `registry` → `anthropic_native`, which imported
+  `translation.convert` back at module scope. `pytest tests/` passed
+  only because alphabetical collection imports `test_adapter_anthropic`
+  first and primes `coderouter.adapters`; running
+  `pytest tests/test_tool_repair.py` on its own was a collection error.
+  The three `convert` symbols moved into the `generate()` / `stream()`
+  bodies that use them (`adapters/anthropic_native.py`).
+
+### Security
+
+- **`doctor --apply` silently rewrote `providers.yaml` while reporting
+  "already up to date", then destroyed the original in `.bak`.** The
+  write was gated on `diff_text` — "does a ruamel re-dump differ from
+  what is on disk" — not on whether a patch changed anything. ruamel
+  re-flows quoted scalars at 80 columns and renders an explicit `null`
+  as an empty scalar, so a fully idempotent re-run still produced a
+  diff and still wrote. The CLI meanwhile took the `is_no_op` early
+  return and printed `All N patch(es) already applied`, showing neither
+  the diff nor a backup line. The *next* `--apply` then copied that
+  already-reformatted text over `providers.yaml.bak`, which is
+  deliberately un-timestamped and single-slot — so the only copy of the
+  operator's original was gone. The shipped `examples/providers.yaml`
+  is affected (five `api_key_env: null` lines), as is
+  `examples/providers.llamacpp-vllm.yaml` (two `binary: null`). The
+  write is now gated on the merge result per target file; a target
+  whose merges were all no-ops reports an empty diff and parks the
+  cosmetic delta in `ApplyResult.reformat_only`, surfaced under
+  `--dry-run` only. The dumper also sets `width = 4096`, as defence in
+  depth. Every exit path of the apply command — including both
+  exception returns — now states how many files were written.
+  **If you ran `doctor --apply` on v2.11.0 or earlier, compare
+  `providers.yaml` against `providers.yaml.bak` once.** The
+  reformatting is semantically equivalent YAML, but the first `--apply`
+  after upgrading will show the un-wrapping alongside your intended
+  change; that is expected and happens once (`doctor_apply.py`,
+  `cli.py`).
+- **A malformed GGUF file could hang or crash the launcher, including
+  from the HTTP route.** `_skip_value` recursed once per array nesting
+  level at 12 bytes per level, so a ~12 KB file raised `RecursionError`
+  — which is not `GGUFParseError`, so it went straight through
+  `try_read_gguf_metadata`'s handler. Separately, array elements were
+  skipped with `fh.seek(size, 1)` per element with no end-of-file
+  check: a 49-byte file declaring `count = 1<<24` spun 16.7 M times,
+  took 7.94 s, and returned a `GGUFInfo` rather than raising. Both are
+  reachable from `POST /api/launcher/start`, and
+  `launcher_speculative.find_draft_companion` reads *every* `.gguf` in
+  the configured model directories, so one bad file poisons the scan.
+  `_skip_value` is now iterative over an explicit work stack —
+  `RecursionError` is structurally unreachable — with
+  `_MAX_ARRAY_DEPTH = 8` retained as an independent bound (real GGUF
+  arrays are depth 1; llama.cpp's writer emits nothing deeper). Every
+  skip validates against the file size before seeking, and fixed-width
+  scalar arrays are skipped in one bulk seek: a 150 k-element `u32`
+  array went from 0.0624 s to 0.000102 s, and the 49-byte case from
+  7.94 s to 0.000043 s with a `GGUFParseError`. `p.open()` is now
+  wrapped for the stat/open TOCTOU, and `try_read_gguf_metadata`
+  catches `OSError` / `RecursionError` / `MemoryError` as well
+  (`gguf_introspect.py`).
+
+### Changed
+
+- **Deprecation warning: `providers.yaml` discovered in the current
+  directory.** When neither `--config` nor `CODEROUTER_CONFIG` resolves
+  and the file actually loaded came from `./providers.yaml`, a
+  `cwd-config-loaded` warning is logged once per process naming the
+  path. In v2.12.0 this search step becomes opt-in behind
+  `CODEROUTER_ALLOW_CWD_CONFIG`, because starting the server in an
+  untrusted directory currently means loading that directory's
+  execution-bearing settings. Behaviour is unchanged in this release
+  (`config/loader.py`).
+- **Deprecation warning: shell syntax in `restart_command`.** A value
+  containing `&&`, `||`, `|`, `;`, `>`, `<`, `$(` or a backtick, or
+  starting with `~/` or `FOO=bar`, now logs
+  `restart-command-shell-syntax` at config load. In v2.12.0 the command
+  will be `shlex.split` and run with `shell=False`, so those forms
+  break — and `pkill x && x` breaks *silently*, with `&&` passed to
+  `pkill` as an argument. Wrap such commands in a script, or use an
+  explicit `/bin/sh -c "..."`. This is a warning only; nothing is
+  rejected and execution is unchanged (`config/schemas.py`).
+
+### Tests
+
+- 6 new files, 184 new cases (`test_tool_repair_differential.py`,
+  `test_tool_repair_scanners.py`, `test_examples_yaml_roundtrip.py`,
+  `test_import_hygiene.py`, `test_stop_reason_forward_compat.py`,
+  `test_config_cwd_warning.py`, plus additions to `test_doctor.py`,
+  `test_doctor_apply.py` and `test_gguf_introspect.py`). Suite: 2307
+  passed, 1 skipped, ruff clean.
+- The scanner rewrite is pinned by a differential test that carries the
+  old quadratic algorithm as a reference implementation and compares
+  both scanners across five random alphabets × 2500 inputs each, plus
+  the full `benchmarks/tool-repair` corpus end to end. A naive global
+  single-pass rewrite — the obvious way to linearise this, and the way
+  that looks correct — diverges on 6870 of 12500 strict cases and 6977
+  lenient, because an apostrophe in ordinary prose (`I'll`, `don't`)
+  opens a single-quoted string that swallows every following brace. The
+  differential test was verified to catch exactly that.
+- Each fix above has a regression test confirmed to fail against the
+  pre-fix tree, including
+  `test_cli_no_op_message_states_nothing_written` (the "up to date"
+  message printed while writing),
+  `test_no_op_apply_leaves_example_byte_identical` (the shipped
+  examples), `test_array_count_past_eof_raises_immediately` (raises,
+  and inside 0.5 s) and `test_lenient_survives_prose_apostrophe`.
+
+---
+
 ## [v2.11.0] — 2026-07-28 (launcher backend variants)
 
 ### Added

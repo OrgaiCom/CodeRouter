@@ -7,6 +7,17 @@ Search order (first hit wins):
     4. ~/.coderouter/providers.yaml
 
 Secrets are resolved by reading the env var named by `api_key_env`.
+
+.. note::
+    **[Unreleased] deprecation notice (planned v2.12.0):** step 3 above
+    (implicit CWD discovery) is slated to become opt-in, gated behind
+    ``CODEROUTER_ALLOW_CWD_CONFIG``. Landing that change without warning
+    first would silently break anyone currently relying on "run from the
+    directory with providers.yaml in it" with no diagnostic. Until that
+    lands, :func:`load_config` emits a one-time ``cwd-config-loaded``
+    warning whenever step 3 is the one that actually resolved — never
+    when an explicit ``--config`` / ``CODEROUTER_CONFIG`` path was used,
+    even if it happens to point at the same file.
 """
 
 from __future__ import annotations
@@ -17,6 +28,14 @@ from pathlib import Path
 import yaml
 
 from coderouter.config.schemas import CodeRouterConfig
+from coderouter.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Guards the one-time [Unreleased]/v2.12.0 CWD-config deprecation warning
+# (see module docstring) so a process that calls load_config() repeatedly
+# (tests, hot-reload, multiple create_app() calls) only logs it once.
+_cwd_config_warning_emitted = False
 
 
 def _candidate_paths(explicit: str | os.PathLike[str] | None) -> list[Path]:
@@ -30,6 +49,51 @@ def _candidate_paths(explicit: str | os.PathLike[str] | None) -> list[Path]:
     return paths
 
 
+def _warn_if_cwd_config(
+    chosen: Path, *, explicit: str | os.PathLike[str] | None
+) -> None:
+    """Emit the one-time [Unreleased]/v2.12.0 CWD-config deprecation warning.
+
+    Only fires when ``chosen`` was resolved via the *implicit* CWD-search
+    step. Compares ``chosen`` against the *literal* explicit / env
+    candidate paths (not merely whether those inputs were set) so that:
+
+      * an explicit ``--config`` (or ``CODEROUTER_CONFIG``) path that
+        happens to coincide with ``./providers.yaml`` stays quiet — an
+        explicit choice, however coincidental, is not the thing being
+        deprecated; but
+      * an explicit path/env var that was set but did NOT resolve (file
+        missing, so the search fell through to CWD) still warns, because
+        the CWD step is what actually served the config in that case.
+    """
+    global _cwd_config_warning_emitted
+    if _cwd_config_warning_emitted:
+        return
+    cwd_path = Path.cwd() / "providers.yaml"
+    if chosen != cwd_path:
+        return
+    if explicit and Path(explicit) == chosen:
+        return
+    if (env_path := os.environ.get("CODEROUTER_CONFIG")) and Path(env_path) == chosen:
+        return
+
+    _cwd_config_warning_emitted = True
+    logger.warning(
+        "cwd-config-loaded",
+        extra={
+            "path": str(chosen),
+            "hint": (
+                f"loaded providers.yaml from the current working "
+                f"directory ({chosen}). Starting in v2.12.0, this "
+                "implicit CWD discovery becomes opt-in (gated behind "
+                "CODEROUTER_ALLOW_CWD_CONFIG) — pass --config or set "
+                "CODEROUTER_CONFIG to pin the file explicitly and avoid "
+                "a startup break when that lands."
+            ),
+        },
+    )
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
     """Load providers.yaml + apply ALLOW_PAID env override."""
     candidates = _candidate_paths(path)
@@ -40,6 +104,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
             f"providers.yaml not found. Searched:\n  {searched}\n"
             f"Hint: copy examples/providers.yaml to ~/.coderouter/providers.yaml"
         )
+    _warn_if_cwd_config(chosen, explicit=path)
 
     with chosen.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
