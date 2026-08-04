@@ -596,3 +596,284 @@ def test_apply_records_unknown_target_in_skipped(tmp_path: Path) -> None:
     assert result.skipped_unknown_target == ["something-else.yaml"]
     assert result.changes_applied == 0
     assert result.written is False
+
+
+# ======================================================================
+# H-9 regression: --apply must gate the write on "did a merge change a
+# value?", not on "does the re-dump differ from the bytes on disk".
+#
+# ruamel does not reproduce every input style byte-for-byte: it folds
+# quoted scalars past its default 80-column width, and it re-emits an
+# explicit ``key: null`` as an empty scalar. Both deltas are invisible
+# to the patch bookkeeping, so a run that correctly reported
+# "0 changes applied" still rewrote the file. The damage surfaces one
+# run later: the next real ``--apply`` copies the already-reformatted
+# file into ``.bak``, and the operator's pristine original no longer
+# exists anywhere. The CLI compounded it by returning early on
+# ``is_no_op`` — printing neither a diff nor a ``Backup:`` line — so the
+# write happened in complete silence.
+#
+# ``width`` is set on both the load and the dump side as defense in
+# depth, but it is NOT the fix: the null case is unaffected by width,
+# which is exactly why ``test_no_op_run_does_not_rewrite_file_with_
+# explicit_null`` exists as a separate detector.
+# ======================================================================
+
+
+# A quoted value comfortably past ruamel's default 80-column fold point.
+# It has to contain spaces: YAML folds only at a break opportunity, so an
+# equally long unbroken token (a model tag, a URL) is emitted intact at
+# any width and would make this a fixture that tests nothing.
+_LONG_QUOTED_VALUE = (
+    "a deliberately long note with plenty of spaces so the emitter has "
+    "somewhere to fold it"
+)
+
+PROVIDERS_YAML_LONG_LINES = textwrap.dedent(
+    f"""\
+    # providers.yaml — long-line fixture.
+    allow_paid: false
+    default_profile: default
+    providers:
+      - name: local
+        kind: openai_compat
+        base_url: http://localhost:11434/v1
+        model: qwen2.5-coder:7b
+        timeout_s: 120
+        extra_body:
+          note: "{_LONG_QUOTED_VALUE}"
+        capabilities:
+          tools: false
+    profiles:
+      - name: default
+        providers:
+          - local
+    """
+)
+
+PROVIDERS_YAML_EXPLICIT_NULL = textwrap.dedent(
+    """\
+    # providers.yaml — explicit-null fixture (mirrors examples/providers.yaml).
+    allow_paid: false
+    default_profile: default
+    providers:
+      - name: local
+        kind: openai_compat
+        base_url: http://localhost:8080/v1
+        model: qwen3.6
+        api_key_env: null              # llama-server is unauthenticated
+        timeout_s: 120
+        capabilities:
+          tools: false
+    profiles:
+      - name: default
+        providers:
+          - local
+    """
+)
+
+# A patch that is already satisfied by both fixtures above → every merge
+# reports changed=False, so nothing may be written.
+PATCH_TOOLS_FALSE = textwrap.dedent(
+    """\
+    # providers.yaml — update the entry for 'local':
+    providers:
+      - name: local
+        # ... existing fields ...
+        capabilities:
+          tools: false
+    """
+)
+
+
+def _no_op_report() -> _FakeReport:
+    return _FakeReport(
+        results=[
+            _FakeProbeResult(
+                name="tool_calls",
+                suggested_patch=PATCH_TOOLS_FALSE,
+                target_file="providers.yaml",
+            )
+        ]
+    )
+
+
+@_requires_ruamel
+def test_no_op_run_does_not_rewrite_file_with_long_lines(tmp_path: Path) -> None:
+    """A no-op ``--apply`` leaves an >80-column file byte-identical."""
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(config_path, PROVIDERS_YAML_LONG_LINES)
+
+    result = apply_doctor_patches(
+        report=_no_op_report(), config_path=config_path, write=True
+    )
+
+    assert result.is_no_op is True
+    assert result.changes_applied == 0
+    assert result.written is False
+    assert result.written_paths == []
+    assert config_path.read_text(encoding="utf-8") == PROVIDERS_YAML_LONG_LINES
+
+
+@_requires_ruamel
+def test_no_op_run_does_not_rewrite_file_with_explicit_null(tmp_path: Path) -> None:
+    """A no-op ``--apply`` leaves an ``api_key_env: null`` file untouched.
+
+    This is the detector that the ``width`` setting alone does not
+    satisfy: ruamel re-emits an explicit ``null`` as an empty scalar at
+    any width, so only gating the write on the merge result keeps the
+    file intact. ``examples/providers.yaml`` — the file the README tells
+    users to copy — carries five such lines.
+    """
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(config_path, PROVIDERS_YAML_EXPLICIT_NULL)
+
+    result = apply_doctor_patches(
+        report=_no_op_report(), config_path=config_path, write=True
+    )
+
+    assert result.written is False
+    assert config_path.read_text(encoding="utf-8") == PROVIDERS_YAML_EXPLICIT_NULL
+    # The cosmetic delta is still detected — just reported, never written.
+    assert str(config_path) in result.reformat_only
+    # ...and it must not pollute the diff an operator reviews.
+    assert result.diffs[str(config_path)] == ""
+
+
+@_requires_ruamel
+def test_backup_is_not_created_on_no_op_run(tmp_path: Path) -> None:
+    """No write → no ``.bak``.
+
+    A ``.bak`` produced by a no-op run is worse than useless: it is a
+    copy of a file that was about to be silently reformatted, and it
+    overwrites any genuine backup from an earlier real apply.
+    """
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(config_path, PROVIDERS_YAML_EXPLICIT_NULL)
+
+    apply_doctor_patches(report=_no_op_report(), config_path=config_path, write=True)
+
+    assert not config_path.with_suffix(".yaml.bak").exists()
+
+
+@_requires_ruamel
+def test_long_value_survives_apply_unwrapped(tmp_path: Path) -> None:
+    """A real ``--apply`` must not fold untouched long values.
+
+    ``width`` regression detector: at ruamel's default of 80 columns the
+    quoted note is emitted across two lines, which is a diff the
+    operator never asked for (and, for the ``.bak`` chain, one they can
+    no longer undo).
+    """
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(config_path, PROVIDERS_YAML_LONG_LINES)
+    report = _FakeReport(
+        results=[
+            _FakeProbeResult(
+                name="tool_calls",
+                suggested_patch=PATCH_TOOLS_TRUE,
+                target_file="providers.yaml",
+            )
+        ]
+    )
+
+    result = apply_doctor_patches(report=report, config_path=config_path, write=True)
+
+    assert result.written is True
+    new_text = config_path.read_text(encoding="utf-8")
+    assert "tools: true" in new_text
+    assert f'note: "{_LONG_QUOTED_VALUE}"' in new_text
+    # The backup must hold the ORIGINAL bytes, not a reformatted copy.
+    backup = config_path.with_suffix(".yaml.bak")
+    assert backup.read_text(encoding="utf-8") == PROVIDERS_YAML_LONG_LINES
+
+
+@_requires_ruamel
+def test_apply_output_filters_does_not_drop_existing_chain(tmp_path: Path) -> None:
+    """H-8 end-to-end: applying the doctor's own emitter output keeps the
+    operator's existing filters.
+
+    Uses the real emitter rather than a hand-written constant so an
+    emitter regression fails here too — this is the seam where "patch
+    lists only the additions" turns into "``--apply`` deletes filters".
+    """
+    from coderouter.doctor import (
+        _patch_providers_yaml_output_filters,
+        _union_output_filters,
+    )
+
+    existing = ["strip_stop_markers", "strip_tool_call_xml"]
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(
+        config_path,
+        textwrap.dedent(
+            """\
+            providers:
+              - name: local
+                kind: openai_compat
+                base_url: http://localhost:8080/v1
+                model: qwen3.6
+                output_filters:
+                  - strip_stop_markers
+                  - strip_tool_call_xml
+            profiles:
+              - name: default
+                providers:
+                  - local
+            """
+        ),
+    )
+    patch = _patch_providers_yaml_output_filters(
+        "local", _union_output_filters(existing, ["strip_thinking"])
+    )
+    report = _FakeReport(
+        results=[
+            _FakeProbeResult(
+                name="reasoning-leak",
+                suggested_patch=patch,
+                target_file="providers.yaml",
+            )
+        ]
+    )
+
+    result = apply_doctor_patches(report=report, config_path=config_path, write=True)
+
+    assert result.changes_applied == 1
+    import yaml as _pyyaml
+
+    doc = _pyyaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert doc["providers"][0]["output_filters"] == [
+        "strip_stop_markers",
+        "strip_tool_call_xml",
+        "strip_thinking",
+    ]
+
+
+@_requires_ruamel
+def test_cli_no_op_message_states_nothing_written(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The ``--apply`` summary always says whether the disk was touched.
+
+    The original bug was not only that a no-op run wrote the file, but
+    that the CLI's ``is_no_op`` early return said nothing at all about
+    writing — so the operator had no signal. Every exit path now emits
+    the verdict line.
+    """
+    from coderouter.cli import _run_apply_or_dry_run
+
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(config_path, PROVIDERS_YAML_EXPLICIT_NULL)
+
+    exit_code = _run_apply_or_dry_run(
+        report=_no_op_report(),
+        config_path=config_path,
+        write=True,
+        base_exit=2,
+    )
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "already applied" in out
+    assert "0 files written" in out
+    assert config_path.read_text(encoding="utf-8") == PROVIDERS_YAML_EXPLICIT_NULL

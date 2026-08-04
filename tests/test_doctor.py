@@ -46,6 +46,7 @@ from typing import Any
 
 import httpx
 import pytest
+import yaml
 from pytest_httpx import HTTPXMock
 
 from coderouter.config.capability_registry import (
@@ -2348,3 +2349,280 @@ async def test_check_model_runs_normal_probes_when_agent_cli_plugin_enabled() ->
     report = await check_model(config, provider.name, registry=_empty_registry())
 
     assert not any(r.name == "agent-cli-plugin-migration" for r in report.results)
+
+
+# ---------------------------------------------------------------------------
+# H-8 regression: the output_filters patch must be the UNION of the
+# provider's existing chain and the filters the probe found missing.
+#
+# ``--apply`` merges the patch with ``deep_merge_dicts``, which replaces
+# lists wholesale (a documented, separately-pinned contract). So a patch
+# carrying only the missing filters silently deletes every filter the
+# operator already configured — including ``strip_tool_call_xml`` and
+# ``repair_byte_fallback``, which this probe never recommends and so can
+# never restore.
+#
+# Order is load-bearing: ``OutputFilterChain.feed()`` runs the filters
+# left to right, so the union must preserve the existing order and
+# append the additions. Sorting is a behavior change, not a cosmetic one.
+# ---------------------------------------------------------------------------
+
+
+def _filters_from_patch(patch: str) -> list[str]:
+    """Pull ``output_filters`` out of an emitted patch as a real list.
+
+    Parsing rather than substring-matching so an order regression cannot
+    hide behind an ``in`` check that happens to pass.
+    """
+    parsed = yaml.safe_load(patch)
+    return parsed["providers"][0]["output_filters"]
+
+
+async def _run_leak_probe_with_chain(
+    httpx_mock: HTTPXMock,
+    *,
+    output_filters: list[str],
+    leak_content: str,
+) -> ProbeResult:
+    """Drive the 3-call openai_compat probe sequence and return the leak result."""
+    provider = _oa_provider()
+    provider.output_filters = output_filters
+    for body in (
+        _openai_ok_response(content="PONG"),  # auth
+        _openai_ok_response(content="nothing"),  # tool_calls
+        _openai_ok_response(content=leak_content),  # reasoning-leak
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:8080/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    return _probes_by_name(report.results)["reasoning-leak"]
+
+
+@pytest.mark.asyncio
+async def test_output_filters_patch_unions_with_existing_chain(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Existing ``strip_tool_call_xml`` + newly-observed ``<think>`` leak
+    → the patch carries BOTH, not just the addition.
+
+    Before the fix the patch was ``[strip_thinking]`` alone, so applying
+    it removed ``strip_tool_call_xml`` from the provider entirely.
+    """
+    leak = await _run_leak_probe_with_chain(
+        httpx_mock,
+        output_filters=["strip_tool_call_xml"],
+        leak_content="Answer: <think>reasoning</think> Paris",
+    )
+
+    assert leak.verdict == ProbeVerdict.NEEDS_TUNING
+    assert leak.suggested_patch is not None
+    filters = _filters_from_patch(leak.suggested_patch)
+    assert filters == ["strip_tool_call_xml", "strip_thinking"]
+
+
+@pytest.mark.asyncio
+async def test_output_filters_patch_preserves_existing_order(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """The existing chain keeps its order and additions land at the end.
+
+    This is the ``sorted()`` detector: alphabetically the expected list
+    would be ``[strip_stop_markers, strip_thinking, strip_tool_call_xml]``,
+    which reorders the operator's pipeline.
+    """
+    leak = await _run_leak_probe_with_chain(
+        httpx_mock,
+        output_filters=["strip_stop_markers", "strip_tool_call_xml"],
+        leak_content="Answer: <think>reasoning</think> Paris",
+    )
+
+    assert leak.verdict == ProbeVerdict.NEEDS_TUNING
+    assert leak.suggested_patch is not None
+    filters = _filters_from_patch(leak.suggested_patch)
+    assert filters == [
+        "strip_stop_markers",
+        "strip_tool_call_xml",
+        "strip_thinking",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_output_filters_patch_is_idempotent_when_already_covered(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Both observed leaks already covered by the chain → no NEEDS_TUNING.
+
+    Guards the union from becoming an unconditional "emit the whole
+    chain back" that would flag a healthy provider forever.
+    """
+    leak = await _run_leak_probe_with_chain(
+        httpx_mock,
+        output_filters=["strip_thinking", "strip_stop_markers"],
+        leak_content="Answer: <think>reasoning</think> Paris<|eot_id|>",
+    )
+
+    assert leak.verdict == ProbeVerdict.OK
+    assert leak.suggested_patch is None
+
+
+# ---------------------------------------------------------------------------
+# H-10 regression: the tool_calls probe must judge on the full assistant
+# text, not on a 200-character display excerpt.
+#
+# The probe's token budget is 256 (default) / 1024 (thinking models),
+# i.e. roughly 3-4k characters. Feeding only the first 200 characters to
+# ``repair_tool_calls_in_text`` meant any model that wrote a preamble
+# before its JSON call was scored as "nothing tool-shaped at all" — and
+# the remediation attached to that verdict is a ``capabilities.tools:
+# false`` patch, which ``--apply`` makes permanent. Thinking models,
+# which the 1024-token budget was specifically introduced to accommodate,
+# are the ones most likely to write a long preamble.
+# ---------------------------------------------------------------------------
+
+
+_LONG_PREAMBLE = (
+    "Let me think about this carefully before I answer. The user asked me "
+    "to call the echo tool with a specific message, so I should emit a "
+    "tool call rather than replying in prose. I will now produce the call "
+    "in the expected JSON form so the runtime can pick it up correctly. "
+)
+_TOOL_JSON_BLOCK = '```json\n{"name": "echo", "arguments": {"message": "probe"}}\n```'
+
+# The detail phrase that the "model emitted nothing tool-shaped" branch
+# uses. Asserting on its ABSENCE is how we detect the truncation bug:
+# the pre-fix probe landed in that branch and told the operator the
+# opposite of what actually happened.
+_NO_TOOL_OUTPUT_PHRASE = "neither native `tool_calls` nor repairable tool JSON"
+
+
+async def _run_tool_probe(
+    httpx_mock: HTTPXMock,
+    *,
+    tool_probe_content: str,
+    registry: CapabilityRegistry,
+) -> ProbeResult:
+    provider = _oa_provider()
+    for body in (
+        _openai_ok_response(content="PONG"),  # auth
+        _openai_ok_response(content=tool_probe_content),  # tool_calls
+        _openai_ok_response(content="Paris"),  # reasoning-leak
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:8080/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    report = await check_model(_config_for([provider]), provider.name, registry=registry)
+    return _probes_by_name(report.results)["tool_calls"]
+
+
+@pytest.mark.asyncio
+async def test_tool_calls_text_json_after_long_preamble_is_detected(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """A repairable tool call after a 300-char preamble must be SEEN.
+
+    The observable difference is which branch the probe lands in. Both
+    the "text-JSON only, declared native" branch and the "nothing
+    tool-shaped at all" branch happen to suggest ``tools: false`` (the
+    former deliberately, to narrow an over-broad declaration; that
+    behavior is pinned by
+    ``test_tool_calls_text_json_with_declared_true_needs_tuning``). What
+    the truncation bug produced was the *second* branch: a verdict that
+    asserts the model emitted nothing tool-shaped, which is factually
+    the opposite of the observation and is the one an operator would
+    act on by disabling tools outright.
+    """
+    assert len(_LONG_PREAMBLE) > 200  # the excerpt window the bug used
+    content = _LONG_PREAMBLE + "\n" + _TOOL_JSON_BLOCK
+
+    tool = await _run_tool_probe(
+        httpx_mock,
+        tool_probe_content=content,
+        registry=_registry_with_tools_true(),
+    )
+
+    # The tool JSON was found → the text-JSON branch, which explains the
+    # repair path rather than claiming nothing was emitted.
+    assert _NO_TOOL_OUTPUT_PHRASE not in tool.detail
+    assert "repair" in tool.detail.lower()
+    assert tool.verdict == ProbeVerdict.NEEDS_TUNING
+
+
+@pytest.mark.asyncio
+async def test_tool_calls_text_json_after_long_preamble_declared_false_is_ok(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Same response, declaration tools=false → OK via the repair path.
+
+    Pre-fix this also returned OK, but for the wrong reason ("no tool
+    calls, declaration tools=false"). The detail assertion pins the
+    reason, not just the verdict.
+    """
+    content = _LONG_PREAMBLE + "\n" + _TOOL_JSON_BLOCK
+
+    tool = await _run_tool_probe(
+        httpx_mock,
+        tool_probe_content=content,
+        registry=_empty_registry(),
+    )
+
+    assert tool.verdict == ProbeVerdict.OK
+    assert "repair extracted tool JSON" in tool.detail
+    assert tool.suggested_patch is None
+
+
+@pytest.mark.asyncio
+async def test_tool_calls_scan_window_is_bounded(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """A 1 MB response must not be scanned in full — the window caps it.
+
+    "Use the whole text" must not degrade into "use an unbounded amount
+    of text": ``repair_tool_calls_in_text`` is not free, and a broken or
+    hostile upstream can stream megabytes. The reported scan length is
+    the assertion because it proves the cap was applied rather than
+    merely that the call returned.
+    """
+    from coderouter.doctor import _TOOL_PROBE_SCAN_CHARS
+
+    content = "x" * (1024 * 1024)
+
+    tool = await _run_tool_probe(
+        httpx_mock,
+        tool_probe_content=content,
+        registry=_registry_with_tools_true(),
+    )
+
+    assert tool.verdict == ProbeVerdict.NEEDS_TUNING
+    assert f"Scanned {_TOOL_PROBE_SCAN_CHARS} chars" in tool.detail
+
+
+@pytest.mark.asyncio
+async def test_tool_calls_detail_reports_scanned_chars(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """The "no tool output" verdict states how much text it looked at.
+
+    Its remediation permanently disables tool calling, so an operator
+    who disagrees needs to distinguish "the model emitted nothing" from
+    "the probe only looked at the first N characters" without reading
+    the source.
+    """
+    content = "I don't know how to do that."
+
+    tool = await _run_tool_probe(
+        httpx_mock,
+        tool_probe_content=content,
+        registry=_registry_with_tools_true(),
+    )
+
+    assert tool.verdict == ProbeVerdict.NEEDS_TUNING
+    assert f"Scanned {len(content)} chars" in tool.detail

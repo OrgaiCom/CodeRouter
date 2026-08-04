@@ -321,7 +321,20 @@ class AnthropicResponse(BaseModel):
     role: Literal["assistant"] = "assistant"
     model: str
     content: list[dict[str, Any]]
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None = None
+    # H-6: intentionally `str | None`, NOT a closed `Literal[...]`. Anthropic
+    # adds new stop_reason values over time (observed additions: pause_turn
+    # for long-running server-side-tool turns, refusal for safety-classifier
+    # stops, model_context_window_exceeded); a closed Literal rejects any
+    # response using a value minted after this code was written, which
+    # pydantic surfaces as a ValidationError that the adapter turns into a
+    # retryable AdapterError — silently discarding an already-billed,
+    # perfectly valid response and falling back to another provider. Known
+    # values as of writing: end_turn, max_tokens, stop_sequence, tool_use,
+    # pause_turn, refusal, model_context_window_exceeded. Other models in
+    # this module already use `extra="allow"` for the same forward-
+    # compatibility reason; this keeps that policy consistent for a
+    # declared field, which `extra="allow"` alone does not cover.
+    stop_reason: str | None = None
     stop_sequence: str | None = None
     usage: AnthropicUsage = Field(default_factory=AnthropicUsage)
 

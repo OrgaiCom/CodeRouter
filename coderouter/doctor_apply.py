@@ -332,6 +332,18 @@ def merge_capabilities_rule_into_doc(doc: Any, patch_dict: dict[str, Any]) -> bo
 # ---------------------------------------------------------------------------
 
 
+# ruamel's emitter defaults to folding at 80 columns: any quoted scalar
+# longer than that gets wrapped onto a continuation line on dump, even
+# when the operator never touched it. That reformat is invisible to the
+# "did the merge change anything?" bookkeeping, so it used to leak into
+# the written file (and from there into the ``.bak`` on the *next* run,
+# destroying the only pristine copy). Applied on BOTH the load and the
+# dump side — ruamel stores the width on the instance, and an asymmetric
+# setting silently re-introduces the folding whenever a doc travels
+# through two differently-configured instances.
+_YAML_DUMP_WIDTH = 4096
+
+
 def _load_yaml_with_comments(path: Path) -> tuple[Any, str]:
     """Load a YAML file via ruamel preserving comments. Returns (doc, raw_text).
 
@@ -361,6 +373,7 @@ def _load_yaml_with_comments(path: Path) -> tuple[Any, str]:
     # Match the indentation style used in examples/providers.yaml so
     # lines we add line up with hand-written ones in unified diffs.
     yaml_rt.indent(mapping=2, sequence=4, offset=2)
+    yaml_rt.width = _YAML_DUMP_WIDTH
     doc = yaml_rt.load(io.StringIO(raw_text))
     return doc, raw_text
 
@@ -372,6 +385,7 @@ def _dump_yaml_with_comments(doc: Any) -> str:
     yaml_rt = YAML()
     yaml_rt.preserve_quotes = True
     yaml_rt.indent(mapping=2, sequence=4, offset=2)
+    yaml_rt.width = _YAML_DUMP_WIDTH
     out = io.StringIO()
     yaml_rt.dump(doc, out)
     return out.getvalue()
@@ -421,7 +435,10 @@ class ApplyResult:
     diffs
         Per-target unified-diff text. Empty string for a target that
         had only no-op merges. Indexed by str(path) for stable lookup
-        in tests / CLI rendering.
+        in tests / CLI rendering. Only ever non-empty for a target
+        whose merge actually changed something — a pure re-serialization
+        difference goes to ``reformat_only`` instead, so the diff an
+        operator reviews is exactly the diff of their intent.
     changes_applied
         Number of probe patches that produced a change. Zero means
         idempotent re-run.
@@ -434,6 +451,12 @@ class ApplyResult:
         True if at least one file was actually written to disk
         (``--apply`` mode). False for ``--dry-run`` and for cases
         where every patch was a no-op.
+    written_paths
+        The files actually written, in target order. Empty in dry-run
+        mode and on a no-op run. Distinct from ``backups`` because a
+        freshly-created file (user-side model-capabilities.yaml) is
+        written without a backup — the CLI needs the true count for its
+        "N file(s) written" line.
     backups
         Map of original-path → backup-path for every file that was
         written. Empty in dry-run mode.
@@ -442,6 +465,18 @@ class ApplyResult:
         Currently empty (we cover all known target_file values), but
         kept for forward-compat: if a future probe emits a new
         target_file value, we should report it without crashing.
+    reformat_only
+        Per-target unified diff of a *cosmetic* delta — the file
+        re-serializes differently from what is on disk even though no
+        patch changed a value. Purely informational: these bytes are
+        NEVER written (see the ``changed_by_path`` gate in
+        :func:`apply_doctor_patches`), because writing them would
+        silently rewrite an untouched file and, on the next real
+        ``--apply``, hand ``.bak`` a copy that is no longer the
+        operator's original. Surfaced in ``--dry-run`` only, as a
+        heads-up that the file uses a style ruamel does not reproduce
+        byte-for-byte (today: explicit ``key: null``, which ruamel
+        re-emits as an empty scalar).
     """
 
     target_paths: list[Path]
@@ -451,6 +486,8 @@ class ApplyResult:
     written: bool
     backups: dict[str, str] = field(default_factory=dict)
     skipped_unknown_target: list[str] = field(default_factory=list)
+    reformat_only: dict[str, str] = field(default_factory=dict)
+    written_paths: list[str] = field(default_factory=list)
 
     @property
     def is_no_op(self) -> bool:
@@ -502,6 +539,11 @@ def apply_doctor_patches(
     The per-target merge keeps a single in-memory doc per file so two
     probes targeting the same file compose into one final diff.
 
+    A file is written **only** when at least one patch targeting it
+    reported ``changed=True``. A re-dump that differs from disk for
+    purely cosmetic reasons is never written; it is reported through
+    ``ApplyResult.reformat_only`` instead.
+
     ``user_capabilities_path`` is a test-only injection point — leave
     None in production to use the standard
     ``~/.coderouter/model-capabilities.yaml`` resolution.
@@ -513,7 +555,18 @@ def apply_doctor_patches(
 
     docs_by_path: dict[Path, tuple[Any, str]] = {}
     diffs: dict[str, str] = {}
+    reformat_only: dict[str, str] = {}
     target_order: list[Path] = []
+    # Per-target "did any merge actually change a value?". This — NOT
+    # "does the re-dump differ from the bytes on disk" — is what gates
+    # the write below. The two used to be conflated, and any file whose
+    # style ruamel does not reproduce verbatim (an explicit
+    # ``api_key_env: null``, a >80-column quoted scalar) was silently
+    # rewritten on a run that reported "0 changes applied". The next
+    # real ``--apply`` then copied that already-reformatted file into
+    # ``.bak``, so the operator's pristine original no longer existed
+    # anywhere.
+    changed_by_path: dict[Path, bool] = {}
     changes_applied = 0
     no_op_patches = 0
     skipped: list[str] = []
@@ -552,6 +605,7 @@ def apply_doctor_patches(
                 before_text = ""
             docs_by_path[target_path] = (doc, before_text)
             target_order.append(target_path)
+            changed_by_path[target_path] = False
 
         doc, _ = docs_by_path[target_path]
 
@@ -575,11 +629,13 @@ def apply_doctor_patches(
 
         if changed:
             changes_applied += 1
+            changed_by_path[target_path] = True
         else:
             no_op_patches += 1
 
     # Render diffs and write (or just report).
     written = False
+    written_paths: list[str] = []
     backups: dict[str, str] = {}
     for target_path in target_order:
         doc, before_text = docs_by_path[target_path]
@@ -587,8 +643,18 @@ def apply_doctor_patches(
         diff_text = render_unified_diff(
             before=before_text, after=after_text, path=target_path
         )
-        diffs[str(target_path)] = diff_text
-        if write and diff_text:
+        target_changed = changed_by_path.get(target_path, False)
+        if target_changed:
+            diffs[str(target_path)] = diff_text
+        else:
+            # Nothing semantic changed. Whatever ``diff_text`` holds is
+            # pure re-serialization noise; keep it out of ``diffs`` (so
+            # the CLI's "here is what will change" section stays honest)
+            # and park it in ``reformat_only`` for the dry-run notice.
+            diffs[str(target_path)] = ""
+            if diff_text:
+                reformat_only[str(target_path)] = diff_text
+        if write and target_changed:
             # Backup first (only when we have a pre-existing file).
             if target_path.is_file():
                 backup_path = target_path.with_suffix(
@@ -600,6 +666,7 @@ def apply_doctor_patches(
                 target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text(after_text, encoding="utf-8")
             written = True
+            written_paths.append(str(target_path))
 
     return ApplyResult(
         target_paths=target_order,
@@ -609,4 +676,6 @@ def apply_doctor_patches(
         written=written,
         backups=backups,
         skipped_unknown_target=skipped,
+        reformat_only=reformat_only,
+        written_paths=written_paths,
     )

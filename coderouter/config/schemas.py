@@ -26,6 +26,10 @@ from pydantic import (
     model_validator,
 )
 
+from coderouter.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class Capabilities(BaseModel):
     """Capability flags per provider (plan.md §2.5)."""
@@ -350,6 +354,17 @@ class AgentCliConfig(BaseModel):
         return self
 
 
+# [Unreleased]/planned v2.12.0: patterns used by ProviderConfig's
+# ``_warn_restart_command_shell_syntax`` validator to flag
+# ``restart_command`` values that rely on shell syntax not honored by
+# the planned ``shlex.split`` + ``shell=False`` dispatch (see that
+# validator's docstring and the field description below for the full
+# rationale). Compiled once at module scope since every ProviderConfig
+# validation reuses them.
+_RESTART_COMMAND_SHELL_META_RE = re.compile(r"(&&|\|\||\||;|>|<|\$\(|`)")
+_RESTART_COMMAND_ENV_PREFIX_RE = re.compile(r"^\w+=")
+
+
 class ProviderConfig(BaseModel):
     """A single provider entry from providers.yaml.
 
@@ -497,14 +512,81 @@ class ProviderConfig(BaseModel):
     restart_command: str | None = Field(
         default=None,
         description=(
-            "v2.0-J (Self-healing): shell command to restart this "
-            "provider's backend process. Examples: 'ollama serve', "
+            "v2.0-J (Self-healing): command to restart this provider's "
+            "backend process. Examples: 'ollama serve', "
             "'open -a LM\\ Studio'. Only executed when the profile's "
             "backend_health_action is 'exclude' and the provider "
             "transitions to UNHEALTHY. Unset = no automatic restart "
-            "(recovery probe still runs, waiting for manual restart)."
+            "(recovery probe still runs, waiting for manual restart). "
+            "\n\n"
+            "[Unreleased]/planned v2.12.0: currently run as "
+            "``subprocess.run(command, shell=True)`` (coderouter/guards/"
+            "self_healing.py), so shell syntax works today — pipelines "
+            "(``pkill ollama && ollama serve``), ``~`` expansion, and "
+            "leading env-var assignments (``OLLAMA_HOST=0.0.0.0 ollama "
+            "serve``) are all honored. A future minor switches this to "
+            "``shlex.split(command)`` + ``shell=False`` (argv dispatch, "
+            "no shell in between), which does NOT support any of the "
+            "above — ``&&`` becomes a literal argument to the first "
+            "command instead of a separator, ``~/...`` paths are not "
+            "expanded, and ``FOO=bar cmd`` fails to exec. If your "
+            "command needs shell features, wrap it in a small script "
+            "and point restart_command at that script instead, e.g. "
+            "``restart_command: /path/to/restart-ollama.sh``."
         ),
     )
+
+    @model_validator(mode="after")
+    def _warn_restart_command_shell_syntax(self) -> ProviderConfig:
+        """[Unreleased]/planned v2.12.0 breaking-change heads-up (warning only).
+
+        ``coderouter/guards/self_healing.py`` currently runs
+        ``restart_command`` via ``subprocess.run(command, shell=True)``.
+        The planned v2.12.0 change switches that to
+        ``shlex.split(command)`` + ``shell=False`` — a shell-syntax
+        ``restart_command`` that works fine today would then either
+        crash (``FileNotFoundError`` for ``~/...`` paths or an
+        ``ENV=val cmd`` prefix) or, worse, silently misbehave (``&&`` /
+        ``||`` / ``|`` / ``;`` / redirects becoming literal argv tokens
+        instead of shell operators — a provider "restart" that quietly
+        does the wrong thing is worse than one that errors loudly).
+
+        Deliberately never raises: this validator does not enforce
+        anything, it only warns ahead of the wire change so operators
+        can migrate ``restart_command`` to a plain argv (or a wrapper
+        script) before v2.12.0 lands, instead of discovering the break
+        the next time a provider actually goes UNHEALTHY.
+        """
+        cmd = self.restart_command
+        if not cmd:
+            return self
+        stripped = cmd.strip()
+        reasons: list[str] = []
+        if _RESTART_COMMAND_SHELL_META_RE.search(cmd):
+            reasons.append("shell metacharacter (&&, ||, |, ;, >, <, $(...), or `...`)")
+        if stripped.startswith("~/"):
+            reasons.append("leading '~/' path (no shell expansion under shell=False)")
+        if _RESTART_COMMAND_ENV_PREFIX_RE.match(stripped):
+            reasons.append("leading environment-variable assignment (FOO=bar ...)")
+        if reasons:
+            logger.warning(
+                "restart-command-shell-syntax",
+                extra={
+                    "provider": self.name,
+                    "restart_command": cmd,
+                    "reasons": reasons,
+                    "hint": (
+                        "restart_command currently runs via "
+                        "subprocess.run(..., shell=True); a planned "
+                        "v2.12.0 change switches to shlex.split(...) + "
+                        "shell=False, which does not support this "
+                        "command's shell syntax. Rewrite it as plain "
+                        "argv, or wrap it in a script and point "
+                        "restart_command at that script."
+                    ),
+                },
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_output_filters_known(self) -> ProviderConfig:

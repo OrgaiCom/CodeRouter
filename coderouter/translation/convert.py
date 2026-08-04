@@ -846,6 +846,13 @@ _REVERSE_FINISH_REASON_MAP = {
     "max_tokens": "length",
     "tool_use": "tool_calls",
     "stop_sequence": "stop",
+    # H-6: forward-compat stop_reason values (see translation/anthropic.py).
+    # The `.get(..., "stop")` fallback at each call site already keeps these
+    # from raising; mapping them explicitly just makes the OpenAI-shaped
+    # finish_reason semantically accurate instead of a generic "stop".
+    "pause_turn": "stop",
+    "refusal": "content_filter",
+    "model_context_window_exceeded": "length",
 }
 
 

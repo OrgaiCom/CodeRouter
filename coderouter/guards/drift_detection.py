@@ -260,7 +260,19 @@ def detect_drift(
             mild_flags.append(f"tool_silence_rate={tool_silence_rate:.2f}")
 
     # --- Signal 4: Stop reason anomaly rate ---
-    _EXPECTED_STOP = {"end_turn", "tool_use", "max_tokens"}
+    # H-6: `stop_sequence` (a normal, expected terminator when the caller
+    # configures a stop sequence) was missing here, so every stop-sequence
+    # terminated response counted as an anomaly. `pause_turn` and `refusal`
+    # are legitimate Anthropic stop reasons too (see translation/anthropic.py
+    # for the forward-compat rationale) and are expected, not anomalous.
+    _EXPECTED_STOP = {
+        "end_turn",
+        "tool_use",
+        "max_tokens",
+        "stop_sequence",
+        "pause_turn",
+        "refusal",
+    }
     non_error_obs = [obs for obs in window if not obs.is_error]
     if non_error_obs:
         anomaly_count = sum(

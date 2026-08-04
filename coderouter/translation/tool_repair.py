@@ -90,11 +90,27 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 import uuid
+from array import array
 from typing import Any
 
 __all__ = ["deduplicate_tool_calls", "repair_tool_calls_in_text"]
+
+# Plain stdlib logger (same idiom as coderouter/translation/anthropic.py).
+# This module is deliberately import-free of the rest of the package:
+# benchmarks/tool-repair/run_offline.py loads it straight from its source
+# path, with no `coderouter` package on sys.path.
+logger = logging.getLogger(__name__)
+
+# Hard ceiling on the text handed to the bare-JSON brace scanners. The
+# scanners themselves are linear, but every candidate they emit still costs a
+# JSON parse attempt plus a prose-cue check, and an assistant message this
+# large is never a tool call anyway. Above the limit the bare-JSON step is
+# skipped outright; the fenced / XML / R4a / R4c paths are regex-driven and
+# linear, so they keep running.
+_MAX_BARE_SCAN_CHARS = 262_144
 
 
 # ------------------------------------------------------------------
@@ -528,6 +544,139 @@ def _in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
     return any(start <= pos < end for start, end in spans)
 
 
+# ------------------------------------------------------------------
+# Brace scanning (bare-JSON candidate discovery)
+#
+# Both scanners below answer the same question for every ``{`` in the text:
+# "does a *fresh* scan started right here reach a balanced close?".  The
+# obvious implementation re-scans to end-of-text once per ``{``, which is
+# O(k*n) for k unclosed braces — a 48 KB assistant message full of stray
+# braces took ~20 s, and because ``to_anthropic_response`` is called from the
+# request path that stalled the whole server.
+#
+# Instead we precompute, in ONE right-to-left sweep, a table that answers
+# "starting at offset j outside any string, where is the first ``}`` that is
+# still at brace depth 0?".  The closing brace of a ``{`` at offset q is then
+# simply ``table[q + 1]``, so the driver below is a plain left-to-right walk
+# and the whole scan is linear in the length of the text.
+#
+# The table is defined by a right-to-left recurrence over the scanner's state
+# machine (outside a string / inside a string / previous char was a
+# backslash).  Only the "outside a string" row needs random access — the ``{``
+# case has to jump over the nested object it just resolved — so the
+# in-string rows are carried as rolling scalars instead of arrays.
+# ------------------------------------------------------------------
+
+
+def _scan_object_spans(text: str, close_table: array[int]) -> list[tuple[int, int, str]]:
+    """Walk ``text`` left to right emitting balanced ``{...}`` spans.
+
+    ``close_table`` comes from :func:`_strict_close_table` or
+    :func:`_lenient_close_table` and supplies, for each offset, the index of
+    the first depth-0 ``}`` at or after it (``-1`` when there is none). The
+    driver is shared; the flavour lives entirely in the table.
+
+    Returns (start, end_exclusive, substring) triples. See the two callers'
+    docstrings for the (deliberate, load-bearing) return-value contract.
+    """
+    out: list[tuple[int, int, str]] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        start = text.find("{", i)
+        if start < 0:
+            break
+        close = close_table[start + 1]
+        if close < 0:
+            # Never closes — drop this `{` and resume at the next one. The
+            # restart deliberately begins from a clean "outside a string"
+            # state (see the contract note in the callers).
+            i = start + 1
+            continue
+        out.append((start, close + 1, text[start : close + 1]))
+        i = close + 1
+    return out
+
+
+def _strict_close_table(text: str) -> array[int]:
+    """Depth-0 close-brace lookup table with *strict* JSON string rules.
+
+    ``table[j]`` is the offset of the first ``}`` that a scanner starting at
+    ``j`` — outside any string literal, at brace depth 0 — would reach while
+    still at depth 0, or ``-1`` if it runs off the end. Only ``"`` opens a
+    string; ``\\`` escapes the next character inside one.
+
+    Built in a single right-to-left sweep, so building plus scanning is
+    O(len(text)) regardless of how many unbalanced braces the text contains.
+    """
+    n = len(text)
+    outside = array("i", [-1]) * (n + 1)
+    in_str = -1  # answer when the scan *enters* offset j+1 inside a "..."
+    escaped = -1  # ... inside a "..." with the previous char a backslash
+    for j in range(n - 1, -1, -1):
+        c = text[j]
+        nxt_outside = outside[j + 1]
+        nxt_in_str = in_str
+        nxt_escaped = escaped
+        # Escaped char: consumed verbatim, then we are back inside the string.
+        escaped = nxt_in_str
+        # Inside a string literal.
+        if c == "\\":
+            in_str = nxt_escaped
+        elif c == '"':
+            in_str = nxt_outside
+        else:
+            in_str = nxt_in_str
+        # Outside any string literal.
+        if c == '"':
+            outside[j] = nxt_in_str
+        elif c == "{":
+            inner = nxt_outside  # close of the nested object opening at j
+            outside[j] = -1 if inner < 0 else outside[inner + 1]
+        elif c == "}":
+            outside[j] = j
+        else:
+            outside[j] = nxt_outside
+    return outside
+
+
+def _lenient_close_table(text: str) -> array[int]:
+    """Depth-0 close-brace lookup table tolerating single-quoted strings.
+
+    Same contract as :func:`_strict_close_table`, but BOTH ``'`` and ``"``
+    open a string literal (and only the matching quote closes it), which is
+    what the lenient pass needs to survive Python-repr / single-quoted
+    malformed objects. Five scanner states instead of three; again only the
+    "outside a string" row needs to be materialised as an array.
+    """
+    n = len(text)
+    outside = array("i", [-1]) * (n + 1)
+    in_sq = in_dq = esc_sq = esc_dq = -1
+    for j in range(n - 1, -1, -1):
+        c = text[j]
+        nxt_outside = outside[j + 1]
+        nxt_in_sq, nxt_in_dq = in_sq, in_dq
+        nxt_esc_sq, nxt_esc_dq = esc_sq, esc_dq
+        esc_sq, esc_dq = nxt_in_sq, nxt_in_dq
+        if c == "\\":
+            in_sq, in_dq = nxt_esc_sq, nxt_esc_dq
+        else:
+            in_sq = nxt_outside if c == "'" else nxt_in_sq
+            in_dq = nxt_outside if c == '"' else nxt_in_dq
+        if c == "'":
+            outside[j] = nxt_in_sq
+        elif c == '"':
+            outside[j] = nxt_in_dq
+        elif c == "{":
+            inner = nxt_outside
+            outside[j] = -1 if inner < 0 else outside[inner + 1]
+        elif c == "}":
+            outside[j] = j
+        else:
+            outside[j] = nxt_outside
+    return outside
+
+
 def _find_balanced_json_objects(text: str) -> list[tuple[int, int, str]]:
     """Find top-level `{...}` JSON substrings by a brace-counter scan.
 
@@ -539,45 +688,27 @@ def _find_balanced_json_objects(text: str) -> list[tuple[int, int, str]]:
     brace balancing. Single-quoted / unquoted malformed objects are found by
     :func:`_find_candidate_object_spans` instead, which brace-balances without
     assuming JSON string syntax.
+
+    Return-value contract (load-bearing — downstream recall depends on all
+    three; do NOT "simplify" this into a single global stack pass):
+
+    1. **Top-level objects only.** Once a ``{`` closes, the scan resumes after
+       its ``}``, so objects nested inside a *closed* object are not returned.
+       ``'{"a": {"b": 1}}'`` yields the outer object alone.
+    2. **Nested objects surface when the outer never closes.** An unbalanced
+       ``{`` is dropped and the scan restarts at the next ``{``, so
+       ``'{"a": {"b":1}'`` yields ``[(6, 13, '{"b":1}')]`` — the inner
+       object is still repairable even though the outer one is broken.
+    3. **Every restart begins with a fresh string state.** The scan between
+       candidates does not track quotes, so a stray/unbalanced quote before a
+       ``{`` cannot swallow it. This is what keeps prose apostrophes
+       (``"I'll call the tool now."``) and quoted braces (``'{ "z{}" '`` ->
+       ``[(4, 6, '{}')]``) from hiding a real call. A single global pass that
+       carried string state across candidates loses both.
     """
-    out: list[tuple[int, int, str]] = []
-    n = len(text)
-    i = 0
-    while i < n:
-        if text[i] != "{":
-            i += 1
-            continue
-        # Scan forward to find a balanced close.
-        depth = 0
-        j = i
-        in_str = False
-        escape = False
-        while j < n:
-            c = text[j]
-            if escape:
-                escape = False
-            elif in_str:
-                if c == "\\":
-                    escape = True
-                elif c == '"':
-                    in_str = False
-            else:
-                if c == '"':
-                    in_str = True
-                elif c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        out.append((i, j + 1, text[i : j + 1]))
-                        i = j + 1
-                        break
-            j += 1
-        else:
-            # Ran off the end without closing — skip this `{` and move on.
-            i += 1
-            continue
-    return out
+    if "{" not in text:
+        return []
+    return _scan_object_spans(text, _strict_close_table(text))
 
 
 def _find_candidate_object_spans(text: str) -> list[tuple[int, int, str]]:
@@ -587,43 +718,17 @@ def _find_candidate_object_spans(text: str) -> list[tuple[int, int, str]]:
     respecting BOTH ``'`` and ``"`` string delimiters, so it can locate
     Python-repr / single-quoted malformed objects for the lenient parser.
     Returns (start, end_exclusive, substring).
+
+    The same three-point return-value contract documented on
+    :func:`_find_balanced_json_objects` applies here: top-level objects only,
+    nested objects surface when the outer never closes, and every restart
+    begins from a fresh string state. Point 3 matters most on this flavour —
+    ``'`` opens a string here, so carrying state across candidates would let
+    an ordinary prose apostrophe swallow every following object.
     """
-    out: list[tuple[int, int, str]] = []
-    n = len(text)
-    i = 0
-    while i < n:
-        if text[i] != "{":
-            i += 1
-            continue
-        depth = 0
-        j = i
-        quote: str | None = None
-        escape = False
-        while j < n:
-            c = text[j]
-            if escape:
-                escape = False
-            elif quote is not None:
-                if c == "\\":
-                    escape = True
-                elif c == quote:
-                    quote = None
-            else:
-                if c == '"' or c == "'":
-                    quote = c
-                elif c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        out.append((i, j + 1, text[i : j + 1]))
-                        i = j + 1
-                        break
-            j += 1
-        else:
-            i += 1
-            continue
-    return out
+    if "{" not in text:
+        return []
+    return _scan_object_spans(text, _lenient_close_table(text))
 
 
 # ------------------------------------------------------------------
@@ -1405,12 +1510,24 @@ def repair_tool_calls_in_text(
     #    Skip anything inside a protected code fence or introduced by a prose
     #    example cue. Walk back-to-front so slicing removals don't shift the
     #    indices of earlier matches.
+    #    Oversized inputs skip this step entirely (see _MAX_BARE_SCAN_CHARS):
+    #    the per-candidate JSON parsing / cue checking is the expensive part
+    #    and a message that large is not a tool call. Steps 1/2/2b/2c above
+    #    are regex-driven and linear, so they are NOT skipped.
     protected = _protected_code_spans(cleaned)
     spans_to_remove: list[tuple[int, int]] = []
     repaired_from_bare: list[dict[str, Any]] = []
 
+    strict_spans: list[tuple[int, int, str]] = []
+    lenient_spans: list[tuple[int, int, str]] = []
+    if len(cleaned) > _MAX_BARE_SCAN_CHARS:
+        logger.warning("tool-repair-input-too-large", extra={"chars": len(cleaned)})
+    else:
+        strict_spans = _find_balanced_json_objects(cleaned)
+        lenient_spans = _find_candidate_object_spans(cleaned)
+
     # First pass: strict-JSON balanced objects.
-    for start, end, substr in _find_balanced_json_objects(cleaned):
+    for start, end, substr in strict_spans:
         if _in_spans(start, protected):
             continue
         if _preceded_by_prose_cue(cleaned, start):
@@ -1436,7 +1553,7 @@ def repair_tool_calls_in_text(
 
     # Second pass: lenient objects (single-quoted / unquoted / trailing comma /
     # double-brace) that strict parsing missed. Skip spans already claimed.
-    for start, end, substr in _find_candidate_object_spans(cleaned):
+    for start, end, substr in lenient_spans:
         if _in_spans(start, spans_to_remove):
             continue
         if _in_spans(start, protected):
