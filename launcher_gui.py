@@ -211,10 +211,23 @@ _DEFAULT_AUTO_RESTART_BACKOFF_MAX_S = 30.0
 _DEFAULT_BENCH_COMMAND_TEMPLATE = "llmbench run --model local-openai --runs {runs}"
 _DEFAULT_BENCH_RUNS = 5
 
-_CONFIG_SEARCH = [
-    Path.cwd() / "providers.yaml",
-    Path.home() / ".coderouter" / "providers.yaml",
-]
+# v2.13.0 (security): implicit CWD providers.yaml discovery is opt-in,
+# gated behind CODEROUTER_ALLOW_CWD_CONFIG — same vocabulary and rationale
+# as coderouter.config.loader (a hostile providers.yaml dropped into a repo
+# could otherwise steer launcher.backends[*].binary / bench.command_template
+# simply because the GUI was launched from that directory). Evaluated per
+# call (not at import) so Path.cwd() reflects the working dir at load time
+# and the env toggle can flip within one process (e.g. tests).
+_CWD_CONFIG_ENV = "CODEROUTER_ALLOW_CWD_CONFIG"
+_CWD_CONFIG_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _config_search_paths() -> list[Path]:
+    paths: list[Path] = []
+    if os.environ.get(_CWD_CONFIG_ENV, "").strip().lower() in _CWD_CONFIG_TRUTHY:
+        paths.append(Path.cwd() / "providers.yaml")
+    paths.append(Path.home() / ".coderouter" / "providers.yaml")
+    return paths
 
 
 @dataclass
@@ -297,7 +310,7 @@ def _load_config(path: str | None) -> LauncherConfig:
     if path:
         cfg_path = Path(path).expanduser()
     else:
-        cfg_path = next((p for p in _CONFIG_SEARCH if p.is_file()), None)
+        cfg_path = next((p for p in _config_search_paths() if p.is_file()), None)
 
     if cfg_path is None:
         return LauncherConfig()  # empty config — user can still set options manually
@@ -1098,6 +1111,10 @@ class LauncherApp(tk.Tk):
         self.cfg = _load_config(config_path)
         self.models: list[dict[str, Any]] = []
         self.processes: dict[str, ManagedProcess] = {}
+        # スイープ子は processes に載らない (H-14: ManagedProcess は UI テーブル/
+        # 停止削除ボタン/status 更新に直結し、構成ごとに生成破棄されるスイープ子
+        # を混ぜると矛盾する)。代わりに窓を登録して _on_close から明示的に落とす。
+        self._sweep_windows: set[SweepWindow] = set()
         self.selected_proc_id: str | None = None
         self._last_auto_name: str = ""   # _on_model_select が自動入力した名前を記録
         self._hw: dict[str, Any] = {}    # 検出済みハードウェア情報
@@ -1482,6 +1499,13 @@ class LauncherApp(tk.Tk):
 
     def _on_close(self) -> None:
         """ウィンドウを閉じる際に CodeRouter と全バックエンドを停止する。"""
+        # H-14: スイープ実行中なら確認 (スイープ子は processes に載らないので
+        # ここで明示的に落とさないとオーファン化する)。
+        running = [w for w in self._sweep_windows if w.is_running()]
+        if running and not messagebox.askyesno(
+                "確認", "ベンチスイープが実行中です。中断してアプリを終了しますか?"):
+            return
+
         # CodeRouter 停止
         if self._cr_proc and self._cr_proc.poll() is None:
             with contextlib.suppress(Exception):
@@ -1490,8 +1514,19 @@ class LauncherApp(tk.Tk):
         # llama.cpp / vllm 停止
         for mp in list(self.processes.values()):
             if mp.proc and mp.proc.poll() is None:
+                # H-14: terminate の前に stopping を立てる。これが無いと起動
+                # ワーカーが SIGTERM をクラッシュと誤認し、MTP フォールバック/
+                # オートリスタートで終了処理中に新 llama-server を spawn して
+                # オーファン化する (_do_stop/_do_kill/_kill_for_removal は既に
+                # stopping を立てている)。
+                mp.stopping = True
                 with contextlib.suppress(Exception):
                     mp.proc.terminate()
+
+        # H-14: スイープ窓を落とす (processes に載らないスイープ子を明示終了)。
+        for win in list(self._sweep_windows):
+            with contextlib.suppress(Exception):
+                win.shutdown_for_app_close()
 
         self.destroy()
 
@@ -1955,7 +1990,15 @@ class LauncherApp(tk.Tk):
         """Open the bench-sweep window (device configurations x llmbench)."""
         if not _HAS_DEVICES:
             return
-        SweepWindow(self)
+        # H-14: 既存窓があれば前面化。無ければ生成して登録 (_on_close から
+        # スイープ子を落とすため参照を保持する)。
+        for win in self._sweep_windows:
+            if win.winfo_exists():
+                win.deiconify()
+                win.lift()
+                return
+        win = SweepWindow(self)
+        self._sweep_windows.add(win)
 
     def _on_backend_change(self, _: Any = None) -> None:
         # ★ デバイス id の名前空間はビルドごとに違う ("CUDA0" と "Vulkan0" は
@@ -2683,6 +2726,11 @@ SWEEP_KIND_LOG = "log"
 SWEEP_KIND_DEVICES = "devices"
 SWEEP_KIND_DONE = "done"
 
+# H-14: スイープ窓の閉じ / アプリ終了時に子プロセスを落とす際のタイミング。
+_SWEEP_CLOSE_GRACE_MS = 8000       # SIGTERM 後、SIGKILL するまでの猶予
+_SWEEP_CLOSE_TICK_MS = 100         # ワーカー終了待ちの after ポーリング間隔
+_SWEEP_APP_CLOSE_JOIN_S = 3.0      # アプリ終了経路のみ許される同期 join の上限
+
 
 class _SweepWorker(threading.Thread):
     """Drive a :class:`SweepPlan` step-by-step in a background thread.
@@ -2715,6 +2763,38 @@ class _SweepWorker(threading.Thread):
         self._popen = popen
         self._poll_ready = poll_ready
         self._backend_ready = backend_ready
+        # H-14: ロック付き生存台帳。スイープ子は app.processes に載らないので、
+        # ここで直接掴んで _on_close / 窓閉じ経路から Tk 非依存に落とす。
+        self._live_lock = threading.Lock()
+        self._live: list[Any] = []
+
+    # ── H-14: live-child ledger (Tk-independent) ─────────────────────────
+    def _track(self, proc: Any) -> None:
+        with self._live_lock:
+            self._live.append(proc)
+
+    def _untrack(self, proc: Any) -> None:
+        with self._live_lock, contextlib.suppress(ValueError):
+            self._live.remove(proc)
+
+    def live_procs(self) -> list[Any]:
+        with self._live_lock:
+            return list(self._live)
+
+    def request_stop(self) -> None:
+        """Abort + SIGTERM every live child, non-blocking (safe from Tk main thread)."""
+        self._abort.set()
+        for proc in self.live_procs():
+            with contextlib.suppress(Exception):
+                if proc.poll() is None:
+                    proc.terminate()
+
+    def force_kill(self) -> None:
+        """Last resort: SIGKILL every still-live child. Non-blocking."""
+        for proc in self.live_procs():
+            with contextlib.suppress(Exception):
+                if proc.poll() is None:
+                    proc.kill()
 
     # ── emit helpers ─────────────────────────────────────────────────────
     def _emit_step(self, step: SweepStep) -> None:
@@ -2764,14 +2844,18 @@ class _SweepWorker(threading.Thread):
     def _terminate(self, proc: Any) -> None:
         """SIGTERM → wait → SIGKILL. Ensures the port is freed before the next
         configuration reuses it."""
-        with contextlib.suppress(Exception):
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                with contextlib.suppress(Exception):
-                    proc.wait(timeout=5)
+        try:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=5)
+        finally:
+            # H-14: 終了経路がどれでも台帳から外す (二重 kill を避ける)。
+            self._untrack(proc)
 
     def _run_one(self, step: SweepStep) -> None:
         # ── サーバー起動 ──
@@ -2792,6 +2876,7 @@ class _SweepWorker(threading.Thread):
             step.error = f"起動失敗: {exc}"
             self._emit_step(step)
             return
+        self._track(server)  # H-14: 窓閉じ経路が掴めるよう即登録
         self._pump_logs(server, step.label)
 
         # ── readiness 待ち(既存 poll_until_ready 再利用) ──
@@ -2824,8 +2909,10 @@ class _SweepWorker(threading.Thread):
             self._terminate(server)
             self._emit_step(step)
             return
+        self._track(bench)  # H-14
         self._pump_logs(bench, f"{step.label}/bench")
         bench.wait()
+        self._untrack(bench)  # H-14: 自然終了したら台帳から外す
         step.bench_exit_code = bench.returncode
         step.ended_at = time.time()
 
@@ -2859,9 +2946,14 @@ class SweepWindow(tk.Toplevel):
         self._abort = threading.Event()
         self._config_vars: list[tuple[tk.BooleanVar, str, DeviceSelection]] = []
         self._steps: list[SweepStep] = []
+        # H-14: 閉じ中フラグ + ポーリング job id (破棄済みウィジェットへの
+        # after 再スケジュールで TclError を出さないため)。
+        self._closing = False
+        self._poll_job: str | None = None
 
         self._build_ui()
-        self.after(300, self._poll)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._poll_job = self.after(300, self._poll)
 
     # ── UI ────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -3040,8 +3132,63 @@ class SweepWindow(tk.Toplevel):
         self._abort.set()
         self._sweep_status.set("中断要求 — 現在の構成の完了後に停止します")
 
+    # ── H-14: window close / app-close shutdown ──────────────────────────
+    def is_running(self) -> bool:
+        return self._worker is not None and self._worker.is_alive()
+
+    def _on_close(self) -> None:
+        """WM_DELETE_WINDOW ハンドラ。実行中ならメインスレッドをブロックせず、子へ
+        SIGTERM を送って after ポーリングでワーカー終了を待つ。"""
+        if not self.is_running():
+            self._finish_close()
+            return
+        assert self._worker is not None
+        self._worker.request_stop()
+        self._closing = True
+        with contextlib.suppress(Exception):
+            self._sweep_status.set("停止中… (子プロセスの終了を待っています)")
+            self._start_btn.configure(state="disabled")
+            self._abort_btn.configure(state="disabled")
+        self.after(_SWEEP_CLOSE_TICK_MS, self._await_worker_exit, 0)
+
+    def _await_worker_exit(self, waited_ms: int) -> None:
+        if self._worker is None or not self._worker.is_alive():
+            self._finish_close()
+            return
+        if waited_ms >= _SWEEP_CLOSE_GRACE_MS:
+            self._worker.force_kill()
+            self._finish_close()
+            return
+        self.after(_SWEEP_CLOSE_TICK_MS, self._await_worker_exit,
+                   waited_ms + _SWEEP_CLOSE_TICK_MS)
+
+    def _finish_close(self) -> None:
+        self._closing = True
+        if self._poll_job is not None:
+            with contextlib.suppress(Exception):
+                self.after_cancel(self._poll_job)
+            self._poll_job = None
+        if self._worker is not None and self._worker.is_alive():
+            self._worker.force_kill()
+        with contextlib.suppress(Exception):
+            self.app._sweep_windows.discard(self)
+        with contextlib.suppress(Exception):
+            self.destroy()
+
+    def shutdown_for_app_close(self) -> None:
+        """アプリ終了経路専用。短い同期 join を許し、確実に子を落とす。"""
+        worker = self._worker
+        if worker is not None:
+            worker.request_stop()
+            if worker.is_alive():
+                worker.join(timeout=_SWEEP_APP_CLOSE_JOIN_S)
+            worker.force_kill()
+        self._finish_close()
+
     # ── polling ─────────────────────────────────────────────────────────
     def _poll(self) -> None:
+        if self._closing:
+            return
         try:
             processed = 0
             while processed < _MAX_LINES_PER_TICK:
@@ -3067,7 +3214,10 @@ class SweepWindow(tk.Toplevel):
         except Exception as exc:
             print(f"[sweep] poll error: {exc}", flush=True)
         finally:
-            self.after(300, self._poll)
+            # H-14: 閉じ中は再スケジュールしない (破棄済みウィジェットへの
+            # after で TclError を出さない)。
+            if not self._closing:
+                self._poll_job = self.after(300, self._poll)
 
     def _update_step(self, step: SweepStep) -> None:
         # 同じ label の行を上書き。

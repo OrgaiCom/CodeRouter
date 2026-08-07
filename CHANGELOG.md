@@ -9,6 +9,97 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.13.0] — 2026-08-07 (remaining-high security hardening)
+
+### Changed (BREAKING)
+
+- **Implicit `./providers.yaml` discovery is now opt-in, gated behind
+  `CODEROUTER_ALLOW_CWD_CONFIG`.** Previously, starting CodeRouter (or the
+  GUI launcher) from a directory containing a `providers.yaml` loaded that
+  file automatically. That was a code-execution vector: a hostile config
+  dropped into a repo could steer `restart_command`,
+  `launcher.backends[*].binary`, and `launcher.bench.command_template` —
+  all of which name executables — simply because of the working directory.
+  The current-working-directory step now runs only when
+  `CODEROUTER_ALLOW_CWD_CONFIG` is truthy (`1`/`true`/`yes`/`on`). When the
+  opt-in is off but a `./providers.yaml` exists and was not explicitly
+  named, a one-time `cwd-config-skipped` warning explains why it was
+  ignored and how to enable it (`--config`, `CODEROUTER_CONFIG`, or the
+  opt-in). To keep the old behaviour, set `CODEROUTER_ALLOW_CWD_CONFIG=1`
+  in directories you trust. (The v2.12.0 heads-up mis-stated the landing
+  release as "v2.12.0"; it actually lands here in v2.13.0.)
+- **`restart_command` is now run as `subprocess.run(shlex.split(command),
+  shell=False)` — argv dispatch, no shell.** Self-healing previously ran
+  it through `shell=True`, so a `providers.yaml` from an untrusted source
+  meant arbitrary shell execution (directly, and unconditionally at
+  startup when excluded providers were restored from `state_dir`).
+  Pipelines, redirects, `~` expansion, and `FOO=bar cmd` env prefixes are
+  no longer supported. A value containing shell metacharacters (`&&`,
+  `||`, `|`, `;`, `>`, `<`, `$(...)`, `` ` ``) is now **refused (not run)**
+  rather than half-executed — under `shell=False`, `touch a; b` would
+  otherwise create a file literally named `a;` and report a "successful"
+  restart. Wrap shell-dependent commands in a script, or write them as
+  `/bin/sh -c '...'` explicitly.
+- **`doctor --apply` now writes back to exactly the file the loader read.**
+  The apply path's config resolution was a hand-maintained copy of the
+  loader's search order; it now delegates to the loader's single
+  `resolve_config_path`, so the v2.13.0 CWD change can never make `--apply`
+  rewrite a file that `load_config` did not actually load.
+- **The GUI launcher (`launcher_gui.py`) applies the same
+  `CODEROUTER_ALLOW_CWD_CONFIG` gate** to its own `providers.yaml`
+  discovery.
+- **The launcher sweep API no longer accepts a `bench_command` (or
+  `results_dir`) from the request body.** `POST /api/launcher/sweep/start`
+  previously took an arbitrary command string, `shlex.split` it, and ran
+  it — so anyone who could reach the (loopback, token-optional) launcher
+  port could run any program under the CodeRouter process. The request now
+  carries only a `bench_preset` key that must name an entry under
+  `launcher.bench.presets` in `providers.yaml`; the executable template
+  lives solely in the operator-owned config, matching the trust boundary
+  already used for `launcher.backends[*].binary`. `bench_command` /
+  `results_dir` in a request are rejected with `400`. To keep a custom
+  sweep command, declare it under `launcher.bench.presets`; a single
+  `launcher.bench.command_template` still works unchanged as the implicit
+  `default` preset. Placeholder substitution in bench templates now splits
+  the template into argv *before* substituting, so a config label can no
+  longer inject extra arguments.
+
+### Fixed (security)
+
+- **The launcher HTML no longer embeds `CODEROUTER_LAUNCHER_TOKEN`.**
+  `GET /launcher` used to substitute the shared secret straight into the
+  page, so `curl /launcher | grep` recovered it and defeated
+  `_require_launcher_token`. The page now receives only a boolean telling
+  the UI whether auth is enabled; the operator enters the token once and it
+  is held in `sessionStorage` (per-tab). Token-free deployments are
+  unaffected.
+- **`POST /api/launcher/start` and `/sweep/start` now validate
+  `model_path` / `draft_model_path` against `launcher.model_dirs`** (the
+  same check previously applied only to `/suggest`). When `model_dirs` is
+  unset the endpoints stay open as before, with a one-time warning;
+  configure `model_dirs` when the launcher is reachable beyond loopback.
+- **Stored XSS in the launcher process table is fixed.** Process-row
+  buttons no longer build `onclick` attributes from the process name
+  (which an HTML parser decoded back into executable JS); they use
+  `data-*` attributes with a single delegated listener, so a name like
+  `x');alert(1);//` renders as inert text.
+- **The request body-size limit is now enforced for
+  `Transfer-Encoding: chunked` requests.** The middleware previously only
+  read `Content-Length`, so a chunked body bypassed the cap entirely (and
+  a malformed length header fell through as unlimited). It now also counts
+  bytes as they are received and aborts with `413` the moment the running
+  total exceeds the cap, without buffering the body.
+- **The GUI bench-sweep window no longer orphans `llama-server`
+  processes.** Closing the sweep window (the `×` button) did not signal the
+  worker, and sweep child processes were never registered for the app's
+  bulk shutdown, so backends kept running and leaked VRAM and ports. The
+  window now stops the worker and its children on close (non-blocking, via
+  an `after()` poll with a grace period then `SIGKILL`), sweep children are
+  drained when the app closes, and the app confirms before quitting while a
+  sweep is running.
+
+---
+
 ## [v2.12.0] — 2026-08-04 (the context-budget guard actually fires now)
 
 **This release changes behaviour you can observe.** The token estimator

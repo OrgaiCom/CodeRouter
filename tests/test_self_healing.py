@@ -125,14 +125,21 @@ def test_restart_success() -> None:
 
 
 def test_restart_failure_returns_false() -> None:
-    """Failed restart command (non-zero exit) returns False."""
+    """Failed restart command (non-zero exit) returns False.
+
+    Uses ``false`` (the coreutils binary) rather than ``exit 1``: under
+    the v2.13.0 argv dispatch there is no shell, so ``exit`` — a shell
+    builtin with no ``/bin/exit`` binary — would raise FileNotFoundError
+    instead of exercising the "command ran and returned non-zero" path
+    this test is about. ``/usr/bin/false`` execs and exits 1 for real.
+    """
     orch = SelfHealingOrchestrator()
     pc = ProviderConfig(
         name="p1",
         kind="openai_compat",
         base_url="http://localhost:11434/v1",
         model="test",
-        restart_command="exit 1",
+        restart_command="false",
     )
     assert orch.try_restart(pc, timeout_s=5.0) is False
 
@@ -179,6 +186,154 @@ def test_restart_double_prevention() -> None:
 
     # One should succeed (or timeout), the other should skip (False).
     assert False in results
+
+
+# ----------------------------------------------------------------------
+# Group 2b: v2.13.0 argv dispatch (shell=False) hardening
+# ----------------------------------------------------------------------
+
+
+class _FakeCompleted:
+    """Minimal stand-in for subprocess.CompletedProcess."""
+
+    def __init__(self, returncode: int = 0, stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def _pc(restart_command: str) -> ProviderConfig:
+    return ProviderConfig(
+        name="p1",
+        kind="openai_compat",
+        base_url="http://localhost:11434/v1",
+        model="test",
+        restart_command=restart_command,
+    )
+
+
+def test_restart_command_is_not_shell_interpreted(tmp_path) -> None:
+    """A ``;``-chained command must not run as a shell pipeline.
+
+    Under shell=False, ``echo x; touch <marker>`` is refused outright (it
+    carries a shell metacharacter), so neither ``<marker>`` nor a file
+    literally named ``<marker>;`` is ever created.
+    """
+    orch = SelfHealingOrchestrator()
+    marker = tmp_path / "marker"
+    pc = _pc(f"echo x; touch {marker}")
+
+    assert orch.try_restart(pc, timeout_s=5.0) is False
+    assert not marker.exists()
+    assert not (tmp_path / f"{marker.name};").exists()
+    # No stray files at all should have been produced in tmp_path.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_restart_command_shell_metachars_refused() -> None:
+    """Shell metacharacters → refused, subprocess.run never called."""
+    orch = SelfHealingOrchestrator()
+    pc = _pc("pkill x && x")
+
+    captured: dict[str, object] = {}
+
+    def _record(_logger, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    with patch("coderouter.guards.self_healing.subprocess.run") as mock_run, patch(
+        "coderouter.guards.self_healing.log_self_healing_restart", _record
+    ):
+        result = orch.try_restart(pc, timeout_s=5.0)
+
+    assert result is False
+    mock_run.assert_not_called()
+    assert captured["success"] is False
+    assert "shell syntax" in str(captured["error"])
+
+
+def test_restart_command_quoted_argument_stays_one_token() -> None:
+    """A quoted argument survives as a single argv token."""
+    orch = SelfHealingOrchestrator()
+    pc = _pc('/bin/echo "a b"')
+
+    with patch(
+        "coderouter.guards.self_healing.subprocess.run",
+        return_value=_FakeCompleted(returncode=0),
+    ) as mock_run:
+        result = orch.try_restart(pc, timeout_s=5.0)
+
+    assert result is True
+    argv = mock_run.call_args.args[0]
+    assert argv == ["/bin/echo", "a b"]
+    assert mock_run.call_args.kwargs["shell"] is False
+
+
+def test_restart_command_sh_c_escape_hatch_works() -> None:
+    """``/bin/sh -c '...'`` is the documented escape hatch and runs for real."""
+    orch = SelfHealingOrchestrator()
+    pc = _pc("/bin/sh -c 'echo ok'")
+    assert orch.try_restart(pc, timeout_s=5.0) is True
+
+
+def test_restart_command_unbalanced_quotes_returns_false() -> None:
+    """A value shlex cannot parse → False with an 'unparsable' error."""
+    orch = SelfHealingOrchestrator()
+    pc = _pc('a "b')
+
+    captured: dict[str, object] = {}
+
+    def _record(_logger, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    with patch(
+        "coderouter.guards.self_healing.log_self_healing_restart", _record
+    ):
+        result = orch.try_restart(pc, timeout_s=5.0)
+
+    assert result is False
+    assert "unparsable" in str(captured["error"])
+
+
+def test_restart_command_whitespace_only_returns_false() -> None:
+    """A command that parses to an empty argv → False with an 'empty' error."""
+    orch = SelfHealingOrchestrator()
+    pc = _pc("   ")
+
+    captured: dict[str, object] = {}
+
+    def _record(_logger, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    with patch(
+        "coderouter.guards.self_healing.log_self_healing_restart", _record
+    ):
+        result = orch.try_restart(pc, timeout_s=5.0)
+
+    assert result is False
+    assert "empty" in str(captured["error"])
+
+
+def test_restart_command_missing_binary_returns_false() -> None:
+    """A non-existent binary execs and fails (OSError) → False, not a crash."""
+    orch = SelfHealingOrchestrator()
+    pc = _pc("/nonexistent/xyz")
+    assert orch.try_restart(pc, timeout_s=5.0) is False
+
+
+def test_restart_lock_released_on_parse_failure() -> None:
+    """A parse failure must not leave the restart lock wedged.
+
+    The reject/parse checks run before the lock is taken, so a later valid
+    restart on the same provider must still be able to proceed.
+    """
+    orch = SelfHealingOrchestrator()
+
+    assert orch.try_restart(_pc('a "b'), timeout_s=5.0) is False
+
+    with patch(
+        "coderouter.guards.self_healing.subprocess.run",
+        return_value=_FakeCompleted(returncode=0),
+    ):
+        assert orch.try_restart(_pc("echo ok"), timeout_s=5.0) is True
 
 
 # ----------------------------------------------------------------------

@@ -629,6 +629,10 @@ def render_bench_command(
     argv 化。
 
     ``str.format`` は JSON 波括弧等で誤爆するため単純置換を使う。
+
+    H-2: 置換より **先に** ``shlex.split`` でトークン化し、各トークン内でのみ
+    置換する。こうしないと ``{config}`` にスペースを含む値が入ったとき argv が
+    増殖し(引数注入)、想定外のフラグを外部ベンチに渡せてしまう。
     """
     mapping = {
         "port": str(port),
@@ -637,13 +641,16 @@ def render_bench_command(
         "results_dir": results_dir or "",
         "runs": str(runs) if runs is not None else "",
     }
-    rendered = template
-    for k, v in mapping.items():
-        rendered = rendered.replace("{" + k + "}", v)
     # ★ Windows: shlex の POSIX モードはバックスラッシュをエスケープ文字
     #   として食い潰し `C:\tools\llmbench.exe` を壊す。os.name で分岐して
     #   Windows では posix=False(バックスラッシュを素通し)にする。
-    return shlex.split(rendered, posix=(os.name != "nt"))
+    argv: list[str] = []
+    for tok in shlex.split(template, posix=(os.name != "nt")):
+        for k, v in mapping.items():
+            tok = tok.replace("{" + k + "}", v)
+        if tok:
+            argv.append(tok)
+    return argv
 
 
 # ---------------------------------------------------------------------------

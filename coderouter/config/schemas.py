@@ -355,15 +355,20 @@ class AgentCliConfig(BaseModel):
         return self
 
 
-# [Unreleased]/planned v2.12.0: patterns used by ProviderConfig's
+# v2.13.0: patterns used by ProviderConfig's
 # ``_warn_restart_command_shell_syntax`` validator to flag
-# ``restart_command`` values that rely on shell syntax not honored by
-# the planned ``shlex.split`` + ``shell=False`` dispatch (see that
-# validator's docstring and the field description below for the full
-# rationale). Compiled once at module scope since every ProviderConfig
-# validation reuses them.
-_RESTART_COMMAND_SHELL_META_RE = re.compile(r"(&&|\|\||\||;|>|<|\$\(|`)")
-_RESTART_COMMAND_ENV_PREFIX_RE = re.compile(r"^\w+=")
+# ``restart_command`` values that rely on shell syntax not honored by the
+# ``shlex.split`` + ``shell=False`` dispatch (see that validator's
+# docstring and the field description below for the full rationale).
+# Public (no leading underscore) because ``coderouter.guards.self_healing``
+# imports ``RESTART_COMMAND_SHELL_META_RE`` to *refuse* to run any
+# restart_command containing shell metacharacters — under shell=False a
+# value like ``touch a; b`` would create a file literally named ``a;`` and
+# exit 0, i.e. report a "successful" restart while only half-executing.
+# Compiled once at module scope since every ProviderConfig validation
+# reuses them.
+RESTART_COMMAND_SHELL_META_RE = re.compile(r"(&&|\|\||\||;|>|<|\$\(|`)")
+RESTART_COMMAND_ENV_PREFIX_RE = re.compile(r"^\w+=")
 
 
 class ProviderConfig(BaseModel):
@@ -520,54 +525,56 @@ class ProviderConfig(BaseModel):
             "transitions to UNHEALTHY. Unset = no automatic restart "
             "(recovery probe still runs, waiting for manual restart). "
             "\n\n"
-            "[Unreleased]/planned v2.12.0: currently run as "
-            "``subprocess.run(command, shell=True)`` (coderouter/guards/"
-            "self_healing.py), so shell syntax works today — pipelines "
-            "(``pkill ollama && ollama serve``), ``~`` expansion, and "
-            "leading env-var assignments (``OLLAMA_HOST=0.0.0.0 ollama "
-            "serve``) are all honored. A future minor switches this to "
-            "``shlex.split(command)`` + ``shell=False`` (argv dispatch, "
-            "no shell in between), which does NOT support any of the "
-            "above — ``&&`` becomes a literal argument to the first "
-            "command instead of a separator, ``~/...`` paths are not "
-            "expanded, and ``FOO=bar cmd`` fails to exec. If your "
-            "command needs shell features, wrap it in a small script "
-            "and point restart_command at that script instead, e.g. "
-            "``restart_command: /path/to/restart-ollama.sh``."
+            "v2.13.0: run as ``subprocess.run(shlex.split(command), "
+            "shell=False)`` (coderouter/guards/self_healing.py) — argv "
+            "dispatch, no shell in between. Pipelines "
+            "(``pkill ollama && ollama serve``), redirects, ``~`` "
+            "expansion, and leading env-var assignments "
+            "(``OLLAMA_HOST=0.0.0.0 ollama serve``) are NOT supported: "
+            "``~/...`` paths are not expanded and ``FOO=bar cmd`` fails to "
+            "exec. A value containing shell metacharacters (``&&``, ``||``, "
+            "``|``, ``;``, ``>``, ``<``, ``$(...)``, ```...```) is refused "
+            "outright (not run) rather than half-executed. If your command "
+            "needs shell features, wrap it in a small script and point "
+            "restart_command at that script (e.g. "
+            "``restart_command: /path/to/restart-ollama.sh``), or write it "
+            "as ``/bin/sh -c '...'`` explicitly."
         ),
     )
 
     @model_validator(mode="after")
     def _warn_restart_command_shell_syntax(self) -> ProviderConfig:
-        """[Unreleased]/planned v2.12.0 breaking-change heads-up (warning only).
+        """v2.13.0: warn that this ``restart_command`` will not run as written.
 
-        ``coderouter/guards/self_healing.py`` currently runs
-        ``restart_command`` via ``subprocess.run(command, shell=True)``.
-        The planned v2.12.0 change switches that to
-        ``shlex.split(command)`` + ``shell=False`` — a shell-syntax
-        ``restart_command`` that works fine today would then either
-        crash (``FileNotFoundError`` for ``~/...`` paths or an
-        ``ENV=val cmd`` prefix) or, worse, silently misbehave (``&&`` /
-        ``||`` / ``|`` / ``;`` / redirects becoming literal argv tokens
-        instead of shell operators — a provider "restart" that quietly
-        does the wrong thing is worse than one that errors loudly).
+        ``coderouter/guards/self_healing.py`` runs ``restart_command`` via
+        ``subprocess.run(shlex.split(command), shell=False)`` — argv
+        dispatch, no shell. A shell-syntax ``restart_command`` therefore
+        does NOT do what the shell would do:
+
+          * shell metacharacters (``&&`` / ``||`` / ``|`` / ``;`` /
+            redirects / ``$(...)`` / backticks) → the value is *refused*
+            (not run) by self_healing, because under shell=False they would
+            otherwise become literal argv tokens and half-execute a
+            provider "restart" that quietly does the wrong thing;
+          * a leading ``~/...`` path or an ``ENV=val cmd`` prefix →
+            ``exec`` fails (``FileNotFoundError``) because there is no shell
+            to expand ``~`` or apply the assignment.
 
         Deliberately never raises: this validator does not enforce
-        anything, it only warns ahead of the wire change so operators
-        can migrate ``restart_command`` to a plain argv (or a wrapper
-        script) before v2.12.0 lands, instead of discovering the break
-        the next time a provider actually goes UNHEALTHY.
+        anything, it only warns so an existing providers.yaml still loads
+        (rather than becoming un-startable). Migrate ``restart_command`` to
+        a plain argv, a wrapper script, or an explicit ``/bin/sh -c '...'``.
         """
         cmd = self.restart_command
         if not cmd:
             return self
         stripped = cmd.strip()
         reasons: list[str] = []
-        if _RESTART_COMMAND_SHELL_META_RE.search(cmd):
+        if RESTART_COMMAND_SHELL_META_RE.search(cmd):
             reasons.append("shell metacharacter (&&, ||, |, ;, >, <, $(...), or `...`)")
         if stripped.startswith("~/"):
             reasons.append("leading '~/' path (no shell expansion under shell=False)")
-        if _RESTART_COMMAND_ENV_PREFIX_RE.match(stripped):
+        if RESTART_COMMAND_ENV_PREFIX_RE.match(stripped):
             reasons.append("leading environment-variable assignment (FOO=bar ...)")
         if reasons:
             logger.warning(
@@ -577,13 +584,13 @@ class ProviderConfig(BaseModel):
                     "restart_command": cmd,
                     "reasons": reasons,
                     "hint": (
-                        "restart_command currently runs via "
-                        "subprocess.run(..., shell=True); a planned "
-                        "v2.12.0 change switches to shlex.split(...) + "
-                        "shell=False, which does not support this "
-                        "command's shell syntax. Rewrite it as plain "
-                        "argv, or wrap it in a script and point "
-                        "restart_command at that script."
+                        "restart_command runs via "
+                        "subprocess.run(shlex.split(...), shell=False) as of "
+                        "v2.13.0, which does not support this command's "
+                        "shell syntax: values with shell metacharacters are "
+                        "refused (not run), and '~/' / 'FOO=bar' prefixes "
+                        "fail to exec. Rewrite it as plain argv, wrap it in "
+                        "a script, or use /bin/sh -c '...'."
                     ),
                 },
             )
@@ -1573,6 +1580,28 @@ class LauncherOptionProfile(BaseModel):
     )
 
 
+class LauncherBenchPreset(BaseModel):
+    """launcher.bench.presets[<key>] の1エントリ。H-2: スイープAPIが受け付けるのはキー名だけ。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(..., min_length=1, description="Launcher UI に出す表示名。")
+    command_template: str = Field(
+        ...,
+        min_length=1,
+        description="外部ベンチコマンドのテンプレ。{port} {config} {base_url} {results_dir} {runs} を単純置換で展開。",
+    )
+    runs: int | None = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="このプリセット固有の実行回数。None なら launcher.bench.runs。",
+    )
+    results_dir: str | None = Field(
+        default=None,
+        description="このプリセット固有の results ディレクトリ。None なら launcher.bench.results_dir。リクエストからは指定できない。",
+    )
+
+
 class LauncherBenchConfig(BaseModel):
     """The ``launcher.bench:`` block — defaults for the bench sweep feature.
 
@@ -1614,6 +1643,23 @@ class LauncherBenchConfig(BaseModel):
             "大きな GGUF ロードを考慮した既定 5 分。"
         ),
     )
+    presets: dict[str, LauncherBenchPreset] = Field(
+        default_factory=dict,
+        description="名前付きベンチコマンド。キーが POST /api/launcher/sweep/start の bench_preset が取りうる唯一の値。",
+    )
+    default_preset: str | None = Field(
+        default=None,
+        description="bench_preset 未指定時に使うプリセットキー。None なら command_template 由来の暗黙 default。",
+    )
+
+    @model_validator(mode="after")
+    def _check_default_preset(self) -> Self:
+        if self.default_preset is not None and self.default_preset not in self.presets:
+            raise ValueError(
+                f"launcher.bench.default_preset={self.default_preset!r} is not a key of "
+                f"launcher.bench.presets (known: {sorted(self.presets) or 'none'})"
+            )
+        return self
 
 
 class SwapModelSpec(BaseModel):

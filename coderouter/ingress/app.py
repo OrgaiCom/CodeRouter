@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from coderouter import __version__
 from coderouter.config import load_config
@@ -101,37 +101,78 @@ def _parse_max_body_bytes(raw: str | None) -> int:
     return value if value > 0 else _DEFAULT_MAX_BODY_BYTES
 
 
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests whose declared body exceeds the configured cap.
+class _BodyTooLarge(Exception):
+    pass
 
-    The check is on the incoming ``Content-Length`` header, so it is cheap
-    (no body is read) and fires before the route handler runs. Streaming
-    *responses* (SSE) are unaffected — this only inspects the request side.
-    A body over the limit fails closed with 413.
+
+class BodySizeLimitMiddleware:
+    """Reject requests whose body exceeds the configured cap.
+
+    M-3: this is a **pure ASGI** middleware, not a ``BaseHTTPMiddleware``.
+    The old dispatch only checked the ``Content-Length`` header, so a chunked
+    request (no Content-Length) bypassed the cap entirely. We now also count
+    the bytes actually received and fail closed with 413 the moment the total
+    crosses the limit. It must be pure ASGI because a ``BaseHTTPMiddleware``
+    that consumes ``request.stream()`` to measure the body would hand a
+    drained (empty) body to the downstream route.
+
+    Streaming *responses* (SSE) are unaffected — this only inspects the
+    request side.
     """
 
     def __init__(self, app: ASGIApp, max_bytes: int) -> None:
-        super().__init__(app)
+        self.app = app
         self._max_bytes = max_bytes
 
-    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
-        content_length = request.headers.get("content-length")
-        if content_length is not None:
-            try:
-                declared = int(content_length)
-            except ValueError:
-                declared = -1
-            if declared > self._max_bytes:
-                return JSONResponse(
-                    status_code=413,
-                    content={
-                        "detail": (
-                            f"Request body too large: {declared} bytes exceeds "
-                            f"the {self._max_bytes}-byte limit."
-                        )
-                    },
+    def _too_large(self, observed: int) -> JSONResponse:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "detail": (
+                    f"Request body too large: {observed} bytes exceeds "
+                    f"the {self._max_bytes}-byte limit."
                 )
-        return await call_next(request)
+            },
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        for key, value in scope.get("headers", []):
+            if key == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    break
+                if declared > self._max_bytes:
+                    await self._too_large(declared)(scope, receive, send)
+                    return
+                break
+        received = 0
+        response_started = False
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self._max_bytes:
+                    raise _BodyTooLarge(received)
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except _BodyTooLarge as exc:
+            if response_started:
+                raise
+            await self._too_large(int(exc.args[0]))(scope, receive, send)
 
 
 class HostValidationMiddleware(BaseHTTPMiddleware):
@@ -409,10 +450,12 @@ def create_app(config_path: str | None = None) -> FastAPI:
     )
     app.add_middleware(HostValidationMiddleware, allowed_hosts=allowed_hosts)
 
-    # M14: request body size limit (DoS protection). Added after the Host
-    # middleware so that — because add_middleware wraps outermost-last — Host
-    # validation runs first and the size guard second. SSE streaming responses
-    # are unaffected: the check only reads the request Content-Length.
+    # M14: request body size limit (DoS protection). ``add_middleware`` wraps
+    # outermost-last, so the middleware added *after* HostValidation ends up
+    # the outermost layer — i.e. the size guard runs FIRST, before Host
+    # validation. That ordering is harmless: an oversized/chunked body is
+    # rejected as early as possible. SSE streaming responses are unaffected;
+    # this only inspects the request side.
     max_body_bytes = _parse_max_body_bytes(
         os.environ.get(_MAX_BODY_BYTES_ENV)
     )

@@ -43,6 +43,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Wipe env vars that the loader picks up so tests are deterministic."""
     for var in (
         "ALLOW_PAID",
+        "CODEROUTER_ALLOW_CWD_CONFIG",
         "CODEROUTER_CONFIG",
         "CODEROUTER_MODE",
         "OPENROUTER_API_KEY",

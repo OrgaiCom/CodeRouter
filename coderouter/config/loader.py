@@ -3,21 +3,26 @@
 Search order (first hit wins):
     1. Path passed explicitly (CLI --config flag)
     2. $CODEROUTER_CONFIG env var
-    3. ./providers.yaml (current working dir)
+    3. ./providers.yaml (current working dir) — opt-in since v2.13.0,
+       gated behind ``CODEROUTER_ALLOW_CWD_CONFIG`` (truthy: 1/true/yes/on)
     4. ~/.coderouter/providers.yaml
 
 Secrets are resolved by reading the env var named by `api_key_env`.
 
 .. note::
-    **[Unreleased] deprecation notice (planned v2.12.0):** step 3 above
-    (implicit CWD discovery) is slated to become opt-in, gated behind
-    ``CODEROUTER_ALLOW_CWD_CONFIG``. Landing that change without warning
-    first would silently break anyone currently relying on "run from the
-    directory with providers.yaml in it" with no diagnostic. Until that
-    lands, :func:`load_config` emits a one-time ``cwd-config-loaded``
-    warning whenever step 3 is the one that actually resolved — never
-    when an explicit ``--config`` / ``CODEROUTER_CONFIG`` path was used,
-    even if it happens to point at the same file.
+    **v2.13.0 (security):** step 3 above (implicit CWD discovery) is now
+    opt-in, gated behind ``CODEROUTER_ALLOW_CWD_CONFIG``. It was a code
+    execution vector: a hostile ``providers.yaml`` dropped into a repo
+    could steer ``restart_command`` / ``launcher.backends[*].binary`` /
+    ``launcher.bench.command_template`` — all of which name executables —
+    simply because CodeRouter happened to be started from that directory.
+    When the opt-in is enabled and step 3 resolves the config, a one-time
+    ``cwd-config-loaded`` warning fires (never when an explicit
+    ``--config`` / ``CODEROUTER_CONFIG`` path was used, even if it happens
+    to point at the same file). When the opt-in is NOT set but a
+    ``./providers.yaml`` exists and was not explicitly named, a one-time
+    ``cwd-config-skipped`` warning fires so the operator understands why
+    that file was ignored.
 """
 
 from __future__ import annotations
@@ -32,10 +37,25 @@ from coderouter.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Guards the one-time [Unreleased]/v2.12.0 CWD-config deprecation warning
-# (see module docstring) so a process that calls load_config() repeatedly
-# (tests, hot-reload, multiple create_app() calls) only logs it once.
+# Name of the env var that opts CWD ``providers.yaml`` discovery back in
+# (see module docstring). v2.13.0 gates step 3 of the search behind it.
+CWD_CONFIG_ENV = "CODEROUTER_ALLOW_CWD_CONFIG"
+# Truthy vocabulary shared by every CWD-opt-in / ALLOW_PAID style toggle.
+_TRUTHY = {"1", "true", "yes", "on"}
+
+# Guards the one-time ``cwd-config-loaded`` warning (opt-in enabled and the
+# CWD step actually resolved) so a process that calls load_config()
+# repeatedly (tests, hot-reload, multiple create_app() calls) only logs it
+# once.
 _cwd_config_warning_emitted = False
+# Guards the one-time ``cwd-config-skipped`` warning (opt-in NOT set but a
+# ./providers.yaml exists and was ignored) — same once-per-process rationale.
+_cwd_config_skip_warning_emitted = False
+
+
+def cwd_config_allowed() -> bool:
+    """True iff the CWD ``providers.yaml`` opt-in is enabled (v2.13.0)."""
+    return os.environ.get(CWD_CONFIG_ENV, "").strip().lower() in _TRUTHY
 
 
 def _candidate_paths(explicit: str | os.PathLike[str] | None) -> list[Path]:
@@ -44,27 +64,58 @@ def _candidate_paths(explicit: str | os.PathLike[str] | None) -> list[Path]:
         paths.append(Path(explicit))
     if env_path := os.environ.get("CODEROUTER_CONFIG"):
         paths.append(Path(env_path))
-    paths.append(Path.cwd() / "providers.yaml")
+    # v2.13.0: implicit CWD discovery is opt-in — a hostile providers.yaml
+    # dropped into a repo could otherwise steer restart_command / launcher
+    # binaries simply because CodeRouter was started from that directory.
+    if cwd_config_allowed():
+        paths.append(Path.cwd() / "providers.yaml")
     paths.append(Path.home() / ".coderouter" / "providers.yaml")
     return paths
+
+
+def resolve_config_path(
+    explicit: str | os.PathLike[str] | None = None,
+) -> Path | None:
+    """Return the config file the loader would pick, or None if none exists.
+
+    Single source of truth for the search order so callers (e.g.
+    ``coderouter.cli._resolve_config_path`` driving ``doctor --apply``)
+    never re-implement it. Re-implementing it risks writing back to a
+    different file than the one :func:`load_config` actually read — the
+    exact regression the v2.13.0 CWD opt-in would otherwise introduce.
+    """
+    return next((p for p in _candidate_paths(explicit) if p.is_file()), None)
+
+
+def _explicitly_named(
+    path: Path, explicit: str | os.PathLike[str] | None
+) -> bool:
+    """True iff ``path`` matches the literal --config or CODEROUTER_CONFIG value.
+
+    Used to keep the CWD warnings quiet when ``./providers.yaml`` was
+    chosen on purpose (an explicit choice, however coincidental, is not
+    the implicit-discovery behaviour being gated).
+    """
+    if explicit and Path(explicit) == path:
+        return True
+    env_path = os.environ.get("CODEROUTER_CONFIG")
+    return env_path is not None and Path(env_path) == path
 
 
 def _warn_if_cwd_config(
     chosen: Path, *, explicit: str | os.PathLike[str] | None
 ) -> None:
-    """Emit the one-time [Unreleased]/v2.12.0 CWD-config deprecation warning.
+    """Emit the one-time ``cwd-config-loaded`` warning (opt-in is enabled).
 
     Only fires when ``chosen`` was resolved via the *implicit* CWD-search
-    step. Compares ``chosen`` against the *literal* explicit / env
-    candidate paths (not merely whether those inputs were set) so that:
-
-      * an explicit ``--config`` (or ``CODEROUTER_CONFIG``) path that
-        happens to coincide with ``./providers.yaml`` stays quiet — an
-        explicit choice, however coincidental, is not the thing being
-        deprecated; but
-      * an explicit path/env var that was set but did NOT resolve (file
-        missing, so the search fell through to CWD) still warns, because
-        the CWD step is what actually served the config in that case.
+    step — which, since v2.13.0, only runs when
+    ``CODEROUTER_ALLOW_CWD_CONFIG`` is set. Compares ``chosen`` against the
+    *literal* explicit / env candidate paths (not merely whether those
+    inputs were set) so that an explicit ``--config`` (or
+    ``CODEROUTER_CONFIG``) path that happens to coincide with
+    ``./providers.yaml`` stays quiet, while an explicit path/env var that
+    was set but did NOT resolve (file missing, search fell through to CWD)
+    still warns — the CWD step is what actually served the config there.
     """
     global _cwd_config_warning_emitted
     if _cwd_config_warning_emitted:
@@ -72,9 +123,7 @@ def _warn_if_cwd_config(
     cwd_path = Path.cwd() / "providers.yaml"
     if chosen != cwd_path:
         return
-    if explicit and Path(explicit) == chosen:
-        return
-    if (env_path := os.environ.get("CODEROUTER_CONFIG")) and Path(env_path) == chosen:
+    if _explicitly_named(chosen, explicit):
         return
 
     _cwd_config_warning_emitted = True
@@ -84,26 +133,76 @@ def _warn_if_cwd_config(
             "path": str(chosen),
             "hint": (
                 f"loaded providers.yaml from the current working "
-                f"directory ({chosen}). Starting in v2.12.0, this "
-                "implicit CWD discovery becomes opt-in (gated behind "
-                "CODEROUTER_ALLOW_CWD_CONFIG) — pass --config or set "
-                "CODEROUTER_CONFIG to pin the file explicitly and avoid "
-                "a startup break when that lands."
+                f"directory ({chosen}) because CODEROUTER_ALLOW_CWD_CONFIG "
+                "opt-in is enabled. This file's restart_command / "
+                "launcher.backends[*].binary / "
+                "launcher.bench.command_template decide which executables "
+                "run — only enable the opt-in in directories you trust."
             ),
         },
     )
 
 
+def _warn_if_cwd_config_skipped(
+    explicit: str | os.PathLike[str] | None,
+) -> Path | None:
+    """Warn once when a ./providers.yaml exists but was skipped (no opt-in).
+
+    Returns the skipped CWD path (so :func:`load_config` can name it in a
+    later ``FileNotFoundError``), or None when there is nothing to skip:
+    the opt-in is enabled, no ``./providers.yaml`` exists, or the file was
+    explicitly named (``--config`` / ``CODEROUTER_CONFIG``) — in which case
+    it is not being skipped at all.
+    """
+    global _cwd_config_skip_warning_emitted
+    if cwd_config_allowed():
+        return None
+    cwd_path = Path.cwd() / "providers.yaml"
+    if not cwd_path.is_file():
+        return None
+    if _explicitly_named(cwd_path, explicit):
+        return None
+
+    if not _cwd_config_skip_warning_emitted:
+        _cwd_config_skip_warning_emitted = True
+        logger.warning(
+            "cwd-config-skipped",
+            extra={
+                "path": str(cwd_path),
+                "hint": (
+                    f"found providers.yaml in the current working "
+                    f"directory ({cwd_path}) but did NOT load it: implicit "
+                    "CWD discovery is opt-in since v2.13.0 (a hostile "
+                    "providers.yaml can steer restart_command / launcher "
+                    "binaries). To use it, set CODEROUTER_ALLOW_CWD_CONFIG=1 "
+                    "(only in directories you trust) or pass --config "
+                    f"{cwd_path} to name it explicitly."
+                ),
+            },
+        )
+    return cwd_path
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
     """Load providers.yaml + apply ALLOW_PAID env override."""
+    skipped_cwd = _warn_if_cwd_config_skipped(path)
     candidates = _candidate_paths(path)
     chosen: Path | None = next((p for p in candidates if p.is_file()), None)
     if chosen is None:
         searched = "\n  ".join(str(p) for p in candidates)
-        raise FileNotFoundError(
+        message = (
             f"providers.yaml not found. Searched:\n  {searched}\n"
             f"Hint: copy examples/providers.yaml to ~/.coderouter/providers.yaml"
         )
+        if skipped_cwd is not None:
+            message += (
+                f"\nNote: {skipped_cwd} exists but was NOT read — implicit "
+                "CWD discovery is opt-in since v2.13.0. Three ways to use "
+                f"it: pass --config {skipped_cwd}, set "
+                f"CODEROUTER_CONFIG={skipped_cwd}, or set "
+                "CODEROUTER_ALLOW_CWD_CONFIG=1 (only in directories you trust)."
+            )
+        raise FileNotFoundError(message)
     _warn_if_cwd_config(chosen, explicit=path)
 
     with chosen.open("r", encoding="utf-8") as f:

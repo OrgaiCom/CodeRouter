@@ -50,6 +50,14 @@ Design choices
   are guarded independently.
 - **No new dependency** — subprocess (stdlib) for restart commands,
   asyncio for recovery probe scheduling.
+- **v2.13.0: argv dispatch (shell=False)** — ``restart_command`` is run
+  as ``subprocess.run(shlex.split(command), shell=False)``, never through
+  a shell. A value containing shell metacharacters is refused outright
+  (not run), because under shell=False those tokens would half-execute
+  the command (e.g. ``touch a; b`` would create a file named ``a;`` and
+  exit 0, falsely reporting a successful restart). This closes the H-1
+  code-execution vector where a hostile CWD providers.yaml could drive
+  arbitrary shell through self-healing.
 - **Restart is opt-in** — only providers with ``restart_command``
   set get automatic restart. Others rely solely on recovery probes
   (waiting for manual restart by the operator).
@@ -62,12 +70,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import shlex
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
 
-from coderouter.config.schemas import ProviderConfig
+from coderouter.config.schemas import RESTART_COMMAND_SHELL_META_RE, ProviderConfig
 from coderouter.logging import (
     get_logger,
     log_self_healing_exclude,
@@ -268,6 +278,51 @@ class SelfHealingOrchestrator:
 
         provider = provider_config.name
 
+        # v2.13.0: argv dispatch (shell=False). We validate/parse the command
+        # BEFORE taking the per-provider restart lock so a malformed value
+        # short-circuits without ever touching the lock (and a later valid
+        # attempt is unaffected).
+        #
+        # A-5: refuse anything with shell metacharacters. Under shell=False,
+        # ``touch a; b`` would create a file literally named ``a;`` and exit
+        # 0 — reporting a "successful" restart while only half-executing the
+        # intended pipeline. Refusing loudly beats half-running silently.
+        if RESTART_COMMAND_SHELL_META_RE.search(command):
+            log_self_healing_restart(
+                logger,
+                provider=provider,
+                command=command,
+                success=False,
+                error=(
+                    "restart_command contains shell syntax but is no longer "
+                    "run through a shell (v2.13.0). Wrap it in a script and "
+                    "point restart_command at that script, or write it as "
+                    "/bin/sh -c '...'."
+                ),
+            )
+            return False
+
+        try:
+            argv = shlex.split(command, posix=(os.name != "nt"))
+        except ValueError as exc:
+            log_self_healing_restart(
+                logger,
+                provider=provider,
+                command=command,
+                success=False,
+                error=f"unparsable restart_command: {exc}",
+            )
+            return False
+        if not argv:
+            log_self_healing_restart(
+                logger,
+                provider=provider,
+                command=command,
+                success=False,
+                error="restart_command is empty after parsing",
+            )
+            return False
+
         # Get or create a per-provider lock.
         with self._lock:
             if provider not in self._restart_locks:
@@ -281,8 +336,8 @@ class SelfHealingOrchestrator:
 
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                argv,
+                shell=False,
                 capture_output=True,
                 timeout=timeout_s,
                 text=True,
