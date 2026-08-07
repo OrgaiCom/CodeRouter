@@ -222,19 +222,20 @@ def test_start_with_token_set_requires_header(
 def test_launcher_page_injects_token(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The HTML must carry the configured token for the inline fetch calls."""
+    """H-3: the token is NEVER embedded; only the auth-required flag is."""
     monkeypatch.setenv("CODEROUTER_LAUNCHER_TOKEN", "s3cret")
     body = client.get("/launcher").text
-    assert 'const LAUNCHER_TOKEN = "s3cret";' in body
+    assert "s3cret" not in body
+    assert "const AUTH_REQUIRED = true;" in body
 
 
 def test_launcher_page_empty_token_by_default(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no token env the placeholder collapses to an empty string."""
+    """With no token env the auth-required flag is false."""
     monkeypatch.delenv("CODEROUTER_LAUNCHER_TOKEN", raising=False)
     body = client.get("/launcher").text
-    assert 'const LAUNCHER_TOKEN = "";' in body
+    assert "const AUTH_REQUIRED = false;" in body
 
 
 # ---------------------------------------------------------------------------

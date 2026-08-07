@@ -465,3 +465,71 @@ def test_stats_propagates_nonzero_exit_code(
     )
     rc = cli.main(["stats", "--once"])
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# v2.13.0: _resolve_config_path delegates to loader.resolve_config_path so
+# `doctor --apply` writes back to exactly the file load_config read (and
+# never re-implements the CWD opt-in gate).
+# ---------------------------------------------------------------------------
+
+
+def _seed_home_and_cwd(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    home: bool,
+    cwd: bool,
+):
+    """Isolate HOME + CWD, optionally seeding each providers.yaml. Returns paths."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    home_path = home_dir / ".coderouter" / "providers.yaml"
+    if home:
+        home_path.parent.mkdir()
+        home_path.write_text("providers: []\n", encoding="utf-8")
+
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    cwd_path = cwd_dir / "providers.yaml"
+    if cwd:
+        cwd_path.write_text("providers: []\n", encoding="utf-8")
+    monkeypatch.chdir(cwd_dir)
+    return home_path, cwd_path
+
+
+def test_cli_resolve_config_path_skips_cwd_without_optin(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the opt-in, --apply must not target the CWD providers.yaml.
+
+    This is the doctor --apply regression the delegation guards against:
+    writing patches into a file load_config never read.
+    """
+    home_path, cwd_path = _seed_home_and_cwd(
+        tmp_path, monkeypatch, home=True, cwd=True
+    )
+    assert cli._resolve_config_path(None) == home_path
+    assert cli._resolve_config_path(None) != cwd_path
+
+
+def test_cli_resolve_config_path_honours_optin(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CODEROUTER_ALLOW_CWD_CONFIG set, the CWD file is targeted."""
+    _home_path, cwd_path = _seed_home_and_cwd(
+        tmp_path, monkeypatch, home=True, cwd=True
+    )
+    monkeypatch.setenv("CODEROUTER_ALLOW_CWD_CONFIG", "1")
+    assert cli._resolve_config_path(None) == cwd_path
+
+
+def test_cli_resolve_config_path_falls_back_when_nothing_exists(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No config anywhere → fall back to ~/.coderouter/providers.yaml."""
+    home_path, _cwd_path = _seed_home_and_cwd(
+        tmp_path, monkeypatch, home=False, cwd=False
+    )
+    assert cli._resolve_config_path(None) == home_path

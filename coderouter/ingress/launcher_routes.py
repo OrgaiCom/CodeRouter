@@ -552,6 +552,47 @@ def _resolve_within_model_dirs(model_path: str, model_dirs: list[str]) -> Path:
     raise ValueError("model_path is not under any configured model_dirs.")
 
 
+_model_dirs_warning_emitted = False
+
+
+def _assert_model_path_allowed(
+    launcher_cfg: Any, model_path: str | None, *, field: str
+) -> None:
+    """model_path が launcher.model_dirs 配下か検査(パスは書き換えない)。
+
+    M-1: ``/api/launcher/start`` と ``/sweep/start`` はこれまで任意の
+    ファイルシステムパスを spawn に渡していた。ここで ``model_dirs`` 配下に
+    限定する。ただし **検証のみ**で resolve 済みパスを spawn に渡さない
+    (macOS の /var→/private/var symlink で argv が変わり既存テストが落ちる)。
+    ``model_dirs`` 未設定なら従来どおり通し、一度だけ警告する。
+    """
+    global _model_dirs_warning_emitted
+    if not model_path:
+        return
+    model_dirs: list[str] = (
+        list(getattr(launcher_cfg, "model_dirs", []) or []) if launcher_cfg else []
+    )
+    if not model_dirs:
+        if not _model_dirs_warning_emitted:
+            logger.warning(
+                "launcher-model-dirs-unconfigured",
+                extra={
+                    "hint": (
+                        "launcher.model_dirs is empty; POST /api/launcher/start and "
+                        "/sweep/start accept any filesystem path. Configure "
+                        "launcher.model_dirs when the launcher is reachable from "
+                        "anything but loopback."
+                    )
+                },
+            )
+            _model_dirs_warning_emitted = True
+        return
+    try:
+        _resolve_within_model_dirs(model_path, model_dirs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field}: {exc}") from exc
+
+
 def _option_tokens(options: dict[str, Any]) -> list[str]:
     """Flatten an ``options`` dict into CLI tokens (``{flag: val}`` semantics).
 
@@ -1410,6 +1451,8 @@ async def api_start(req: StartRequest, request: Request) -> dict[str, Any]:
     cfg = request.app.state.config
     launcher_cfg = getattr(cfg, "launcher", None)
     _assert_backend_declared(launcher_cfg, req.backend)
+    _assert_model_path_allowed(launcher_cfg, req.model_path, field="model_path")
+    _assert_model_path_allowed(launcher_cfg, req.draft_model_path, field="draft_model_path")
     # デバイス選択 → CLI 断片(llama.cpp のみ・選択された場合のみ)。未指定なら
     # None を渡し、既存の argv と完全一致(後方互換)。
     device_args: list[str] | None = None
@@ -1665,8 +1708,10 @@ class SweepRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     extra_args: str = ""
     configs: list[SweepConfigItem] = Field(default_factory=list)
-    bench_command: str | None = None  # None なら launcher.bench 既定
-    runs: int | None = None
+    bench_preset: str | None = None  # None なら launcher.bench.default_preset / 暗黙 default
+    runs: int | None = Field(default=None, ge=1, le=1000)
+    # 廃止フィールド。黙って捨てると事故になるので api_sweep_start で 400 にする。
+    bench_command: str | None = None
     results_dir: str | None = None
 
 
@@ -1872,25 +1917,73 @@ class _SweepRunner:
         await self._safe_stop(mp.id)
 
 
-def _bench_defaults(launcher_cfg: Any) -> tuple[str, int, str | None, float]:
-    """launcher.bench(あれば)からベンチ既定を取り出す。無ければハードコード。"""
-    default_template = "llmbench run --model local-openai --runs {runs}"
-    default_runs = 5
-    default_results_dir: str | None = None
-    default_readiness = _DEFAULT_READINESS_TIMEOUT_S
+_HARDCODED_BENCH_TEMPLATE = "llmbench run --model local-openai --runs {runs}"
+_HARDCODED_BENCH_RUNS = 5
+
+
+@dataclass(frozen=True)
+class _ResolvedBench:
+    key: str
+    name: str
+    command_template: str
+    runs: int
+    results_dir: str | None
+    readiness_timeout_s: float
+
+
+def _bench_preset_map(launcher_cfg: Any) -> dict[str, Any]:
     bench_cfg = getattr(launcher_cfg, "bench", None) if launcher_cfg else None
-    if bench_cfg is not None:
-        default_template = bench_cfg.command_template
-        default_runs = bench_cfg.runs
-        default_results_dir = bench_cfg.results_dir
-        default_readiness = bench_cfg.readiness_timeout_s
-    return default_template, default_runs, default_results_dir, default_readiness
+    return dict(getattr(bench_cfg, "presets", {}) or {})
+
+
+def _resolve_bench(launcher_cfg: Any, preset_key: str | None) -> _ResolvedBench:
+    """H-2: リクエストの bench_preset を config 上の実体へ解決。無いキーは ValueError(→400)。"""
+    bench_cfg = getattr(launcher_cfg, "bench", None) if launcher_cfg else None
+    base_template = getattr(bench_cfg, "command_template", None) or _HARDCODED_BENCH_TEMPLATE
+    base_runs = getattr(bench_cfg, "runs", None) or _HARDCODED_BENCH_RUNS
+    base_results = getattr(bench_cfg, "results_dir", None)
+    readiness = getattr(bench_cfg, "readiness_timeout_s", None) or _DEFAULT_READINESS_TIMEOUT_S
+    presets = _bench_preset_map(launcher_cfg)
+    key = preset_key or getattr(bench_cfg, "default_preset", None)
+    if key is None or (key == "default" and "default" not in presets):
+        return _ResolvedBench(
+            key="default",
+            name="default (launcher.bench.command_template)",
+            command_template=base_template,
+            runs=base_runs,
+            results_dir=base_results,
+            readiness_timeout_s=readiness,
+        )
+    preset = presets.get(key)
+    if preset is None:
+        known = sorted(presets) or ["default"]
+        raise ValueError(
+            f"Unknown bench preset {key!r}. Declare it under launcher.bench.presets "
+            f"in providers.yaml (known: {known})."
+        )
+    return _ResolvedBench(
+        key=key,
+        name=preset.name,
+        command_template=preset.command_template,
+        runs=preset.runs if preset.runs is not None else base_runs,
+        results_dir=preset.results_dir if preset.results_dir is not None else base_results,
+        readiness_timeout_s=readiness,
+    )
 
 
 @router.post("/api/launcher/sweep/start")
 async def api_sweep_start(req: SweepRequest, request: Request) -> dict[str, Any]:
     """ベンチスイープを開始する(設計 §4.4 / §4.5)。書き込み系 → token 必須。"""
     _require_launcher_token(request)
+    if req.bench_command is not None or req.results_dir is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "bench_command / results_dir are no longer accepted from the request. "
+                "Declare the command under launcher.bench.presets in providers.yaml and "
+                "pass its key as 'bench_preset'."
+            ),
+        )
     app = request.app
 
     existing = getattr(app.state, "launcher_sweep", None)
@@ -1901,12 +1994,12 @@ async def api_sweep_start(req: SweepRequest, request: Request) -> dict[str, Any]
 
     cfg = app.state.config
     launcher_cfg = getattr(cfg, "launcher", None)
-    default_template, default_runs, default_results_dir, default_readiness = (
-        _bench_defaults(launcher_cfg)
-    )
-    bench_command = req.bench_command or default_template
-    runs = req.runs if req.runs is not None else default_runs
-    results_dir = req.results_dir if req.results_dir is not None else default_results_dir
+    try:
+        bench = _resolve_bench(launcher_cfg, req.bench_preset)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    runs = req.runs if req.runs is not None else bench.runs
+    _assert_model_path_allowed(launcher_cfg, req.model_path, field="model_path")
 
     # ポート競合: registry の使用中ポート照合 + best-effort な空きチェック。
     reg = _registry_for_app(app)
@@ -1945,17 +2038,60 @@ async def api_sweep_start(req: SweepRequest, request: Request) -> dict[str, Any]
         model_path=req.model_path,
         backend=req.backend,
         port=req.port,
-        bench_cmd_template=bench_command,
-        results_dir=results_dir,
+        bench_cmd_template=bench.command_template,
+        results_dir=bench.results_dir,
         options=req.options,
         extra_args=req.extra_args,
     )
     runner = _SweepRunner(
-        app, launcher_cfg, plan, runs=runs, readiness_timeout_s=default_readiness
+        app, launcher_cfg, plan, runs=runs, readiness_timeout_s=bench.readiness_timeout_s
     )
     app.state.launcher_sweep = runner
     runner.start()
-    return {"sweep_id": runner.sweep_id, "steps": [s.as_dict() for s in steps]}
+    return {
+        "sweep_id": runner.sweep_id,
+        "steps": [s.as_dict() for s in steps],
+        "bench_preset": bench.key,
+    }
+
+
+@router.get("/api/launcher/bench-presets")
+async def api_bench_presets(request: Request) -> dict[str, Any]:
+    """スイープ UI が選べるベンチプリセットのキー一覧。読み取り系 → 認証なし。
+
+    H-2: command_template はローカルパスが混ざりうるので **返さない**。
+    key/name/runs/has_results_dir だけ返す。presets に "default" が無ければ
+    暗黙 default(launcher.bench.command_template 由来)を先頭に挿入する。
+    """
+    cfg = request.app.state.config
+    launcher_cfg = getattr(cfg, "launcher", None)
+    bench_cfg = getattr(launcher_cfg, "bench", None) if launcher_cfg else None
+    presets = _bench_preset_map(launcher_cfg)
+    default_preset = getattr(bench_cfg, "default_preset", None)
+    base_results = getattr(bench_cfg, "results_dir", None)
+    base_runs = getattr(bench_cfg, "runs", None) or _HARDCODED_BENCH_RUNS
+    items: list[dict[str, Any]] = []
+    if "default" not in presets:
+        items.append(
+            {
+                "key": "default",
+                "name": "default (launcher.bench.command_template)",
+                "runs": base_runs,
+                "has_results_dir": base_results is not None,
+            }
+        )
+    for key, preset in presets.items():
+        items.append(
+            {
+                "key": key,
+                "name": preset.name,
+                "runs": preset.runs if preset.runs is not None else base_runs,
+                "has_results_dir": (
+                    preset.results_dir is not None or base_results is not None
+                ),
+            }
+        )
+    return {"presets": items, "default": default_preset}
 
 
 @router.get("/api/launcher/sweep/status")
@@ -2048,6 +2184,7 @@ _LAUNCHER_HTML = r"""<!doctype html>
     <a href="/dashboard" class="text-slate-400 hover:text-slate-200 transition-colors">Dashboard</a>
     <span class="text-slate-100 font-medium border-b border-indigo-400 pb-0.5">Launcher</span>
     <span id="status-msg" class="ml-auto text-xs text-slate-500"></span>
+    <button id="token-badge" onclick="promptToken()" class="btn-sm btn-red hidden">🔑 トークン未設定</button>
   </div>
 </header>
 
@@ -2213,18 +2350,12 @@ _LAUNCHER_HTML = r"""<!doctype html>
           <input id="sweep-port" type="number" value="8090" min="1024" max="65535" />
         </div>
         <div>
-          <label class="block text-xs text-slate-400 mb-1">ベンチコマンド ({port} {config} {base_url} {results_dir} {runs} を置換)</label>
-          <input id="sweep-cmd" type="text" placeholder="llmbench run --model local-openai --runs {runs}" />
+          <label class="block text-xs text-slate-400 mb-1">ベンチプリセット (providers.yaml の launcher.bench.presets)</label>
+          <select id="sweep-preset"></select>
         </div>
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-xs text-slate-400 mb-1">runs</label>
-            <input id="sweep-runs" type="number" value="5" min="1" max="1000" />
-          </div>
-          <div>
-            <label class="block text-xs text-slate-400 mb-1">results_dir (任意)</label>
-            <input id="sweep-results" type="text" placeholder="results/" />
-          </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">runs</label>
+          <input id="sweep-runs" type="number" value="5" min="1" max="1000" />
         </div>
       </div>
     </div>
@@ -2269,14 +2400,30 @@ _LAUNCHER_HTML = r"""<!doctype html>
   "use strict";
 
   const POLL_MS = 3000;
-  // H8: launcher shared-secret. The server substitutes __LAUNCHER_TOKEN__
-  // with the configured token (or an empty string when auth is disabled).
-  const LAUNCHER_TOKEN = "__LAUNCHER_TOKEN__";
-  // Build headers for state-changing requests, adding the token only when set.
+  // H-3: the token is NEVER embedded in the HTML. The server only tells us
+  // whether auth is required; the token itself is entered by the operator and
+  // kept in sessionStorage (cleared when the tab closes).
+  const AUTH_REQUIRED = __LAUNCHER_AUTH_REQUIRED__;
+  const TOKEN_KEY = "coderouter-launcher-token";
+  let launcherToken = sessionStorage.getItem(TOKEN_KEY) || "";
   const authHeaders = (base) => {
     const h = Object.assign({}, base || {});
-    if (LAUNCHER_TOKEN) h["X-CodeRouter-Token"] = LAUNCHER_TOKEN;
+    if (launcherToken) h["X-CodeRouter-Token"] = launcherToken;
     return h;
+  };
+  const updateTokenBadge = () => {
+    const el = document.getElementById("token-badge");
+    if (!el) return;
+    el.textContent = launcherToken ? "🔑 トークン設定済" : "🔑 トークン未設定";
+    el.className = "btn-sm " + (launcherToken ? "btn-slate" : "btn-red") + (AUTH_REQUIRED ? "" : " hidden");
+  };
+  window.promptToken = () => {
+    const v = window.prompt("CODEROUTER_LAUNCHER_TOKEN を入力してください", "");
+    if (v === null) return;
+    launcherToken = v.trim();
+    if (launcherToken) sessionStorage.setItem(TOKEN_KEY, launcherToken);
+    else sessionStorage.removeItem(TOKEN_KEY);
+    updateTokenBadge();
   };
   let allProfiles = {};      // backend → [{name, args}]
   const _modelCache = {};    // index → {path, name, dir, size_gb}
@@ -2808,14 +2955,12 @@ _LAUNCHER_HTML = r"""<!doctype html>
                   tensor_split: c.tensor_split, backend: c.backend || null}));
     if (!configs.length) { showSweepErr("構成を 1 つ以上選択してください"); return; }
     const port = parseInt(document.getElementById("sweep-port").value);
-    const cmd = document.getElementById("sweep-cmd").value.trim();
+    const preset = document.getElementById("sweep-preset").value || null;
     const runs = parseInt(document.getElementById("sweep-runs").value);
-    const results = document.getElementById("sweep-results").value.trim();
     const body = {
       backend: "llama.cpp", model_path: model, port, configs,
-      bench_command: cmd || null,
+      bench_preset: preset,
       runs: isNaN(runs) ? null : runs,
-      results_dir: results || null,
     };
     try {
       const r = await fetch("/api/launcher/sweep/start", {
@@ -2970,12 +3115,12 @@ _LAUNCHER_HTML = r"""<!doctype html>
       const modelName = p.model_path.split("/").pop();
       const isActive = p.status === "running" || p.status === "loading" || p.status === "starting";
       const stopBtn = isActive
-        ? `<button onclick="stopProc('${p.id}')" class="btn-sm btn-red">■ 停止</button>`
+        ? `<button data-act="stop" data-id="${esc(p.id)}" class="btn-sm btn-red">■ 停止</button>`
         : "";
       const delBtn = !isActive
-        ? `<button onclick="deleteProc('${p.id}')" class="btn-sm btn-slate ml-1">✕</button>`
+        ? `<button data-act="del" data-id="${esc(p.id)}" class="btn-sm btn-slate ml-1">✕</button>`
         : "";
-      const logBtn = `<button onclick="openLog('${p.id}','${esc(p.name)}')" class="btn-sm btn-indigo ml-1">📋 ログ</button>`;
+      const logBtn = `<button data-act="log" data-id="${esc(p.id)}" data-name="${esc(p.name)}" class="btn-sm btn-indigo ml-1">📋 ログ</button>`;
       // [Unreleased]: swap badge — marks processes SwapManager spawned
       // on demand, distinct from manually-started ones. Title shows the
       // catalog model name when the backend supplied it.
@@ -2993,6 +3138,18 @@ _LAUNCHER_HTML = r"""<!doctype html>
       </tr>`;
     }).join("");
   };
+
+  // M-2: no inline onclick with interpolated process fields (XSS). The row
+  // buttons carry data-* attributes; a single delegated listener dispatches.
+  document.getElementById("proc-table").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const id = btn.getAttribute("data-id");
+    const act = btn.getAttribute("data-act");
+    if (act === "stop") stopProc(id);
+    else if (act === "del") deleteProc(id);
+    else if (act === "log") openLog(id, btn.getAttribute("data-name") || "");
+  });
 
   window.stopProc = async (id) => {
     if (!confirm("プロセスを停止しますか?")) return;
@@ -3051,11 +3208,35 @@ _LAUNCHER_HTML = r"""<!doctype html>
     document.getElementById("log-panel").classList.add("hidden");
   };
 
+  // H-2: fill the sweep preset <select> from config-declared presets. The
+  // command_template is never sent to the browser; the operator only picks a key.
+  const fetchBenchPresets = async () => {
+    try {
+      const r = await fetch("/api/launcher/bench-presets");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      const sel = document.getElementById("sweep-preset");
+      if (!sel) return;
+      const presets = d.presets || [];
+      sel.innerHTML = presets.map((p) => {
+        const runs = (p.runs != null) ? ` — runs ${p.runs}` : "";
+        return `<option value="${esc(p.key)}">${esc(p.name)}${runs}</option>`;
+      }).join("");
+      const chosen = d.default || "default";
+      const keys = presets.map((p) => p.key);
+      sel.value = keys.includes(chosen) ? chosen : (keys[0] || "");
+    } catch (e) {
+      console.error("[Launcher] fetchBenchPresets failed:", e);
+    }
+  };
+
   // ── Init + polling ───────────────────────────────────────────────────────
 
   const init = async () => {
     updateDeviceBlock();
-    await Promise.all([fetchModels(), fetchProfiles(), fetchBackends(), fetchProcesses()]);
+    updateTokenBadge();
+    if (AUTH_REQUIRED && !launcherToken) promptToken();
+    await Promise.all([fetchModels(), fetchProfiles(), fetchBackends(), fetchProcesses(), fetchBenchPresets()]);
     pollSweep();  // 既存スイープがあれば表示 (running なら以後のポーリングを継続)
   };
 
@@ -3078,18 +3259,13 @@ _LAUNCHER_HTML = r"""<!doctype html>
 async def launcher_page() -> HTMLResponse:
     """Serve the launcher single-page UI.
 
-    H8: inject the configured launcher token so the inline JS can attach it
-    to state-changing requests. When the env var is unset the placeholder
-    becomes an empty string and the UI keeps working unauthenticated (the
-    historical local-only default). The token is escaped for a JS string
-    context to avoid breaking out of the double-quoted literal.
+    H-3: the launcher token is NEVER embedded in the served HTML (it used to be
+    substituted into a JS string literal, so anyone who could read the page —
+    including a browser cache or a shoulder-surfer — recovered the shared
+    secret). We now only substitute a boolean ``__LAUNCHER_AUTH_REQUIRED__``
+    telling the client whether auth is on; the operator enters the token in the
+    browser and it lives in ``sessionStorage`` only.
     """
-    token = os.environ.get(_LAUNCHER_TOKEN_ENV, "")
-    safe_token = (
-        token.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-    )
-    html = _LAUNCHER_HTML.replace("__LAUNCHER_TOKEN__", safe_token)
+    auth_required = "true" if os.environ.get(_LAUNCHER_TOKEN_ENV, "") else "false"
+    html = _LAUNCHER_HTML.replace("__LAUNCHER_AUTH_REQUIRED__", auth_required)
     return HTMLResponse(content=html)

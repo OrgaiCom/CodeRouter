@@ -432,6 +432,20 @@ def test_render_bench_posix_backslash_default(monkeypatch: pytest.MonkeyPatch) -
     assert argv[0] == "/usr/bin/llmbench"
 
 
+def test_render_bench_command_label_cannot_inject_argv() -> None:
+    # H-2: split は置換より先。config_label にスペースや追加フラグを混ぜても
+    # argv は増殖せず、値は必ず 1 トークンに収まる(引数注入不可)。
+    argv = render_bench_command(
+        "bench --tag {config} --runs {runs}",
+        port=9000,
+        config_label="dual --danger extra",
+        runs=3,
+    )
+    assert argv == ["bench", "--tag", "dual --danger extra", "--runs", "3"]
+    # 注入されたはずの独立フラグが argv 中に単独トークンとして現れない。
+    assert "--danger" not in argv
+
+
 # ---------------------------------------------------------------------------
 # load_latest_results / summarize_results
 # ---------------------------------------------------------------------------

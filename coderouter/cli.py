@@ -600,28 +600,27 @@ def _run_check_model(args: argparse.Namespace) -> int:
 
 
 def _resolve_config_path(explicit: str | None) -> Path:
-    """Mirror loader._candidate_paths and return the file actually used.
+    """Return the file the loader actually read, for ``--apply`` write-back.
 
-    Used by ``--apply`` to write back to the same path the loader
-    picked up when it parsed providers.yaml. Falls through the same
-    search order so a ``CODEROUTER_CONFIG`` env or default-path lookup
-    matches the live config.
+    Delegates the search order to
+    :func:`coderouter.config.loader.resolve_config_path` rather than
+    re-implementing it. Re-implementing it here is exactly how the
+    v2.13.0 CWD opt-in change would introduce a silent bug: if the loader
+    gates ``./providers.yaml`` behind ``CODEROUTER_ALLOW_CWD_CONFIG`` but
+    this copy still searched CWD unconditionally, ``doctor --apply`` would
+    write patches back into a file that ``load_config`` never read. Keeping
+    one source of truth makes that impossible.
+
+    When nothing exists, falls back to ``~/.coderouter/providers.yaml``
+    (the loader's last candidate) — the apply step surfaces a clearer
+    error against that path than this resolver would.
     """
-    import os
+    from coderouter.config.loader import resolve_config_path
 
-    candidates: list[Path] = []
-    if explicit:
-        candidates.append(Path(explicit))
-    if env_path := os.environ.get("CODEROUTER_CONFIG"):
-        candidates.append(Path(env_path))
-    candidates.append(Path.cwd() / "providers.yaml")
-    candidates.append(Path.home() / ".coderouter" / "providers.yaml")
-    for p in candidates:
-        if p.is_file():
-            return p
-    # Fall back to the last candidate even if absent — the apply step
-    # will surface a clearer error than this resolver would.
-    return candidates[-1]
+    resolved = resolve_config_path(explicit)
+    if resolved is not None:
+        return resolved
+    return Path.home() / ".coderouter" / "providers.yaml"
 
 
 def _write_verdict_line(*, write: bool, files_written: int) -> None:

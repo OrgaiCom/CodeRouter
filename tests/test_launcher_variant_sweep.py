@@ -22,6 +22,7 @@ from coderouter.config.schemas import (
     FallbackChain,
     LauncherBackendConfig,
     LauncherBenchConfig,
+    LauncherBenchPreset,
     LauncherConfig,
     ProviderConfig,
 )
@@ -136,7 +137,12 @@ def sweep_client(
                 "llama.cpp-cuda": LauncherBackendConfig(binary=CUDA_BIN),
                 "llama.cpp-vulkan": LauncherBackendConfig(binary=VULKAN_BIN),
             },
-            bench=LauncherBenchConfig(runs=1, readiness_timeout_s=5.0),
+            bench=LauncherBenchConfig(
+                runs=1,
+                readiness_timeout_s=5.0,
+                presets={"noop": LauncherBenchPreset(name="noop", command_template="true")},
+                default_preset="noop",
+            ),
         ),
     )
     monkeypatch.setattr("coderouter.ingress.app.load_config", lambda path=None: config)
@@ -163,7 +169,7 @@ def _sweep_body(model_file: str, configs: list[dict[str, Any]]) -> dict[str, Any
         "model_path": model_file,
         "port": 18190,
         "configs": configs,
-        "bench_command": "true",
+        "bench_preset": "noop",
         "runs": 1,
     }
 
