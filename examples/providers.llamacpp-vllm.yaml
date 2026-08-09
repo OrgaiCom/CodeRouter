@@ -2,11 +2,12 @@
 # CodeRouter providers.yaml — llama.cpp / vLLM ローカル推論サンプル
 # 【カテゴリ】 llama.cpp / vLLM ＋ Launcher（Ollama 不要）
 #
-# ★ 2026-08 更新: llama.cpp b10300 以降の新オプション体系に全面対応 ★
-#   自動メモリフィット (-fit) が既定 on になり、「-ngl 99 -c 8192 -fa on」を
-#   コピペする従来のテンプレは **むしろ遅く・OOM しやすく** なりました。
+# ★ 2026-08 更新: llama.cpp の自動メモリフィット体系に全面対応 ★
+#   -fit (自動メモリフィット) は PR #16653 / b7410 (2025-12-15) から **既定 on** です。
+#   「-ngl 99 -c 8192 -fa on」をコピペする従来のテンプレは、この自動調整を
+#   **丸ごと停止させる** ため、むしろ遅く・OOM しやすくなります。
 #   このファイルは「基本は書かない、足りないときだけ足す」方針で書き直しています。
-#   古い llama.cpp (b10200 以前) では -fit 系が無いため起動に失敗します。
+#   b7410 (2025-12-15) 以前の llama.cpp では -fit 系が無いため起動に失敗します。
 #
 # このファイルは以下を想定した最小構成です:
 #   - llama.cpp (llama-server) でモデルを起動
@@ -128,12 +129,33 @@ launcher:
     #     ・GPU レイヤ配分 (ngl)
     #     ・複数 GPU のテンソル分割 (tensor-split)
     #     ・テンソル上書き (tensor-buft-override)
-    #   を自動で決めます。**手で書いた項目だけ fit の調整対象から外れます。**
-    #   → 昔のテンプレを丸ごと貼ると fit が全部無効化され、OOM しやすくなります。
+    #   を自動で決めます。
+    #
+    # 【2-b】⚠⚠ ここが最重要: 手で書くと fit が「丸ごと」死ぬ項目がある ⚠⚠
+    #   fit は「既定値のままの項目だけ」を触る仕様です (common/fit.h)。
+    #   しかも項目によって、挙動が2種類に分かれます。
+    #
+    #   (A) その項目の調整だけ諦める … -c / --ctx-size
+    #       → fit は生き続け、レイヤ配分や tensor-split は自動のまま。安全。
+    #
+    #   (B) fit 全体が abort する … -ngl / -ts / -ot / -ncmoe / -cmoe /
+    #                               -sm row (複数GPU時) / -sm tensor
+    #       → 例: "n_gpu_layers already set by user to 99, abort"
+    #             "model_params::tensor_buft_overrides already set by user, abort"
+    #       ctx の自動縮小も、レイヤ配分も、tensor-split 生成も、全部止まります。
+    #
+    #   ★ しかも (B) はエラーになりません。WARN が1行出るだけで起動は続きます。
+    #     "failed to fit params to free device memory: ... abort"
+    #     気づかないまま OOM か VRAM スピルを踏むので、ログを必ず確認してください。
+    #
+    #   → つまり -ngl 99 を書き足す行為は「全層 GPU に載せる指示」ではなく、
+    #     「自動最適化を全部切って、あとは自分でやる宣言」です。
     #
     # 【3】したがって基本方針は「何も書かない」
     #   このファイルの推奨プロファイルは args がほぼ空です。異常ではありません。
     #   足りないときだけ、下の「VRAM 不足時の対処順」を上から順に足してください。
+    #   自分でチューニングしたいときは、まず `llama-fit-params` に fit の
+    #   決めた引数を吐かせて、それを起点にするのが上流の推奨フローです。
     #
     # 【4】VRAM 不足時の対処順 (上から試す)
     #   1. 何も指定せず起動 (fit に任せる)
@@ -141,17 +163,39 @@ launcher:
     #   3. -ctk q8_0 -ctv q8_0  … KV キャッシュ量子化。効果大
     #   4. -ub 256       … 物理バッチ縮小 (既定 512)
     #   5. -ncmoe N      … MoE モデル限定。先頭 N 層の MoE 重みを CPU に退避
+    #                      ⚠ ただし 4 までと違い、これは fit を abort させます (【2-b】)。
+    #                        fit は本来 MoE の exps を自分であふれさせる処理を持つので、
+    #                        まず 1〜4 を試し、それでも駄目なときだけ手動に切り替える。
     #
     # 【5】⚠ 削除済みオプション (書くと **起動失敗**)
-    #   --draft / --draft-n / --draft-max  → --spec-draft-n-max
-    #   --spec-ngram-size-n                → --spec-ngram-*-size-n
-    #   環境変数 LLAMA_ARG_DRAFT_MAX       → 同上 (env でも失敗する)
+    #   PR #22397 (b8955 / 2026-04-28) で投機デコードの引数が刷新されました。
+    #   --draft / --draft-n / --draft-max  → --spec-draft-n-max / --spec-ngram-mod-n-max
+    #   --draft-min / --draft-n-min        → --spec-draft-n-min / --spec-ngram-mod-n-min
+    #   --spec-ngram-size-n                → --spec-ngram-*-size-n / --spec-ngram-mod-n-match
+    #   エラー: "the argument has been removed. use --spec-draft-n-max or ..."
+    #   ⚠ 環境変数 LLAMA_ARG_DRAFT_MAX / LLAMA_ARG_DRAFT_MIN も生き残っており、
+    #     **env に設定してあるだけで起動に失敗します**。古い systemd unit や
+    #     docker-compose を使い回している場合は先に確認してください。
     #
     # 【6】⚠ 非推奨になったもの (動くが警告)
-    #   --mlock    → "-lm": "mlock"      (--load-mode)
+    #   PR #20834 (b10105 / 2026-07-23) で --mlock / --no-mmap / --direct-io が
+    #   -lm / --load-mode に統合されました。値は none / mmap / mlock /
+    #   mmap+mlock / dio の5つ、既定は mmap。
+    #
     #   --no-mmap  → "-lm": "none"
+    #   --mlock    → "-lm": "mmap+mlock"   ★"mlock" ではありません
+    #
+    #   ⚠ ここが罠。PR #26135 (b10145 / 2026-07-27) で "mlock" の定義自体が
+    #     「mmap **しない** mlock」に変わりました。旧 --mlock は mmap + mlock
+    #     だったので、素直に "-lm": "mlock" と置き換えると挙動が変わります。
+    #     旧来と同じ意味にしたいなら "mmap+mlock" を選んでください。
+    #     (--mlock という綴りをそのまま使い続けている人も、2026-07-27 を境に
+    #      意味が変わっています)
+    #
     #   ※ Vulkan の「--no-mmap が必須」は **もう正しくありません**。
-    #     むしろ mmap 無効側に既知の不具合報告 (#18317) があります。既定 mmap のままで。
+    #     公式ドキュメントに根拠はなく、むしろ b7502 (2025-12-21) 以降の
+    #     AMD Vulkan で mmap 無効時に "read error: Bad address" の報告
+    #     (#18317 / #18473) があります。既定の mmap のままにしてください。
     #
     # 【7】⚠⚠ 最大の落とし穴: "-fa": true と書くと起動失敗する ⚠⚠
     #   CodeRouter は bool の true を「値なしフラグ」として argv に出します。
@@ -229,10 +273,19 @@ launcher:
       #   先頭 N 層のエキスパート重みを CPU に置くと VRAM が劇的に空きます。
       #   N は 4 → 8 → 16 と増やしながら、載る最小値を探すのがコツ。
       #   全層を CPU に出すなら -cmoe (値なし) を使います。
-      - name: "MoE: エキスパートを CPU 退避"
+      #
+      #   ⚠⚠ これは「手動モード」です。-ncmoe / -cmoe は tensor_buft_overrides を
+      #     書くため、fit が "tensor_buft_overrides already set by user, abort" で
+      #     **丸ごと停止** します (【2-b】)。したがって:
+      #       ・-fitc は意味を持ちません (fit が動かないので)。書かないこと
+      #       ・ctx は自動で決まらないので --ctx-size を **自分で書く必要があります**
+      #         (書かないと -c 0 = モデルの学習長いっぱいを取りに行って OOM します)
+      #     fit は本来 MoE の exps を自分であふれさせる処理を持っているので、
+      #     **まず「自動フィット + KV量子化」を試してから**ここに来てください。
+      - name: "MoE: エキスパートを CPU 退避 (手動モード)"
         args:
-          "-fitc": 32768
           "-ncmoe": 8             # 先頭 8 層の MoE 重みを CPU へ。載らなければ増やす
+          "--ctx-size": 32768     # ★fit が止まるので必須。書かないと OOM
           "-ctk": "q8_0"
           "-ctv": "q8_0"
           # "-cmoe": true         # ← 全 MoE 層を CPU に。-ncmoe とは併用しない
@@ -271,12 +324,17 @@ launcher:
       #   none   : 分割せず 1 デバイスに載せる (-mg でどれを使うか選ぶ)
       #   layer  : 既定。レイヤ単位で分配。安定
       #   row    : 行分割。まだ現役 (削除されていません)
-      #   tensor : 新設・EXPERIMENTAL。速いことがあるが投機デコードと組むと
-      #            クラッシュ報告あり (llama.cpp #24309)
-      # - name: "複数GPU (分割モード実験)"
+      #   tensor : 新設・EXPERIMENTAL。速いことがあるが、GLM-4.5 系のように
+      #            投機デコード用の nextn ヘッダを含む MoE ではロード時に
+      #            クラッシュする報告あり (llama.cpp #24309、未解決)
+      #
+      # ⚠ row (複数GPU時) も tensor も、fit は未対応で abort します (【2-b】)。
+      #   使うなら --ctx-size と -ngl を自分で書く手動モードになります。
+      # - name: "複数GPU (分割モード実験・手動モード)"
       #   args:
-      #     "-fitc": 32768
       #     "-sm": "tensor"
+      #     "-ngl": 99
+      #     "--ctx-size": 32768
 
       # ── 長コンテキスト ───────────────────────────────────────────────
       #   -fitc で「下限」を宣言する形にすると、VRAM に余裕があればモデルの
@@ -342,7 +400,7 @@ launcher:
           "-ngl": 0
           "--ctx-size": 32768     # Claude Code 最低ライン。CPU 推論は遅いので注意
           "--threads": 12
-          "-lm": "mlock"          # 旧 --mlock。--load-mode に統合されました
+          "-lm": "mmap+mlock"     # 旧 --mlock 相当。"mlock" 単独は mmap を切る別物
 
       # ── Apple Silicon ────────────────────────────────────────────────
       #   統合メモリなので fit の実測がそのまま効きます。基本は何も書かない。
