@@ -28,7 +28,9 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
+from coderouter.ingress.ui_auth import require_ui_token
 from coderouter.metrics import format_prometheus, get_collector
+from coderouter.secret_redaction import redact
 
 router = APIRouter()
 
@@ -48,6 +50,11 @@ async def metrics_json(request: Request) -> dict[str, Any]:
     dashboard uses it to classify providers into local / free / paid
     for the usage-mix bar without a second endpoint round-trip.
     """
+    # v2.14.0: opt-in token first, before anything is computed. The
+    # ordering is the point — codex-router's /health answers before its
+    # own auth check and leaks the live session name to any local caller.
+    require_ui_token(request)
+
     snapshot = get_collector().snapshot()
 
     config = getattr(request.app.state, "config", None)
@@ -66,7 +73,10 @@ async def metrics_json(request: Request) -> dict[str, Any]:
                     "paid": p.paid,
                     # ``HttpUrl`` is not JSON-serializable directly in Pydantic v2;
                     # the cast also makes the shape stable if Pydantic switches types.
-                    "base_url": str(p.base_url),
+                    # v2.14.0: run it through the scrubber. A base_url is the
+                    # one config field an operator can paste a credential into
+                    # (``?api_key=…``), and this endpoint hands it to a browser.
+                    "base_url": redact(str(p.base_url)),
                 }
                 for p in config.providers
             ],
@@ -79,7 +89,7 @@ async def metrics_json(request: Request) -> dict[str, Any]:
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
-async def metrics_prometheus() -> PlainTextResponse:
+async def metrics_prometheus(request: Request) -> PlainTextResponse:
     """Prometheus text exposition format (v1.5-B).
 
     Convention-compliant endpoint path for Prometheus scrapers. Returns
@@ -88,5 +98,6 @@ async def metrics_prometheus() -> PlainTextResponse:
     Sits alongside :func:`metrics_json` (not a replacement) — JSON is
     for internal UI, Prometheus is for external time-series DBs.
     """
+    require_ui_token(request)
     body = format_prometheus(get_collector().snapshot())
     return PlainTextResponse(content=body, media_type=_PROM_CONTENT_TYPE)

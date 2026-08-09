@@ -371,6 +371,120 @@ RESTART_COMMAND_SHELL_META_RE = re.compile(r"(&&|\|\||\||;|>|<|\$\(|`)")
 RESTART_COMMAND_ENV_PREFIX_RE = re.compile(r"^\w+=")
 
 
+class CredentialRefresh(BaseModel):
+    """How to make a vendor CLI rotate the token it wrote to disk.
+
+    Deliberately not an OAuth client. Every vendor has its own endpoint,
+    client id, rotation policy and error shape, and all of them change —
+    delegating to the CLI that owns the file is the version that survives
+    contact with a moving vendor.
+
+    ``command`` is an argv **list**, dispatched with ``shell=False``. Same
+    trust decision as v2.13.0's ``restart_command``: a string that goes
+    through a shell turns a config file into arbitrary code execution.
+    There is no string form here to have to refuse.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: list[str] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "argv for the vendor CLI, e.g. ['grok', 'models']. Run with "
+            "shell=False; no shell metacharacters are interpreted."
+        ),
+    )
+    early_ratio: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Refresh when the remaining lifetime drops below this fraction "
+            "of itself. Early refresh avoids a token dying mid-request."
+        ),
+    )
+    min_lead_s: float = Field(
+        default=300.0,
+        ge=0.0,
+        description="Always refresh at least this many seconds before expiry.",
+    )
+    timeout_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=600.0,
+        description="Hard timeout for the refresh command.",
+    )
+
+
+class ProviderCredential(BaseModel):
+    """Where this provider's credential comes from (v2.14.0).
+
+    ``source: env`` is the historical behaviour, spelled out. ``source:
+    cli_session`` borrows the token a vendor CLI already wrote to disk, so
+    a subscription-authenticated provider can be an ordinary
+    ``openai_compat`` entry instead of a ``kind: agent_cli`` island — and
+    therefore takes part in fallback chains, auto-routing, the budget
+    tracker and every other routing feature.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["env", "cli_session"] = Field(
+        default="env",
+        description="'env' reads an environment variable; 'cli_session' reads a JSON file.",
+    )
+    env: str | None = Field(
+        default=None, description="source=env: the environment variable name."
+    )
+    path: str | None = Field(
+        default=None,
+        description=(
+            "source=cli_session: the JSON file the vendor CLI writes, e.g. "
+            "~/.kimi-code/credentials/kimi-code.json. Must live under $HOME."
+        ),
+    )
+    field: str = Field(
+        default="access_token",
+        description="Dotted path to the token inside that JSON (e.g. 'tokens.access').",
+    )
+    expiry_field: str = Field(
+        default="expires_at",
+        description=(
+            "Dotted path to the expiry. Epoch seconds or milliseconds; both "
+            "are accepted. Absent means 'no expiry info' — the upstream 401 "
+            "becomes the signal instead."
+        ),
+    )
+    refresh: CredentialRefresh | None = Field(
+        default=None,
+        description="Omit to never refresh (a long-lived token, or one you rotate yourself).",
+    )
+
+    @model_validator(mode="after")
+    def _check_source_requirements(self) -> Self:
+        """Each source needs its own field, and only its own field."""
+        if self.source == "env":
+            if not self.env:
+                raise ValueError("credential.source='env' requires credential.env")
+            if self.path:
+                raise ValueError("credential.path is meaningless for source='env'")
+        if self.source == "cli_session":
+            if not self.path:
+                raise ValueError(
+                    "credential.source='cli_session' requires credential.path"
+                )
+            if self.env:
+                raise ValueError("credential.env is meaningless for source='cli_session'")
+            from coderouter.credentials import session_path_is_sane
+
+            if not session_path_is_sane(self.path):
+                raise ValueError(
+                    f"credential.path must live under your home directory: {self.path}"
+                )
+        return self
+
+
 class ProviderConfig(BaseModel):
     """A single provider entry from providers.yaml.
 
@@ -415,6 +529,19 @@ class ProviderConfig(BaseModel):
     api_key_env: str | None = Field(
         default=None,
         description="Env var name holding the API key. None = no auth (e.g. local).",
+    )
+    # v2.14.0: the general form of the above. Mutually exclusive with
+    # api_key_env — a resolver that silently fell back between sources would
+    # make "which credential is this request actually using?" unanswerable,
+    # which is the question an operator asks at exactly the wrong moment.
+    credential: ProviderCredential | None = Field(
+        default=None,
+        description=(
+            "Where the credential comes from. Omit to use api_key_env. "
+            "source='cli_session' reads the token a vendor CLI already wrote "
+            "to disk, so a subscription provider can be a plain "
+            "openai_compat entry that takes part in fallback chains."
+        ),
     )
 
     # Routing-relevant flags
@@ -609,6 +736,23 @@ class ProviderConfig(BaseModel):
         from coderouter.output_filters import validate_output_filters
 
         validate_output_filters(self.output_filters)
+        return self
+
+    @model_validator(mode="after")
+    def _check_credential_exclusive(self) -> Self:
+        """``api_key_env`` and ``credential`` cannot both be set.
+
+        Failing at load time is the whole point: two credential sources on
+        one provider is a question ("which one won?") that should never
+        reach a request, let alone a log line an operator has to reverse
+        engineer at 2am.
+        """
+        if self.credential is not None and self.api_key_env:
+            raise ValueError(
+                f"provider {self.name!r}: set either api_key_env or credential, "
+                "not both (credential.source='env' with credential.env=... is "
+                "the spelled-out form of api_key_env)"
+            )
         return self
 
     @model_validator(mode="after")

@@ -346,14 +346,24 @@ def test_existing_envrc_conflict_without_force(tmp_path: Path) -> None:
     assert envrc_path.read_text() == "# user's own thing\nexport FOO=bar\n"
 
 
-def test_existing_envrc_force_overwrites(tmp_path: Path) -> None:
-    """--force replaces an existing .envrc even if user had edited it."""
+def test_existing_envrc_force_adopts_without_destroying(tmp_path: Path) -> None:
+    """v2.14.0 behaviour change: --force APPENDS instead of replacing.
+
+    Before v2.14.0 this test asserted ``"FOO=bar" not in envrc`` — the
+    whole-file replace that made H-11 possible. The managed block is now
+    fenced, so ``--force`` means "adopt a file I did not write" and the
+    operator's own lines survive it. A backup is still taken, and the
+    generated exports still land, so nothing the flag was *for* is lost.
+    """
     (tmp_path / ".envrc").write_text("export FOO=bar\n", encoding="utf-8")
     result = run_vscode_init(tmp_path, with_envrc=True, force=True)
     assert exit_code_for(result) == 0
     envrc = (tmp_path / ".envrc").read_text()
     assert "ANTHROPIC_BASE_URL" in envrc
-    assert "FOO=bar" not in envrc
+    assert "export FOO=bar" in envrc
+    # And the managed part is fenced, so the next run touches only that.
+    assert "# BEGIN coderouter-managed" in envrc
+    assert "# END coderouter-managed" in envrc
 
 
 # ---------------------------------------------------------------------------
@@ -736,3 +746,135 @@ def test_cli_vscode_init_port_flag_flows_through(
         settings["terminal.integrated.env.osx"]["ANTHROPIC_BASE_URL"]
         == "http://localhost:4000"
     )
+
+
+# ---------------------------------------------------------------------------
+# v2.14.0 — the managed block. `--force` used to mean "replace the file";
+# it now means "adopt a file I did not write". A fenced file needs no
+# --force at all, because rewriting only the fence is not destructive.
+# ---------------------------------------------------------------------------
+
+_BEGIN = "# BEGIN coderouter-managed"
+_END = "# END coderouter-managed"
+
+
+def _envrc_outcome(result):
+    """The .envrc outcome only.
+
+    A port change also makes settings.json report a conflict (pre-existing
+    behaviour, unrelated to the fence), so these tests must not assert over
+    the whole outcome list.
+    """
+    return next(o for o in result.outcomes if o.path.name == ".envrc")
+
+
+
+def test_generated_envrc_is_fenced(tmp_path: Path) -> None:
+    run_vscode_init(tmp_path, with_envrc=True)
+    text = (tmp_path / ".envrc").read_text()
+    assert text.index(_BEGIN) < text.index("ANTHROPIC_BASE_URL") < text.index(_END)
+
+
+def test_rerun_rewrites_only_the_block_and_needs_no_force(tmp_path: Path) -> None:
+    """The whole point: a second run must not be a conflict."""
+    run_vscode_init(tmp_path, with_envrc=True)
+    envrc = tmp_path / ".envrc"
+    envrc.write_text(
+        "source_env_if_exists .envrc.local\n\n"
+        + envrc.read_text()
+        + "\nexport MY_OWN=1\n",
+        encoding="utf-8",
+    )
+
+    result = run_vscode_init(tmp_path, with_envrc=True, port=9999)
+
+    assert _envrc_outcome(result).action == "updated"
+    text = envrc.read_text()
+    assert "source_env_if_exists .envrc.local" in text
+    assert "export MY_OWN=1" in text
+    assert "9999" in text
+    assert text.count(_BEGIN) == 1
+
+
+def test_unfenced_file_is_refused_without_force(tmp_path: Path) -> None:
+    """A file we did not write is the operator's, not ours."""
+    original = "# hand-written\nsource_env_if_exists .envrc.local\n"
+    (tmp_path / ".envrc").write_text(original, encoding="utf-8")
+
+    result = run_vscode_init(tmp_path, with_envrc=True)
+
+    assert _envrc_outcome(result).action == "conflict"
+    assert (tmp_path / ".envrc").read_text() == original
+
+
+def test_force_on_an_unfenced_file_keeps_every_original_line(tmp_path: Path) -> None:
+    original = "# hand-written\nsource_env_if_exists .envrc.local\nexport TEAM=blue\n"
+    (tmp_path / ".envrc").write_text(original, encoding="utf-8")
+
+    run_vscode_init(tmp_path, with_envrc=True, force=True)
+
+    text = (tmp_path / ".envrc").read_text()
+    for line in original.strip().splitlines():
+        assert line in text
+    assert _BEGIN in text
+
+
+def test_a_managed_var_exported_outside_the_block_is_refused(tmp_path: Path) -> None:
+    """direnv applies exports in order — a silent duplicate is unusable."""
+    run_vscode_init(tmp_path, with_envrc=True)
+    envrc = tmp_path / ".envrc"
+    envrc.write_text(
+        envrc.read_text() + '\nexport ANTHROPIC_BASE_URL="http://elsewhere"\n',
+        encoding="utf-8",
+    )
+    before = envrc.read_text()
+
+    result = run_vscode_init(tmp_path, with_envrc=True, port=9999)
+
+    outcome = _envrc_outcome(result)
+    assert outcome.action == "conflict"
+    assert "ANTHROPIC_BASE_URL" in outcome.reason
+    assert envrc.read_text() == before
+
+
+def test_a_commented_out_export_is_not_a_conflict(tmp_path: Path) -> None:
+    run_vscode_init(tmp_path, with_envrc=True)
+    envrc = tmp_path / ".envrc"
+    envrc.write_text(
+        envrc.read_text() + '\n# export ANTHROPIC_BASE_URL="http://old"\n',
+        encoding="utf-8",
+    )
+    result = run_vscode_init(tmp_path, with_envrc=True, port=9999)
+    assert _envrc_outcome(result).action != "conflict"
+
+
+def test_a_pre_v2_14_generated_file_is_adopted_without_force(tmp_path: Path) -> None:
+    """Upgrading must not demand --force to re-adopt our own old output."""
+    from coderouter.vscode_init import _render_envrc
+
+    legacy = _render_envrc(base_url="http://localhost:8088", profile=None)
+    (tmp_path / ".envrc").write_text(legacy, encoding="utf-8")
+
+    result = run_vscode_init(tmp_path, with_envrc=True, port=8088)
+
+    assert _envrc_outcome(result).action != "conflict"
+    text = (tmp_path / ".envrc").read_text()
+    assert _BEGIN in text
+    assert text.count("ANTHROPIC_BASE_URL") == 1
+
+
+def test_a_half_written_fence_is_refused_not_guessed_at(tmp_path: Path) -> None:
+    original = f"{_BEGIN}\nexport ANTHROPIC_BASE_URL=\"http://x\"\n"  # no END
+    (tmp_path / ".envrc").write_text(original, encoding="utf-8")
+
+    result = run_vscode_init(tmp_path, with_envrc=True)
+
+    assert _envrc_outcome(result).action == "conflict"
+    assert (tmp_path / ".envrc").read_text() == original
+
+
+@_SKIP_ON_WINDOWS
+def test_block_rewrite_keeps_the_0600_mode(tmp_path: Path) -> None:
+    run_vscode_init(tmp_path, with_envrc=True)
+    run_vscode_init(tmp_path, with_envrc=True, port=9999)
+    assert _mode_of(tmp_path / ".envrc") == 0o600

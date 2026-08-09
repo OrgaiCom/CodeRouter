@@ -149,6 +149,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "See docs/guides/troubleshooting.md §5 for the threat model."
         ),
     )
+    # v2.14.0: --check-secrets is the runtime counterpart to --check-env.
+    # --check-env asks "is the file holding my keys protected?"; this asks
+    # "does the running process know its own secrets, and did any of them
+    # already reach a log file?". The second question is the one that used
+    # to have no answer at all.
+    doctor.add_argument(
+        "--check-secrets",
+        action="store_true",
+        help=(
+            "Audit credential hygiene: prove the log-redaction filter "
+            "actually scrubs, report which declared api_key_env vars are "
+            "set, flag credentials pasted into a base_url, and scan the "
+            "already-written requests.jsonl / audit.jsonl under state_dir "
+            "for live key values. Exit 0 clean / 2 needs attention / 1 leak."
+        ),
+    )
     doctor.add_argument(
         "--config",
         default=None,
@@ -190,6 +206,55 @@ def _build_parser() -> argparse.ArgumentParser:
             "output is `git apply`-compatible so it can be saved and "
             "applied later (or piped to `patch -p0`)."
         ),
+    )
+
+    # v2.14.0: `coderouter rollback` — the missing half of --apply.
+    # Both writers (doctor --apply, vscode-init) already dropped a `.bak`
+    # next to every file they rewrote; nothing could put it back. Restore
+    # is a swap, not an overwrite, so running it twice returns you to
+    # where you started rather than destroying the newer version.
+    rollback = sub.add_parser(
+        "rollback",
+        help="Restore files a previous --apply / vscode-init rewrote (v2.14.0).",
+        description=(
+            "Swap each managed file with its .bak sibling: providers.yaml, "
+            "~/.coderouter/model-capabilities.yaml, and (with --workspace) "
+            ".vscode/settings.json and .envrc. The current contents become "
+            "the new .bak, so a second run toggles back. "
+            "Exit codes: 0 restored, 2 nothing to restore, 1 a restore failed."
+        ),
+    )
+    rollback.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Path to providers.yaml. Defaults to the same file the loader "
+            "would read ($CODEROUTER_CONFIG, then ~/.coderouter/providers.yaml)."
+        ),
+    )
+    rollback.add_argument(
+        "--workspace",
+        metavar="DIR",
+        default=None,
+        help=(
+            "Also restore the vscode-init outputs under DIR: "
+            "DIR/.vscode/settings.json and DIR/.envrc."
+        ),
+    )
+    rollback.add_argument(
+        "--path",
+        action="append",
+        metavar="FILE",
+        default=None,
+        help=(
+            "Restore exactly this file from its .bak sibling. Repeatable. "
+            "When given, the default discovery set is not used."
+        ),
+    )
+    rollback.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be restored without touching any file.",
     )
 
     # v1.5-C: `coderouter stats` — live TUI over GET /metrics.json.
@@ -490,6 +555,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         return _run_doctor(args)
 
+    if args.command == "rollback":
+        return _run_rollback(args)
+
     if args.command == "stats":
         # v1.5-C: stats is intentionally a thin wrapper — all logic
         # (fetch, render, curses loop) lives in coderouter.cli_stats so
@@ -526,9 +594,11 @@ def _run_doctor(args: argparse.Namespace) -> int:
     worst-case of the two reports so CI guarding against both leak
     risks AND broken providers can use a single command.
     """
-    if args.check_model is None and args.check_env is None:
+    check_secrets = bool(getattr(args, "check_secrets", False))
+    if args.check_model is None and args.check_env is None and not check_secrets:
         print(
-            "doctor: provide --check-model PROVIDER and/or --check-env [PATH]",
+            "doctor: provide --check-model PROVIDER, --check-env [PATH], "
+            "and/or --check-secrets",
             file=sys.stderr,
         )
         return 1
@@ -540,6 +610,9 @@ def _run_doctor(args: argparse.Namespace) -> int:
     # the operator to see than a downstream model issue.
     if args.check_env is not None:
         worst_exit = max(worst_exit, _run_check_env(args.check_env))
+
+    if check_secrets:
+        worst_exit = max(worst_exit, _run_check_secrets(args.config))
 
     if args.check_model is not None:
         worst_exit = max(worst_exit, _run_check_model(args))
@@ -967,6 +1040,71 @@ def _run_check_env(arg_value: str) -> int:
     report = check_env_security(target)
     print(format_env_security_report(report))
     return exit_code_for_env_security(report)
+
+
+def _run_rollback(args: argparse.Namespace) -> int:
+    """v2.14.0: put back what ``--apply`` / ``vscode-init`` overwrote.
+
+    Explicit ``--path`` wins over discovery so an operator can restore one
+    file without also reverting an unrelated ``model-capabilities.yaml``
+    edit from last week. Discovery resolves providers.yaml through the
+    loader's own search order rather than a second copy of it.
+    """
+    from coderouter.rollback import (
+        discover_managed_files,
+        exit_code_for_rollback,
+        format_rollback_report,
+        restore_many,
+    )
+
+    explicit = getattr(args, "path", None)
+    if explicit:
+        targets: list[Path] = [Path(p).expanduser() for p in explicit]
+    else:
+        try:
+            config_path: Path | None = _resolve_config_path(args.config)
+        except Exception:
+            # No config anywhere is not fatal here — the workspace files
+            # and the user-layer capabilities file may still have backups.
+            config_path = None
+        targets = discover_managed_files(
+            config_path=config_path,
+            workspace=getattr(args, "workspace", None),
+        )
+
+    outcomes = restore_many(targets, dry_run=bool(args.dry_run))
+    print(format_rollback_report(outcomes, dry_run=bool(args.dry_run)))
+    return exit_code_for_rollback(outcomes)
+
+
+def _run_check_secrets(config_path: str | None) -> int:
+    """v2.14.0: credential-hygiene audit for the running configuration.
+
+    Loads the config through the normal loader — which is also what arms
+    the redaction registry — then runs the suite from
+    :mod:`coderouter.secret_redaction`. A config that fails to load is a
+    blocker (exit 1) rather than a skip: we cannot claim anything about
+    secret hygiene for a file we could not read.
+    """
+    from coderouter.config.loader import load_config
+    from coderouter.secret_redaction import (
+        check_secret_hygiene,
+        exit_code_for_secret_report,
+        format_secret_report,
+    )
+
+    try:
+        config = load_config(config_path)
+    except FileNotFoundError as exc:
+        print(f"doctor: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"doctor: failed to load config: {exc}", file=sys.stderr)
+        return 1
+
+    report = check_secret_hygiene(config)
+    print(format_secret_report(report))
+    return exit_code_for_secret_report(report)
 
 
 if __name__ == "__main__":

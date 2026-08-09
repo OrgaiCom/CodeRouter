@@ -34,6 +34,7 @@ import yaml
 
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.logging import get_logger
+from coderouter.secret_redaction import register_config_secrets, register_secret
 
 logger = get_logger(__name__)
 
@@ -253,12 +254,34 @@ def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
     elif env_paid in {"0", "false", "no", "off"}:
         config.allow_paid = False
 
+    # v2.14.0: arm log redaction before anything else runs. Registering here
+    # (rather than lazily on the first resolve_api_key call) means the
+    # startup log lines — which name providers and profiles — are already
+    # scrubbed, and so is any config-validation error raised downstream.
+    # Only labels are logged; the values never leave the registry.
+    registered = register_config_secrets(config)
+    if registered:
+        logger.info(
+            "secret-redaction-armed",
+            extra={"count": len(registered), "labels": sorted(set(registered))},
+        )
+
     return config
 
 
 def resolve_api_key(api_key_env: str | None) -> str | None:
-    """Look up an API key from the named env var. Returns None if unset."""
+    """Look up an API key from the named env var. Returns None if unset.
+
+    v2.14.0: the resolved value is registered with
+    :mod:`coderouter.secret_redaction` before it is handed out. This is the
+    moment a credential enters the process, so it is the one place that can
+    guarantee the log scrubber knows about every key we actually use —
+    including keys for providers added by an adapter plugin, which never
+    pass through ``register_config_secrets``.
+    """
     if not api_key_env:
         return None
     value = os.environ.get(api_key_env, "").strip()
+    if value:
+        register_secret(value, api_key_env)
     return value or None

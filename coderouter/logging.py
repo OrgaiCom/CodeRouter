@@ -23,6 +23,8 @@ import logging
 import sys
 from typing import Any, Literal, TypedDict
 
+from coderouter.secret_redaction import install_secret_filter
+
 
 class JsonLineFormatter(logging.Formatter):
     """Emit each record as a single JSON line."""
@@ -105,6 +107,11 @@ def configure_logging(level: str = "INFO") -> None:
             root.removeHandler(h)
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(JsonLineFormatter())
+    # v2.14.0: scrub registered credentials before the formatter runs. The
+    # filter is attached per-handler (not to the root logger) because logger
+    # filters do not apply to records propagated up from child loggers —
+    # every emitting module in this codebase uses its own module logger.
+    install_secret_filter(handler)
     setattr(handler, _CODEROUTER_LOG_HANDLER_MARKER, True)
     root.addHandler(handler)
 

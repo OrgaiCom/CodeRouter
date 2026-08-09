@@ -29,7 +29,7 @@ from coderouter.adapters.base import (
     ProviderCallOverrides,
     StreamChunk,
 )
-from coderouter.config.loader import resolve_api_key
+from coderouter.credentials import resolve_provider_credential
 from coderouter.logging import (
     get_logger,
     log_capability_degraded,
@@ -105,7 +105,10 @@ class OpenAICompatAdapter(BaseAdapter):
             "Content-Type": "application/json",
             "User-Agent": "CodeRouter/0.1",
         }
-        api_key = resolve_api_key(self.config.api_key_env)
+        # v2.14.0: resolve_provider_credential covers api_key_env (the
+        # historical path, unchanged) and credential.source=cli_session,
+        # which borrows the token a vendor CLI already wrote to disk.
+        api_key = resolve_provider_credential(self.config)
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers

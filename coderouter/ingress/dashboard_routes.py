@@ -34,8 +34,10 @@ Why inline JS / CSS
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
+
+from coderouter.ingress.ui_auth import auth_required, require_ui_token
 
 router = APIRouter()
 
@@ -219,6 +221,17 @@ _DASHBOARD_HTML = r"""<!doctype html>
   // Poll interval — 2s matches plan.md §12.3.5. Short enough to feel
   // live on a local dev machine, long enough that HTTP overhead is noise.
   const POLL_MS = 2000;
+  // v2.14.0: the token is entered by the operator and kept in
+  // sessionStorage (cleared when the tab closes). The page is told only
+  // whether auth is on, never what the token is.
+  const AUTH_REQUIRED = __METRICS_AUTH_REQUIRED__;
+  const TOKEN_KEY = "coderouter-metrics-token";
+  let metricsToken = sessionStorage.getItem(TOKEN_KEY) || "";
+  if (AUTH_REQUIRED && !metricsToken) {
+    const v = window.prompt("CODEROUTER_METRICS_TOKEN を入力してください", "");
+    if (v) { metricsToken = v.trim(); sessionStorage.setItem(TOKEN_KEY, metricsToken); }
+  }
+  const authHeaders = () => metricsToken ? {"X-CodeRouter-Token": metricsToken} : {};
   // Sparkline ring — 60 samples at 2s/sample → 2 minutes of history.
   const SPARK_POINTS = 60;
   const sparkBuffer = [];
@@ -524,7 +537,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
   const poll = async () => {
     try {
-      const resp = await fetch("/metrics.json", {cache: "no-store"});
+      const resp = await fetch("/metrics.json", {cache: "no-store", headers: authHeaders()});
       if (!resp.ok) {
         renderError("HTTP " + resp.status);
         return;
@@ -547,7 +560,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard() -> HTMLResponse:
+async def dashboard(request: Request) -> HTMLResponse:
     """Serve the single-page dashboard HTML.
 
     The page is entirely static — all data comes from polling
@@ -556,4 +569,11 @@ async def dashboard() -> HTMLResponse:
     the template lives in this module as a string, keeping the shipping
     unit a single Python file with no template dir to configure.
     """
-    return HTMLResponse(content=_DASHBOARD_HTML)
+    require_ui_token(request)
+    # Only the boolean reaches the page — never the token. Same split the
+    # v2.13.0 launcher fix introduced after ``curl /launcher | grep``
+    # recovered the shared secret straight out of the HTML.
+    html = _DASHBOARD_HTML.replace(
+        "__METRICS_AUTH_REQUIRED__", "true" if auth_required() else "false"
+    )
+    return HTMLResponse(content=html)

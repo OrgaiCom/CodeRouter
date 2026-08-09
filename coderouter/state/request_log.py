@@ -38,6 +38,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from coderouter.secret_redaction import install_secret_filter
+
 # Events to capture for the request journal.
 _JOURNAL_EVENTS: frozenset[str] = frozenset({"cache-observed"})
 
@@ -76,6 +78,10 @@ class RequestLogHandler(logging.Handler):
         flush_interval_s: float = _DEFAULT_FLUSH_INTERVAL_S,
     ) -> None:
         super().__init__(level=logging.DEBUG)
+        # v2.14.0: scrub registered credentials on the way to disk. This
+        # sink is the one that persists, so an unscrubbed key here outlives
+        # the process that leaked it.
+        install_secret_filter(self)
         self._log_path = Path(log_path)
         self._max_bytes = max_bytes
         self._flush_every_n = max(1, flush_every_n)

@@ -1,0 +1,121 @@
+# ============================================================
+# CodeRouter providers.yaml — サブスク認証を「普通のプロバイダ」として使う
+# 【カテゴリ】 credential.source: cli_session (v2.14.0+)
+#
+# ベンダーの CLI (kimi / grok / claude など) が既にディスクへ書いた
+# OAuth トークンを **読むだけ** で、そのサブスク枠を openai_compat /
+# anthropic プロバイダとして使えるようにする構成です。
+#
+# なぜこれが要るのか:
+#   `kind: agent_cli` は外部 CLI をリクエストごとに one-shot 起動します。
+#   動きはしますが、ストリーミングも tool call 修復もコンテキスト予算ガードも
+#   効かず、フォールバックチェーンにも素直に乗りません。
+#   cli_session なら CodeRouter が自分で HTTP を投げるので、
+#   「サブスク枠 → 無料クラウド → ローカル llama.cpp」が普通のチェーンで書けます。
+#
+# 使い方:
+#   1. 先にベンダーの CLI でログインしておく (例: `kimi login`, `grok login`)
+#   2. cp examples/providers.cli-session.yaml ~/.coderouter/providers.yaml
+#   3. path / field / expiry_field を実際のファイルに合わせて調整
+#   4. coderouter doctor --check-secrets で読めているか確認
+#   5. coderouter serve
+#
+# ============================================================
+
+providers:
+
+  # ── サブスク認証 (Kimi Code CLI の例) ────────────────────────────────
+  #
+  # credential.source: cli_session は「CLI が置いた JSON を読む」だけです。
+  # CodeRouter は OAuth を実装しません。更新もベンダーの CLI に任せます
+  # (refresh.command) — エンドポイントも client_id も rotation の作法も
+  # ベンダーごとに違い、そして変わるので、自前実装は必ず腐ります。
+  #
+  # ⚠ path は $HOME 配下しか許可されません (設定ロード時に検証)。
+  # ⚠ refresh.command は argv の **リスト** で、shell=False で起動します。
+  #   文字列形式は存在しないので、シェル経由の任意コード実行になりません。
+  - name: kimi-sub
+    kind: openai_compat
+    base_url: https://api.moonshot.cn/v1
+    model: kimi-k2
+    timeout_s: 120
+    credential:
+      source: cli_session
+      path: ~/.kimi-code/credentials/kimi-code.json
+      field: access_token        # ネストしているなら "tokens.access" のようにドット区切り
+      expiry_field: expires_at   # 秒でもミリ秒でも可。無ければ 401 が唯一の合図になる
+      refresh:
+        command: ["kimi", "auth", "status"]   # これを叩くと CLI がトークンを更新する
+        min_lead_s: 300          # 期限の 5 分前には必ず更新 (期限切れをリクエスト中に踏まない)
+        early_ratio: 0.5         # 残り寿命が半分を切ったら更新
+        timeout_s: 30
+
+  # ── サブスク認証 (Grok CLI の例) ─────────────────────────────────────
+  #   更新方法は Kimi と同じ「CLI を叩いてファイルを読み直す」です。
+  - name: grok-sub
+    kind: openai_compat
+    base_url: https://api.x.ai/v1
+    model: grok-code
+    timeout_s: 120
+    credential:
+      source: cli_session
+      path: ~/.grok/auth.json
+      field: access_token
+      expiry_field: expires_at
+      refresh:
+        command: ["grok", "models"]
+
+  # ── 通常の API キー (従来どおり) ─────────────────────────────────────
+  #   credential.source: env は api_key_env を明示的に書いた形です。
+  #   api_key_env と credential の **併記は設定ロード時にエラー** になります。
+  #   「どっちのキーが使われたのか」を後から追えない状態を作らないためです。
+  - name: cloud-paid
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-6
+    paid: true
+    timeout_s: 120
+    credential:
+      source: env
+      env: ANTHROPIC_API_KEY
+
+  # ── ローカル (認証なし) ──────────────────────────────────────────────
+  - name: local-llama
+    kind: openai_compat
+    base_url: http://localhost:8080/v1
+    model: ""
+    timeout_s: 120
+
+# ── プロファイル ──────────────────────────────────────────────────────
+#
+# cli_session の狙いはここです。サブスク枠が普通のプロバイダになるので、
+# 枠を使い切ったら次へ落ちる、というチェーンがそのまま書けます。
+
+profiles:
+  - name: subscription-first
+    providers: [kimi-sub, grok-sub, local-llama]
+
+  - name: default
+    providers: [kimi-sub, local-llama]
+
+default_profile: default
+
+# 有料 API は明示的に許可したときだけ使う (既定どおり)
+allow_paid: false
+
+# ── 運用メモ ──────────────────────────────────────────────────────────
+#
+# ・借りたトークンは v2.14.0 のログスクラバに自動登録されます。
+#   ログや requests.jsonl に生の値が出ないことは
+#   `coderouter doctor --check-secrets` で実測確認できます。
+#
+# ・セッションファイルが無い / 壊れている / まだログインしていない場合、
+#   CodeRouter は例外を投げずに「認証なしで送る」に倒します。
+#   上流が 401 を返し、フォールバックチェーンが次のプロバイダへ進みます。
+#   起動しなくなるより、チェーンが動くほうが実運用では正しいためです。
+#
+# ・更新コマンドの stderr はログに出しません。
+#   認証 CLI は失敗時にデバイスコードやトークンを表示することがあるためです。
+#
+# ・同じセッションファイルを複数プロバイダで参照しても構いません。
+#   更新はプロセス内ロック + ファイルロックで 1 回に集約されます。

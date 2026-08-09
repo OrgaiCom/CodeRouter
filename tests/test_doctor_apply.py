@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from coderouter import doctor_apply
 from coderouter.doctor_apply import (
     ApplyResult,
     DoctorApplyError,
@@ -877,3 +878,67 @@ def test_cli_no_op_message_states_nothing_written(
     assert "already applied" in out
     assert "0 files written" in out
     assert config_path.read_text(encoding="utf-8") == PROVIDERS_YAML_EXPLICIT_NULL
+
+
+# ----------------------------------------------------------------------
+# v2.14.0 — a failed write must not leave a half-applied config
+# ----------------------------------------------------------------------
+
+
+@_requires_ruamel
+def test_failed_second_write_rolls_back_the_first_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An apply spanning two files must be all-or-nothing.
+
+    Before v2.14.0 the write loop had no error handling: if the second
+    target failed (disk full, read-only mount, a race with an editor), the
+    first one stayed rewritten and no command could name or undo it. Now
+    the loop restores what it already wrote and raises, so the operator
+    sees a clean failure instead of a config in an unknown state.
+    """
+    config_path = tmp_path / "providers.yaml"
+    _write_providers_yaml(config_path, PROVIDERS_YAML_INITIAL)
+    capabilities_path = tmp_path / "model-capabilities.yaml"
+
+    # Point the capabilities target at tmp_path instead of ~/.coderouter.
+    monkeypatch.setattr(
+        doctor_apply,
+        "_resolve_target_path",
+        lambda *, target_file, config_path: (
+            config_path if target_file == "providers.yaml" else capabilities_path
+        ),
+    )
+
+    real_write_text = Path.write_text
+
+    def exploding_write_text(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self == capabilities_path:
+            raise OSError("disk full")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", exploding_write_text)
+
+    report = _FakeReport(
+        results=[
+            _FakeProbeResult(
+                name="tool_calls",
+                suggested_patch=PATCH_TOOLS_TRUE,
+                target_file="providers.yaml",
+            ),
+            _FakeProbeResult(
+                name="reasoning_leak",
+                suggested_patch=PATCH_CAPABILITIES_RULE,
+                target_file="model-capabilities.yaml",
+            ),
+        ]
+    )
+
+    with pytest.raises(DoctorApplyError) as excinfo:
+        apply_doctor_patches(report=report, config_path=config_path, write=True)
+
+    assert "Rolled back" in str(excinfo.value)
+    # The first file is byte-identical to what it was before the apply.
+    assert config_path.read_text(encoding="utf-8") == PROVIDERS_YAML_INITIAL
+    # And the file that never got written was not left as an empty stub.
+    assert not capabilities_path.exists()

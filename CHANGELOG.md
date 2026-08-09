@@ -9,6 +9,133 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.14.0] — unreleased (credential hygiene + undo)
+
+Five changes that came out of reading `duolahypercho/codex-router` and
+comparing it with what CodeRouter actually does. Four of them close holes
+this project had; one imports a capability it was missing. Everything is
+opt-in except the `.envrc` behaviour change called out under **Changed
+(BREAKING)**.
+
+**The version in `pyproject.toml` is NOT bumped.** Cutting the release is
+a separate decision; this entry documents what is on `main`.
+
+### Added
+
+- **`credential.source: cli_session` — borrow the token a vendor CLI
+  already wrote.** A subscription-authenticated provider (Kimi Code CLI,
+  Grok CLI, …) can now be an ordinary `openai_compat` / `anthropic`
+  entry: CodeRouter reads the OAuth token out of the JSON file the
+  vendor's CLI maintains and makes the HTTP call itself. Until now the
+  only answer to those was `kind: agent_cli`, which spawns the CLI once
+  per request and therefore has no streaming, no tool-call repair, no
+  context-budget guard, and does not sit in a fallback chain — the
+  subscription ended up an island. It is now a chain link:
+  `providers: [kimi-sub, free-cloud, local-llama]` just works.
+  Refresh delegates to the vendor's own CLI (`refresh.command`, an argv
+  list run with `shell=False`) rather than reimplementing OAuth, because
+  endpoints, client ids and rotation policies all change and a bespoke
+  implementation rots. Refresh is single-flighted in-process and
+  serialised across processes with an advisory `flock`. `credential` and
+  `api_key_env` are mutually exclusive at load time, `credential.path`
+  must live under `$HOME`, and a missing or malformed session file
+  resolves to `None` (unauthenticated request → upstream 401 → the chain
+  moves on) instead of raising. See `examples/providers.cli-session.yaml`.
+- **`coderouter rollback`** — restores `providers.yaml`,
+  `~/.coderouter/model-capabilities.yaml` and (with `--workspace`)
+  `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
+  `doctor --apply` and `vscode-init` have always written a backup and
+  never offered a way back. Restore is a **swap**: the current contents
+  become the new `.bak`, so a second run returns you to where you
+  started. Exit 0 restored / 2 nothing to restore / 1 a restore failed.
+- **`coderouter doctor --check-secrets`** — proves the log-redaction
+  filter scrubs by pushing a canary through it, reports which declared
+  `api_key_env` vars are actually set, flags credentials pasted into a
+  `base_url`, and scans the already-written `requests.jsonl` /
+  `audit.jsonl` (plus rotated `.1`) for live key values. Same 0/2/1 exit
+  contract as `--check-env`. The log scan is the part that produces
+  evidence rather than reassurance.
+- **`CODEROUTER_METRICS_TOKEN`** — opt-in token auth for `/dashboard`,
+  `/metrics.json` and `/metrics`, mirroring `CODEROUTER_LAUNCHER_TOKEN`.
+
+### Changed (BREAKING)
+
+- **`vscode-init --with-envrc --force` no longer replaces `.envrc`.** The
+  block CodeRouter owns is now fenced between
+  `# BEGIN coderouter-managed` / `# END coderouter-managed`, and only
+  that block is rewritten. Consequences:
+  - A re-run against a fenced file needs **no `--force`** — rewriting our
+    own fence is not destructive, so a port change is an ordinary update
+    instead of a conflict to override.
+  - `--force` now means "adopt a file I did not write": the block is
+    appended and every existing line survives. Previously it deleted
+    them, which is how the H-11 `.envrc` incident happened — including
+    the `source_env_if_exists .envrc.local` line the docs tell users to
+    add.
+  - A managed variable exported *outside* the fence is refused, because
+    direnv applies exports in order and a silent duplicate leaves nobody
+    able to say which value is live. Commented-out lines are not
+    conflicts.
+  - A file byte-identical to a pre-v2.14.0 generation is adopted into the
+    fence silently, so upgrading does not demand `--force` for our own
+    previous output.
+  `settings.json` handling is unchanged (it already refused to overwrite
+  a user-owned value without `--force`).
+- **A failed `doctor --apply` is now a no-op instead of a partial one.**
+  The write loop had no error handling: an apply spanning `providers.yaml`
+  and `model-capabilities.yaml` left the first file rewritten when the
+  second failed. It now restores what it already wrote (and deletes what
+  it created) before raising.
+
+### Fixed (security)
+
+- **Credentials are scrubbed from every log sink.** CodeRouter had no
+  notion of "this string is a secret": keys were read by
+  `resolve_api_key`, dropped into `x-api-key` / `Authorization`, and
+  nothing masked them because nothing knew which strings needed masking.
+  No call site logged a header dict, so this was not a live leak — the
+  problem was that the safety of every future log line depended on
+  whoever wrote it remembering what was in their hand. There is now a
+  process-global registry keyed on the exact credential value, armed by
+  `resolve_api_key` (the choke point every key passes through, plugins
+  included) and pre-armed by `load_config`, plus a
+  `SecretRedactingFilter` on the stderr handler, `RequestLogHandler` and
+  `AuditLogHandler`. It scrubs the message, printf args, `exc_text` and
+  every `extra={...}` field, recursing into nested dicts and lists.
+  Exact-match registry first (zero false positives); a small set of
+  anchored backstop patterns (`sk-*`, `gh*_`, `AIza*`, `Bearer`,
+  `?api_key=`, URL userinfo) covers credentials that never passed through
+  the resolver. Values under 8 characters are refused — redacting those
+  would corrupt ordinary log text.
+- **`/dashboard`, `/metrics.json` and `/metrics` were unauthenticated
+  with no way to close them.** They change nothing, so they were never
+  part of the H-8 work, but `/metrics.json` returns every provider's
+  name, kind, paid flag and `base_url` plus the profile graph — the full
+  topology of which models an operator runs and which vendors they pay.
+  With `CODEROUTER_METRICS_TOKEN` unset they stay open exactly as before
+  (no running scrape breaks on upgrade) and log a one-time
+  `metrics-auth-disabled` warning. The check runs **before** the payload
+  is assembled, so a 401 leaks nothing, and the page receives only a
+  boolean — never the token. `base_url` now also goes through the
+  scrubber on its way into the JSON, since it is the one config field an
+  operator can paste a credential into and this endpoint hands it to a
+  browser.
+
+### Tests
+
+- 2572 passed / 1 skipped (was 2464 on `main`), ruff clean, and 51 mypy
+  errors against 53 on `main` (net −2; strict mypy is not CI-enforced).
+- New: `tests/test_secret_redaction.py` (36),
+  `tests/test_credentials.py` (25), `tests/test_rollback.py` (17),
+  `tests/test_ui_auth.py` (17), plus 9 in `tests/test_vscode_init.py` and
+  1 in `tests/test_doctor_apply.py`.
+- `test_existing_envrc_force_overwrites` asserted the old destructive
+  `--force` contract and is rewritten as
+  `test_existing_envrc_force_adopts_without_destroying`, pinning the
+  opposite.
+
+---
+
 ## [v2.13.0] — 2026-08-07 (remaining-high security hardening)
 
 ### Changed (BREAKING)

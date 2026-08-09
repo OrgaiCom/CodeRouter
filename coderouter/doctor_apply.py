@@ -520,6 +520,34 @@ def _resolve_target_path(
     return None
 
 
+def _undo_partial_apply(
+    backups: dict[str, str], created_paths: list[Path]
+) -> int:
+    """Put back every file this invocation already rewrote.
+
+    Best-effort by design: a rollback that raises would mask the original
+    write failure, which is the thing the operator actually needs to see.
+    Files we created from nothing are removed; files we overwrote are
+    restored from the ``.bak`` copy taken moments earlier in the same loop.
+
+    Returns the number of files successfully reverted, for the error text.
+    """
+    reverted = 0
+    for target_str, backup_str in backups.items():
+        try:
+            shutil.copy2(backup_str, target_str)
+            reverted += 1
+        except OSError:
+            continue
+    for created in created_paths:
+        try:
+            created.unlink(missing_ok=True)
+            reverted += 1
+        except OSError:
+            continue
+    return reverted
+
+
 def apply_doctor_patches(
     *,
     report: Any,  # DoctorReport — typed Any to avoid an import cycle
@@ -637,6 +665,9 @@ def apply_doctor_patches(
     written = False
     written_paths: list[str] = []
     backups: dict[str, str] = {}
+    # Files this invocation created from nothing. They have no backup to
+    # restore from, so undoing them means deleting them again.
+    created_paths: list[Path] = []
     for target_path in target_order:
         doc, before_text = docs_by_path[target_path]
         after_text = _dump_yaml_with_comments(doc)
@@ -656,15 +687,29 @@ def apply_doctor_patches(
                 reformat_only[str(target_path)] = diff_text
         if write and target_changed:
             # Backup first (only when we have a pre-existing file).
-            if target_path.is_file():
-                backup_path = target_path.with_suffix(
-                    target_path.suffix + PROVIDERS_BACKUP_SUFFIX
-                )
-                shutil.copy2(target_path, backup_path)
-                backups[str(target_path)] = str(backup_path)
-            else:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(after_text, encoding="utf-8")
+            try:
+                if target_path.is_file():
+                    backup_path = target_path.with_suffix(
+                        target_path.suffix + PROVIDERS_BACKUP_SUFFIX
+                    )
+                    shutil.copy2(target_path, backup_path)
+                    backups[str(target_path)] = str(backup_path)
+                else:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    created_paths.append(target_path)
+                target_path.write_text(after_text, encoding="utf-8")
+            except OSError as exc:
+                # v2.14.0: an apply that spans two files used to leave the
+                # first one rewritten when the second failed — a half-applied
+                # config the operator had no way to name, let alone undo. Roll
+                # the completed writes back before surfacing the error, so a
+                # failed apply is always a no-op rather than a partial one.
+                undone = _undo_partial_apply(backups, created_paths)
+                raise DoctorApplyError(
+                    f"failed to write {target_path}: {exc}. "
+                    f"Rolled back {undone} already-written file(s); "
+                    "no partial apply was left on disk."
+                ) from exc
             written = True
             written_paths.append(str(target_path))
 

@@ -395,7 +395,19 @@ def _apply_envrc(
     force: bool,
     dry_run: bool,
 ) -> FileOutcome:
-    new_text = _render_envrc(base_url=base_url, profile=profile)
+    """Write (or refresh) the managed block in ``.envrc``.
+
+    Three cases, and only the third can refuse:
+
+    * **No file** — create it with the fenced block.
+    * **Fenced file** — replace the block, keep everything outside it
+      byte-for-byte. No ``--force`` needed; this is not destructive.
+    * **Unfenced file we did not write** — refuse, unless ``--force``,
+      which now *appends* the block rather than replacing the file. The
+      operator's lines survive either way.
+    """
+    block = _render_envrc_block(base_url=base_url, profile=profile)
+
     old_text = ""
     if path.exists():
         try:
@@ -407,32 +419,76 @@ def _apply_envrc(
                 reason=f"cannot read existing file: {exc}",
             )
 
+    if not old_text:
+        new_text = block + "\n"
+    else:
+        split = _split_managed_block(old_text)
+        if split is None and _looks_like_our_legacy_output(
+            old_text, base_url=base_url, profile=profile
+        ):
+            # Our own pre-v2.14.0 output: adopt it into the fence silently.
+            split = ("", "")
+        if split is None:
+            outside = ""  # --force adopts the file wholesale; see below
+            if not force:
+                would = old_text.rstrip("\n") + "\n\n" + block + "\n"
+                return FileOutcome(
+                    path=path,
+                    action="conflict",
+                    diff=_text_diff(old_text, would, path),
+                    reason=(
+                        ".envrc exists and carries no "
+                        f"`{_ENVRC_BEGIN}` fence, so CodeRouter did not write it. "
+                        "Re-run with --force to APPEND the managed block "
+                        "(your existing lines are kept — unlike before "
+                        "v2.14.0, --force no longer replaces the whole file); "
+                        f"the previous contents are still saved to "
+                        f"{_backup_path(path).name}."
+                    ),
+                )
+            # --force on an unfenced file means "adopt it, mine wins". The
+            # block is APPENDED, not substituted for the file: direnv applies
+            # exports in order, so a duplicate the operator already had is
+            # shadowed rather than deleted, and their other lines survive. The
+            # conflict scan is skipped here on purpose — refusing would leave
+            # --force with nothing it could actually do.
+            new_text = old_text.rstrip("\n") + "\n\n" + block + "\n"
+        else:
+            before, after = split
+            outside = before + after
+            new_text = (
+                before.rstrip("\n") + ("\n\n" if before.strip() else "")
+            ) + block + ("\n\n" + after.lstrip("\n") if after.strip() else "\n")
+
+        conflicts = _unmanaged_conflicts(outside)
+        if conflicts:
+            # direnv applies exports in order, so a duplicate outside the
+            # fence would silently win or lose depending on placement.
+            # Refusing is the only answer that cannot surprise anyone.
+            return FileOutcome(
+                path=path,
+                action="conflict",
+                diff=_text_diff(old_text, new_text, path),
+                reason=(
+                    "these variables are already exported outside the managed "
+                    f"block: {', '.join(conflicts)}. CodeRouter will not write "
+                    "a second export for a value you own — direnv would apply "
+                    "whichever comes last. Remove your line, or move it inside "
+                    f"`{_ENVRC_BEGIN}` … `{_ENVRC_END}`."
+                ),
+            )
+
     if new_text == old_text:
         return FileOutcome(path=path, action="unchanged")
 
     diff = _text_diff(old_text, new_text, path)
 
-    if old_text and not force:
-        return FileOutcome(
-            path=path,
-            action="conflict",
-            diff=diff,
-            reason=(
-                ".envrc already exists and its contents differ. "
-                "Re-run with --force to replace the WHOLE file with the "
-                "generated contents (this is not a merge — custom lines "
-                "such as `source_env_if_exists .envrc.local` are dropped); "
-                f"the previous contents are saved to {_backup_path(path).name}. "
-                "(Tip: keep secrets in a separate .envrc.local and "
-                "``source_env_if_exists`` from .envrc.)"
-            ),
-        )
-
     reason = ""
     if not dry_run:
-        # H-11: --force replaces the whole file, so stash the old bytes
-        # (mode included) before they are gone. Inside the dry_run guard
-        # on purpose — --dry-run must not touch the filesystem at all.
+        # H-11: keep the old bytes (mode included) even though the write is
+        # now surgical. A bug in the fence logic would take exactly this
+        # path. Inside the dry_run guard on purpose — --dry-run must not
+        # touch the filesystem at all.
         if old_text:
             backup = _make_backup(path)
             reason = (
@@ -461,6 +517,86 @@ def _apply_envrc(
         diff=diff,
         reason=reason,
     )
+
+
+# ---------------------------------------------------------------------------
+# v2.14.0 — marker-delimited managed block in .envrc
+# ---------------------------------------------------------------------------
+#
+# Until now, ``--force`` on ``.envrc`` was a whole-file replace: it wrote the
+# generated contents over whatever was there, dropping any line the operator
+# had added. That is how H-11 happened, and "we back it up first" only helps
+# somebody who knows to look for the backup.
+#
+# The fix is the one codex-router uses on ``~/.codex/config.toml``: fence the
+# part we own between markers, rewrite only that, and leave everything else
+# byte-for-byte. Once the fence exists, a re-run is no longer destructive, so
+# it needs no ``--force`` at all — ``--force`` shrinks back to its honest
+# meaning of "yes, adopt a file I did not write".
+
+_ENVRC_BEGIN = "# BEGIN coderouter-managed"
+_ENVRC_END = "# END coderouter-managed"
+
+# The variables the managed block owns. A value for one of these sitting
+# OUTSIDE the block is a conflict we refuse rather than silently shadow —
+# direnv applies exports in order, so whichever came last would win and the
+# operator would have no idea which one is live.
+_MANAGED_ENVRC_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CODEROUTER_MODE")
+
+
+def _split_managed_block(text: str) -> tuple[str, str] | None:
+    """Split ``text`` around the managed block.
+
+    Returns ``(before, after)`` with the block (and its markers) removed,
+    or ``None`` when the file carries no fence. A file with a begin marker
+    and no end marker also returns ``None`` — a half-written fence is not
+    something to guess at, and the caller turns that into a refusal.
+    """
+    start = text.find(_ENVRC_BEGIN)
+    if start == -1:
+        return None
+    end = text.find(_ENVRC_END, start)
+    if end == -1:
+        return None
+    return text[:start], text[end + len(_ENVRC_END) :].lstrip("\n")
+
+
+def _render_envrc_block(*, base_url: str, profile: str | None) -> str:
+    """The fenced block CodeRouter owns, markers included."""
+    lines = [
+        _ENVRC_BEGIN,
+        "# Managed by `coderouter vscode-init`. Edits inside this block are",
+        "# overwritten on the next run; put your own lines outside it.",
+        f'export ANTHROPIC_BASE_URL="{base_url}"',
+        f'export ANTHROPIC_AUTH_TOKEN="{DEFAULT_TOKEN}"',
+    ]
+    if profile:
+        lines.append(f'export CODEROUTER_MODE="{profile}"')
+    lines.append(_ENVRC_END)
+    return "\n".join(lines)
+
+
+def _unmanaged_conflicts(outside_text: str) -> list[str]:
+    """Managed variables the operator exports outside our block."""
+    found: list[str] = []
+    for line in outside_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        for var in _MANAGED_ENVRC_VARS:
+            if stripped.startswith((f"export {var}=", f"{var}=")) and var not in found:
+                found.append(var)
+    return found
+
+
+def _looks_like_our_legacy_output(text: str, *, base_url: str, profile: str | None) -> bool:
+    """True when the file is byte-identical to a pre-v2.14.0 generation.
+
+    An operator upgrading has an unfenced ``.envrc`` that we wrote — asking
+    them to pass ``--force`` to adopt our own previous output would be
+    rude, and appending a second block would double the exports.
+    """
+    return text == _render_envrc(base_url=base_url, profile=profile)
 
 
 def _render_envrc(*, base_url: str, profile: str | None) -> str:

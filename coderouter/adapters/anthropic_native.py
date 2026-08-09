@@ -45,7 +45,7 @@ from coderouter.adapters.base import (
     ProviderCallOverrides,
     StreamChunk,
 )
-from coderouter.config.loader import resolve_api_key
+from coderouter.credentials import resolve_provider_credential
 from coderouter.logging import get_logger, log_output_filter_applied
 from coderouter.output_filters import OutputFilterChain
 from coderouter.translation.anthropic import (
@@ -134,7 +134,9 @@ class AnthropicAdapter(BaseAdapter):
                 self.config.extra_body.get("anthropic_version", _DEFAULT_ANTHROPIC_VERSION)
             ),
         }
-        api_key = resolve_api_key(self.config.api_key_env)
+        # v2.14.0: see openai_compat._headers — same resolver, so an
+        # Anthropic-protocol provider can also ride a CLI session token.
+        api_key = resolve_provider_credential(self.config)
         if api_key:
             headers["x-api-key"] = api_key
         # v0.4-D: forward the client's anthropic-beta header verbatim.
