@@ -9,16 +9,13 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
-## [v2.14.0] — unreleased (credential hygiene + undo)
+## [v2.14.0] — 2026-08-09 (credential hygiene + undo)
 
 Five changes that came out of reading `duolahypercho/codex-router` and
 comparing it with what CodeRouter actually does. Four of them close holes
 this project had; one imports a capability it was missing. Everything is
 opt-in except the `.envrc` behaviour change called out under **Changed
 (BREAKING)**.
-
-**The version in `pyproject.toml` is NOT bumped.** Cutting the release is
-a separate decision; this entry documents what is on `main`.
 
 ### Added
 
