@@ -75,8 +75,8 @@ providers:
     kind: agent_cli
     model: opus
     paid: true
-    capabilities: { streaming: false, tools: false }   # agent_cli 既定
-    agent_cli: { agent: claude, sandbox_mode: read_only, exec_timeout_s: 600 }
+    capabilities: {streaming: false, tools: false}     # agent_cli 既定
+    agent_cli: {agent: claude, sandbox_mode: read_only, exec_timeout_s: 600}
 
   # ── 実行役: 中位ローカル (税ゼロ) ─────────────────────────────────────
   #   Ollama v0.23.1+ の Anthropic passthrough。実装/編集の主力で、
@@ -102,8 +102,8 @@ providers:
     kind: agent_cli
     model: opus
     paid: true
-    capabilities: { streaming: false, tools: false }
-    agent_cli: { agent: claude, sandbox_mode: read_only }
+    capabilities: {streaming: false, tools: false}
+    agent_cli: {agent: claude, sandbox_mode: read_only}
 
   # ── レビュー役: 軽微は別ローカル ─────────────────────────────────────
   #   typo/フォーマット等の軽いレビューはコスト・レイテンシの低いローカル
@@ -140,19 +140,19 @@ auto_router:
   rules:
     - id: user:image-to-multi
       profile: planner
-      match: { has_image: true }
+      match: {has_image: true}
     - id: user:dense-code-to-coder
       profile: coder
-      match: { code_fence_ratio_min: 0.3 }
+      match: {code_fence_ratio_min: 0.3}
     - id: user:long-context-to-planner
       profile: planner
-      match: { content_token_count_min: 32000 }
+      match: {content_token_count_min: 32000}
     - id: user:cjk-to-local
       profile: coder
-      match: { cjk_ratio_min: 0.5 }
+      match: {cjk_ratio_min: 0.5}
     - id: user:review-keyword
       profile: reviewer-audit
-      match: { content_contains: "レビュー" }
+      match: {content_contains: "レビュー"}
 
 # ── 運用メモ ──────────────────────────────────────────────────────────
 #
