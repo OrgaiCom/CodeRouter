@@ -22,7 +22,9 @@ Index of CodeRouter's public documentation — find the right page by what you w
 | エラーで詰まった / Something broke | [guides/troubleshooting](guides/troubleshooting.md) |
 | VSCode / Cline / Continue から使いたい / Use from VSCode extensions | [guides/vscode](guides/vscode.md) |
 | ローカル LLM を起動したい / Launch a local LLM | [backends/launcher-quickstart](backends/launcher-quickstart.md) |
+| 低メモリ環境(8–16GB)で動かしたい / Run on a low-memory (8–16GB) host | [low-memory-integration](low-memory-integration.md) |
 | APIキー・機密の扱い / Secrets & security | [guides/security](guides/security.md) |
+| 別のPCから安全に繋ぎたい / Connect securely from another PC | [guides/remote-access](guides/remote-access.md) |
 | 仕組みを理解したい / Understand the design | [concepts/architecture](concepts/architecture.md) |
 | プラグインで拡張したい / Extend with plugins | [対応プラグイン / Plugins](#対応プラグイン--plugins) |
 
@@ -64,6 +66,7 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 - **free-tier-guide** — NVIDIA NIM × OpenRouter Free でコストゼロ運用 / Zero-cost operation · [日本語](guides/free-tier-guide.md) · [English](guides/free-tier-guide.en.md)
 - **troubleshooting** — つまずいたときの解決集 / Fixing problems · [日本語](guides/troubleshooting.md) · [English](guides/troubleshooting.en.md)
 - **security** — シークレット管理とセキュリティ方針 / Secrets handling & security posture · [日本語](guides/security.md) · [English](guides/security.en.md)
+- **remote-access** — 別の PC から CodeRouter に安全に繋ぐ(SSHトンネル・Tailscaleなど4つの選択肢) / Reach CodeRouter safely from another machine (four options: SSH tunnel, Tailscale, etc.) · [日本語](guides/remote-access.md) · [English](guides/remote-access.en.md)
 - **subagent-routing** — Claude Code のサブエージェントをモデルごとに振り分ける / Route Claude Code sub-agents to different models · [日本語](guides/subagent-routing.md) · [English](guides/subagent-routing.en.md)
 - **vscode** — VSCode 統合ターミナル(Claude Code)と Cline / Roo / Continue.dev から接続する / Connect from VSCode's integrated terminal (Claude Code) and Cline / Roo / Continue.dev. Includes the `coderouter vscode-init` scaffolder (v2.10.0) · [日本語](guides/vscode.md)
 
@@ -72,31 +75,49 @@ Many documents have a Japanese version (`.md`) and an English version (`.en.md`)
 ローカル推論バックエンドの導入・起動・接続。 / Installing, launching, and connecting local inference backends.
 
 - **install-backends** — llama.cpp / vLLM / MLX のインストール手順 / Installing the three backends · [日本語](backends/install-backends.md) · [English](backends/install-backends.en.md)
-- **launcher-quickstart** — バックエンド導入から起動までの最短手順 / Install a backend and launch · [日本語](backends/launcher-quickstart.md)
-- **launcher** — Launcher ガイド(Web版・デスクトップGUI版) / Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md)
+- **launcher-quickstart** — バックエンド導入から起動までの最短手順 / Install a backend and launch · [日本語](backends/launcher-quickstart.md) · [English](backends/launcher-quickstart.en.md)
+- **launcher** — Launcher ガイド(Web版・デスクトップGUI版) / Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md) · [English](backends/launcher.en.md)
 - **external-agents** — 外部コーディングエージェント CLI (agent_cli、claude/codex/grok/antigravity の4種対応。v2.9.0 から `coderouter-plugin-agents` の導入が必須) / External coding-agent CLI (agent_cli, 4 CLIs: claude/codex/grok/antigravity; requires `coderouter-plugin-agents` since v2.9.0) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
 - **llamacpp-direct** — llama.cpp に直結する / Connect llama.cpp directly · [日本語](backends/llamacpp-direct.md) · [English](backends/llamacpp-direct.en.md)
 - **lmstudio-direct** — LM Studio に直結する / Connect LM Studio directly · [日本語](backends/lmstudio-direct.md) · [English](backends/lmstudio-direct.en.md)
-- **hf-ollama-models** — HuggingFace 配布モデルを Ollama で使う / Use HF models via Ollama · [日本語](backends/hf-ollama-models.md)
-- **gguf_dl** — GGUF モデルのダウンロードツール / GGUF download helper · [日本語](backends/gguf_dl.md)
+- **claude-code-llamacpp-vllm** — Claude Code を Ollama なしで llama.cpp / vLLM に接続する実践ガイド(設定と典型エラーの直し方) / Connect Claude Code to llama.cpp / vLLM without Ollama, plus fixes for the errors you'll hit in practice · [日本語](backends/claude-code-llamacpp-vllm.md) · [English](backends/claude-code-llamacpp-vllm.en.md)
+- **hf-ollama-models** — HuggingFace 配布モデルを Ollama で使う / Use HF models via Ollama · [日本語](backends/hf-ollama-models.md) · [English](backends/hf-ollama-models.en.md)
+- **gguf_dl** — GGUF モデルのダウンロードツール / GGUF download helper · [日本語](backends/gguf_dl.md) · [English](backends/gguf_dl.en.md)
 - **verify-ollama-0.23.1** — Ollama v0.23.1 実機検証チェックリスト / Ollama verification checklist · [日本語](backends/verify-ollama-0.23.1.md)
 
 ## 4. 設計・内部動作 / Architecture & internals — `concepts/`
 
 CodeRouter の仕組みと信頼性機構。 / How CodeRouter works and its reliability mechanisms.
 
-- **architecture** — アーキテクチャ全体像 / Architecture overview · [日本語](concepts/architecture.md)
-- **context-budget** — コンテキスト予算管理 (v2.0.0) / Context budget management · [日本語](concepts/context-budget.md)
-- **drift-detection** — ドリフト検出 (v2.0-G) / Drift detection · [日本語](concepts/drift-detection.md)
-- **partial-stitch** — ストリーム途中の部分ステッチ (v2.0-H) / Mid-stream partial stitching · [日本語](concepts/partial-stitch.md)
-- **continuous-probing** — 継続プロービング (v2.0-I) / Continuous probing · [日本語](concepts/continuous-probing.md)
+- **architecture** — アーキテクチャ全体像 / Architecture overview · [日本語](concepts/architecture.md) · [English](concepts/architecture.en.md)
+- **context-budget** — コンテキスト予算管理 (v2.0.0) / Context budget management · [日本語](concepts/context-budget.md) · [English](concepts/context-budget.en.md)
+- **drift-detection** — ドリフト検出 (v2.0-G) / Drift detection · [日本語](concepts/drift-detection.md) · [English](concepts/drift-detection.en.md)
+- **partial-stitch** — ストリーム途中の部分ステッチ (v2.0-H) / Mid-stream partial stitching · [日本語](concepts/partial-stitch.md) · [English](concepts/partial-stitch.en.md)
+- **continuous-probing** — 継続プロービング (v2.0-I) / Continuous probing · [日本語](concepts/continuous-probing.md) · [English](concepts/continuous-probing.en.md)
+- **low-memory-integration** — 低メモリ機(8–16GB)向けメモリ予算ガードの統合ガイド。VRAM/RAM 検出・GGUFヘッダ解析・KVキャッシュ試算による事前フィット判定(`off`/`warn`/`fit`)。**実装済み (v2.5.3)** / Integration guide for the proactive memory-budget guard on low-memory (8–16GB) hosts — VRAM/RAM detection, GGUF header introspection, and KV-cache-aware pre-dispatch fit decisions (`off`/`warn`/`fit`). **Implemented (v2.5.3)** · [日本語](low-memory-integration.md) · [English](low-memory-integration.en.md)
 
 ## 5. 設計資料・記録 / Design docs & records
 
-- **designs/** — 機能の設計ドキュメント / Feature design docs ([v1.6 auto-router](designs/v1.6-auto-router.md) ほか)
-- **retrospectives/** — リリース振り返り / Release retrospectives ([v0.4](retrospectives/v0.4.md) 〜 [v1.0](retrospectives/v1.0.md))
+### designs/ — 機能の設計ドキュメント / Feature design docs
+
+各ドキュメントの実装状況を併記しています。 / Implementation status is noted for each doc.
+
+- **v1.6-auto-router** — auto_router の初版設計 / Initial design of auto_router. **実装済み (v1.6.0)。マッチャーは現在8種に拡張 / Implemented (v1.6.0); matchers have since expanded to 8 kinds** · [日本語](designs/v1.6-auto-router.md)
+- **v1.6-auto-router-verification** — v1.6.0 のリリース検証記録 / Release verification record for v1.6.0. **実施済み (2026-04-22)・アーカイブ / Completed (2026-04-22), archived** · [日本語](designs/v1.6-auto-router-verification.md)
+- **external-agents-adapter** — 外部コーディングエージェント CLI アダプタ (Phase 1a〜1d) / External coding-agent CLI adapter (Phase 1a–1d). **実装済み (v2.7.7〜v2.7.10)。ただし in-core 実装は v2.9.0 で削除され、本体は `coderouter-plugin-agents` へ移設済み / Implemented (v2.7.7–v2.7.10); the in-core implementation was removed in v2.9.0 and moved to `coderouter-plugin-agents`** · [日本語](designs/external-agents-adapter.md)
+- **agent-cli-plugin-extraction** — agent_cli の外部プラグイン化 (Phase 2a/2b/2c) / Extracting agent_cli into an out-of-tree plugin (Phase 2a/2b/2c). **実装済み (v2.8.0 / v2.8.1 / v2.9.0) / Implemented (v2.8.0 / v2.8.1 / v2.9.0)** · [日本語](designs/agent-cli-plugin-extraction.md)
+- **launcher-model-swap** — オンデマンドのモデル起動・TTL アンロード / On-demand model launch & TTL-based unload. **Phase 1 実装済み (v2.9.1)。Phase 2(メモリ会計 + 排他 swap)は未着手 / Phase 1 implemented (v2.9.1); Phase 2 (memory accounting + exclusive swap) not started** · [日本語](designs/launcher-model-swap.md)
+- **launcher-multi-build** — llama.cpp の複数ビルド切替 (backend variants) / Switching between multiple llama.cpp builds (backend variants). **実装済み (v2.11.0) / Implemented (v2.11.0)** · [日本語](designs/launcher-multi-build.md)
+- **orchestration-companion** — 別プロセスのオーケストレーター構想 / Concept for a separate-process orchestrator. **構想のみ・未着手 / Concept only, not started** · [日本語](designs/orchestration-companion.md)
+
+### retrospectives/ — リリース振り返り / Release retrospectives
+
+- [v0.4](retrospectives/v0.4.md) · [v0.5](retrospectives/v0.5.md) · [v0.5-verify](retrospectives/v0.5-verify.md) · [v0.6](retrospectives/v0.6.md) · [v0.7](retrospectives/v0.7.md) · [v1.0](retrospectives/v1.0.md) · [v1.0-verify](retrospectives/v1.0-verify.md)
+
+### その他 / Other
+
 - **evidence/** — 実機検証ログ / Verification run logs
-- **openrouter-roster/** — OpenRouter 利用可能モデル一覧 / OpenRouter model roster — [README](openrouter-roster/README.md)
+- **openrouter-roster/** — OpenRouter 利用可能モデル一覧 / OpenRouter model roster — [README](openrouter-roster/README.md) · [変更履歴 / change log](openrouter-roster/CHANGES.md)
 
 ---
 
@@ -139,4 +160,4 @@ See each plugin's repo README for full configuration.
 
 ---
 
-最終更新 / Last updated: 2026-07-11
+最終更新 / Last updated: 2026-08-10

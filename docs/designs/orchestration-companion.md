@@ -2,6 +2,9 @@
 
 > 編集注記（2026-07-12）: リンク整理。`future.md` は現リポジトリに非収録のため、リンクは注記化または現存ドキュメントへの付け替え済み（記述内容自体は変更していない）。
 > ステータス: **構想（Concept）**。実装前。Core/Plugin の変更は伴わない。
+> 進捗（2026-08-10 時点・v2.14.0）: **未着手のまま。** 別 repo 化・プロダクト化のいずれも行っていない。
+> なお Claude Code のネイティブ subagents・ccr・antigravity といったクライアント側が
+> オーケストレーションを内蔵したため、CodeRouter 側で持つ必要性はむしろ下がっている。
 > 正典: `future.md`（当時の内部設計メモ。現リポジトリには未収録）§5（2026-06-27 追記）・§1.2（三層モデル）・§2.5（2026-07-11 追記）。§1.2 の判定基準に相当する記述は [`agent-cli-plugin-extraction.md`](./agent-cli-plugin-extraction.md) §1.3、§2.5 のopusplan構成例・既知の制限(G1/G6)に相当する記述は [`subagent-routing.md`](../guides/subagent-routing.md) §5(a)・§7 に移設されている。
 > 前提: agent_cli Phase 1 完結（v2.7.10、[`external-agents-adapter.md`](./external-agents-adapter.md)）
 > 作成: 2026-07-11 / 出典: 作者方向性指示 `_article/direction-brief-2026-07-11.md`・解析書 `_article/analysis-direction-2026-07.md` D-補足

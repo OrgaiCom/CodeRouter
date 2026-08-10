@@ -152,6 +152,40 @@ bind and no `CODEROUTER_ALLOWED_HOSTS` prints a startup warning.
 > (SSH tunnel / Tailscale / reverse proxy) live in the
 > [remote access guide](./remote-access.en.md).
 
+### 1-7. `providers.yaml` isn't being read / config changes have no effect — v2.13.0+
+
+**Symptom**: you edited `./providers.yaml` but `coderouter serve` / `doctor` doesn't behave any differently. The same workflow worked on v2.12 and earlier.
+
+**Cause**: as of v2.13.0, implicit discovery of `./providers.yaml` in the current working directory defaults to off (a security hardening: starting CodeRouter from a directory that happens to contain a hostile `providers.yaml` could otherwise steer executable fields like `restart_command`). Config search order:
+
+1. Explicit `--config` path
+2. `$CODEROUTER_CONFIG` env var
+3. `./providers.yaml` in the current directory — **only when `CODEROUTER_ALLOW_CWD_CONFIG` is truthy (`1`/`true`/`yes`/`on`)**
+4. `~/.coderouter/providers.yaml`
+
+If the opt-in is unset and a `./providers.yaml` exists, a one-time `cwd-config-skipped` warning fires at startup — seeing that in the log all but confirms this is the cause.
+
+**Fix** (pick one):
+
+```bash
+# 1) Opt in explicitly (only in directories you trust)
+CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
+
+# 2) Name the file explicitly
+coderouter serve --config ./providers.yaml
+
+# 3) Move it to the user-layer default
+mkdir -p ~/.coderouter && cp ./providers.yaml ~/.coderouter/providers.yaml
+```
+
+### 1-8. `/dashboard` or `/metrics.json` returns 401 — v2.14.0+
+
+Setting `CODEROUTER_METRICS_TOKEN` requires an `X-CodeRouter-Token` header (matching that value) on `/dashboard`, `/metrics.json` and `/metrics` (unset = open, as before). The dashboard prompts for the token once in the browser and keeps it in `sessionStorage`. For `curl` or scripts, pass the header explicitly:
+
+```bash
+curl -s -H "X-CodeRouter-Token: $CODEROUTER_METRICS_TOKEN" http://127.0.0.1:8088/metrics.json
+```
+
 ---
 
 ## 2. Reading logs and common patterns

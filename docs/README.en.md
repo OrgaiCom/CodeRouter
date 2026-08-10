@@ -19,7 +19,9 @@ Index of CodeRouter's public documentation — find the right page by what you w
 | Measure & avoid the language tax | [guides/language-tax](guides/language-tax.en.md) |
 | Something broke | [guides/troubleshooting](guides/troubleshooting.en.md) |
 | Launch a local LLM | [backends/launcher-quickstart](backends/launcher-quickstart.md) |
+| Run on a low-memory (8–16GB) host | [low-memory-integration](low-memory-integration.en.md) |
 | Secrets & security | [guides/security](guides/security.en.md) |
+| Connect securely from another PC | [guides/remote-access](guides/remote-access.en.md) |
 | Understand the design | [concepts/architecture](concepts/architecture.en.md) |
 | Extend with plugins | [Plugins](#plugins) |
 
@@ -60,6 +62,7 @@ Day-to-day usage.
 - **free-tier-guide** — Zero-cost operation with NVIDIA NIM × OpenRouter Free · [日本語](guides/free-tier-guide.md) · [English](guides/free-tier-guide.en.md)
 - **troubleshooting** — Fixing problems · [日本語](guides/troubleshooting.md) · [English](guides/troubleshooting.en.md)
 - **security** — Secrets handling & security posture · [日本語](guides/security.md) · [English](guides/security.en.md)
+- **remote-access** — Reach CodeRouter safely from another machine (four options: SSH tunnel, Tailscale, etc.) · [日本語](guides/remote-access.md) · [English](guides/remote-access.en.md)
 - **subagent-routing** — Route Claude Code sub-agents to different models · [日本語](guides/subagent-routing.md) · [English](guides/subagent-routing.en.md)
 
 ## 3. Local LLM backends — `backends/`
@@ -67,13 +70,14 @@ Day-to-day usage.
 Installing, launching, and connecting local inference backends.
 
 - **install-backends** — Installing the three backends (llama.cpp / vLLM / MLX) · [日本語](backends/install-backends.md) · [English](backends/install-backends.en.md)
-- **launcher-quickstart** — Install a backend and launch, the shortest path · [日本語](backends/launcher-quickstart.md)
-- **launcher** — Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md)
+- **launcher-quickstart** — Install a backend and launch, the shortest path · [日本語](backends/launcher-quickstart.md) · [English](backends/launcher-quickstart.en.md)
+- **launcher** — Launcher guide (Web & Desktop GUI) · [日本語](backends/launcher.md) · [English](backends/launcher.en.md)
 - **external-agents** — External coding-agent CLI (agent_cli, 4 CLIs: claude/codex/grok/antigravity; requires `coderouter-plugin-agents` since v2.9.0) · [日本語](backends/external-agents.md) · [English](backends/external-agents.en.md)
 - **llamacpp-direct** — Connect llama.cpp directly · [日本語](backends/llamacpp-direct.md) · [English](backends/llamacpp-direct.en.md)
 - **lmstudio-direct** — Connect LM Studio directly · [日本語](backends/lmstudio-direct.md) · [English](backends/lmstudio-direct.en.md)
-- **hf-ollama-models** — Use HF models via Ollama · [日本語](backends/hf-ollama-models.md)
-- **gguf_dl** — GGUF download helper · [日本語](backends/gguf_dl.md)
+- **claude-code-llamacpp-vllm** — Connect Claude Code to llama.cpp / vLLM without Ollama, plus fixes for the errors you'll hit in practice · [日本語](backends/claude-code-llamacpp-vllm.md) · [English](backends/claude-code-llamacpp-vllm.en.md)
+- **hf-ollama-models** — Use HF models via Ollama · [日本語](backends/hf-ollama-models.md) · [English](backends/hf-ollama-models.en.md)
+- **gguf_dl** — GGUF download helper · [日本語](backends/gguf_dl.md) · [English](backends/gguf_dl.en.md)
 - **verify-ollama-0.23.1** — Ollama v0.23.1 verification checklist · [日本語](backends/verify-ollama-0.23.1.md)
 
 ## 4. Architecture & internals — `concepts/`
@@ -85,13 +89,30 @@ How CodeRouter works and its reliability mechanisms.
 - **drift-detection** — Drift detection (v2.0-G) · [日本語](concepts/drift-detection.md) · [English](concepts/drift-detection.en.md)
 - **partial-stitch** — Mid-stream partial stitching (v2.0-H) · [日本語](concepts/partial-stitch.md) · [English](concepts/partial-stitch.en.md)
 - **continuous-probing** — Continuous probing (v2.0-I) · [日本語](concepts/continuous-probing.md) · [English](concepts/continuous-probing.en.md)
+- **low-memory-integration** — Integration guide for the proactive memory-budget guard on low-memory (8–16GB) hosts — VRAM/RAM detection, GGUF header introspection, and KV-cache-aware pre-dispatch fit decisions (`off`/`warn`/`fit`). **Implemented (v2.5.3)** · [日本語](low-memory-integration.md) · [English](low-memory-integration.en.md)
 
 ## 5. Design docs & records
 
-- **designs/** — Feature design docs ([v1.6 auto-router](designs/v1.6-auto-router.md) and others)
-- **retrospectives/** — Release retrospectives ([v0.4](retrospectives/v0.4.md) – [v1.0](retrospectives/v1.0.md))
+### designs/ — Feature design docs
+
+Implementation status is noted for each doc.
+
+- **v1.6-auto-router** — Initial design of auto_router. **Implemented (v1.6.0); matchers have since expanded to 8 kinds** · [日本語](designs/v1.6-auto-router.md)
+- **v1.6-auto-router-verification** — Release verification record for v1.6.0. **Completed (2026-04-22), archived** · [日本語](designs/v1.6-auto-router-verification.md)
+- **external-agents-adapter** — External coding-agent CLI adapter (Phase 1a–1d). **Implemented (v2.7.7–v2.7.10); the in-core implementation was removed in v2.9.0 and moved to `coderouter-plugin-agents`** · [日本語](designs/external-agents-adapter.md)
+- **agent-cli-plugin-extraction** — Extracting agent_cli into an out-of-tree plugin (Phase 2a/2b/2c). **Implemented (v2.8.0 / v2.8.1 / v2.9.0)** · [日本語](designs/agent-cli-plugin-extraction.md)
+- **launcher-model-swap** — On-demand model launch & TTL-based unload. **Phase 1 implemented (v2.9.1); Phase 2 (memory accounting + exclusive swap) not started** · [日本語](designs/launcher-model-swap.md)
+- **launcher-multi-build** — Switching between multiple llama.cpp builds (backend variants). **Implemented (v2.11.0)** · [日本語](designs/launcher-multi-build.md)
+- **orchestration-companion** — Concept for a separate-process orchestrator. **Concept only, not started** · [日本語](designs/orchestration-companion.md)
+
+### retrospectives/ — Release retrospectives
+
+- [v0.4](retrospectives/v0.4.md) · [v0.5](retrospectives/v0.5.md) · [v0.5-verify](retrospectives/v0.5-verify.md) · [v0.6](retrospectives/v0.6.md) · [v0.7](retrospectives/v0.7.md) · [v1.0](retrospectives/v1.0.md) · [v1.0-verify](retrospectives/v1.0-verify.md)
+
+### Other
+
 - **evidence/** — Verification run logs
-- **openrouter-roster/** — OpenRouter model roster — [README](openrouter-roster/README.md)
+- **openrouter-roster/** — OpenRouter model roster — [README](openrouter-roster/README.md) · [change log](openrouter-roster/CHANGES.md)
 
 ---
 
@@ -129,4 +150,4 @@ See each plugin's repo README for full configuration.
 
 ---
 
-Last updated: 2026-07-11
+Last updated: 2026-08-10

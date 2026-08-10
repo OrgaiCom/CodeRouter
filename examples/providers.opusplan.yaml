@@ -1,0 +1,168 @@
+# ============================================================
+# CodeRouter providers.yaml — opusplan 型: Plan は Opus、実行はローカル/中位
+# 【カテゴリ】 サブエージェント振り分け 実利用パターン(a) / kind="agent_cli" 併用
+#
+# 出典: docs/guides/subagent-routing.md §5(a)
+#       「opusplan 型 — Plan は Opus、実行はローカル/中位」の構成例を
+#       そのまま抽出したものです。
+#
+# 目的: Plan フェーズを Claude Opus(agent_cli、read-only)に、実行フェーズを
+#   ローカル中位モデル→クラウド中位モデルのフォールバックチェーンに、
+#   レビューは「監査」を Opus・「軽微」をローカルに、それぞれ振り分けます。
+#   役割ごとの割当は次の通り:
+#
+#     planner        (計画立案)     → agent-claude-opus   (Claude Opus, agent_cli, read-only)
+#     coder          (実装/実行)    → local-coder → cloud-mid (ローカル優先、失敗時クラウド中位)
+#     reviewer-audit (監査レビュー) → agent-claude-review (Claude Opus, agent_cli, read-only)
+#     reviewer-light (軽微レビュー) → local-reviewer       (ローカル中位)
+#
+# ⚠ 注意: Claude Code 純正の「opusplan」エイリアス(Plan モード中は opus、
+#   実行に移ると sonnet へ自動切替する Claude Code 内蔵の挙動)とは別物です。
+#   混同しないこと(出典: docs/guides/subagent-routing.md §5(a) 末尾の
+#   「駆動方法の注記」)。
+#
+# 駆動方法:
+#   本来の駆動は、上位層の自前 orchestrator が各サブ呼び出しに
+#   `X-CodeRouter-Profile: planner|coder|reviewer-audit|reviewer-light`
+#   ヘッダを明示付与する形です(優先順位は body.profile > X-CodeRouter-Profile
+#   > X-CodeRouter-Mode > auto_router > default_profile。詳細は
+#   docs/guides/subagent-routing.md §2)。下記の auto_router: ブロックは
+#   「クライアントが役割を宣言しない場合」の保険にすぎません。
+#
+# 前提: kind: agent_cli を使うため coderouter-plugin-agents のインストールが
+#   必須です(v2.9.0 以降。未導入のまま kind: agent_cli の provider が
+#   あると `coderouter serve` が起動時エラーで止まります)。下記の
+#   `plugins: enabled: [agents]` は必ず維持してください。
+#     uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#     # または: pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
+#
+#   Claude Opus をサブスク OAuth で使うため、事前に `claude` CLI で
+#   ログイン済みであること(`claude --version` で確認)。
+#
+# 使い方:
+#   1. coderouter-plugin-agents をインストールする(上記コマンド)
+#   2. claude CLI でログイン済みであることを確認する
+#   3. ローカル (local-coder / local-reviewer) 用に Ollama で以下を pull:
+#        ollama pull qwen3-coder:30b
+#        ollama pull qwen2.5-coder:7b
+#   4. cp examples/providers.opusplan.yaml ~/.coderouter/providers.yaml
+#   5. coderouter serve --port 8088
+#   6. 動作確認(役割明示):
+#        curl http://localhost:8088/v1/chat/completions \
+#          -H 'Content-Type: application/json' \
+#          -H 'X-CodeRouter-Profile: planner' \
+#          -d '{"model":"opus","messages":[{"role":"user","content":"1行でこんにちはと言って"}]}'
+#
+# ============================================================
+
+allow_paid: true            # agent_cli (claude=Opus サブスク) 利用のため
+default_profile: coder      # 明示ヘッダ/ルール不一致時は日常コーディング役へ
+
+# v2.9.0 以降必須: kind: agent_cli の provider を使うには
+# coderouter-plugin-agents をインストールした上で、ここに "agents" を
+# 列挙して有効化する必要がある (二段ゲート)。未インストール/未列挙のままだと
+# coderouter serve は起動時エラーで停止する
+# (docs/backends/external-agents.md のトラブルシューティング参照)。
+plugins:
+  enabled: [agents]
+
+providers:
+  # ── Plan 役: Claude Opus (agent_cli, read-only) ──────────────────────
+  #   Plan 段階はコードを書き換えないため read_only に固定。agent_cli は
+  #   「プロンプト in → テキスト out」の不透明なテキストバックエンドなので、
+  #   fallback chain の途中には挟まず単独 profile に据える。
+  - name: agent-claude-opus     # Plan役: Claude Opus (agent_cli, read-only)
+    kind: agent_cli
+    model: opus
+    paid: true
+    capabilities: { streaming: false, tools: false }   # agent_cli 既定
+    agent_cli: { agent: claude, sandbox_mode: read_only, exec_timeout_s: 600 }
+
+  # ── 実行役: 中位ローカル (税ゼロ) ─────────────────────────────────────
+  #   Ollama v0.23.1+ の Anthropic passthrough。実装/編集の主力で、
+  #   従量課金が発生しない。
+  - name: local-coder            # 実行役: 中位ローカル (税ゼロ)
+    kind: anthropic               # Ollama v0.23.1+ passthrough
+    base_url: http://localhost:11434
+    model: qwen3-coder:30b
+
+  # ── 実行役の保険: クラウド中位 ─────────────────────────────────────
+  #   local-coder が落ちた/届かないときのフォールバック先。無料枠モデル。
+  - name: cloud-mid               # 実行役の保険: クラウド中位
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen3-coder:free
+    paid: true
+
+  # ── レビュー役: 監査は Opus ────────────────────────────────────────
+  #   セキュリティ監査など重い/責任の大きいレビューは Opus に固定。
+  #   Plan 役と同じ read_only・agent_cli 構成だが profile は分離する
+  #   (Plan とレビューを取り違えないため)。
+  - name: agent-claude-review    # レビュー役: 監査は Opus
+    kind: agent_cli
+    model: opus
+    paid: true
+    capabilities: { streaming: false, tools: false }
+    agent_cli: { agent: claude, sandbox_mode: read_only }
+
+  # ── レビュー役: 軽微は別ローカル ─────────────────────────────────────
+  #   typo/フォーマット等の軽いレビューはコスト・レイテンシの低いローカル
+  #   モデルに寄せる。
+  - name: local-reviewer         # レビュー役: 軽微は別ローカル
+    kind: anthropic
+    base_url: http://localhost:11434
+    model: qwen2.5-coder:7b
+
+# ── プロファイル ──────────────────────────────────────────────────────
+profiles:
+  # planner — Plan フェーズ専用。agent_cli は単独が原則 (fallback なし)。
+  - name: planner
+    providers: [agent-claude-opus]
+
+  # coder — 実行フェーズ。ローカル優先→落ちたらクラウド中位へ。
+  - name: coder
+    providers: [local-coder, cloud-mid]   # ローカル優先→落ちたらクラウド
+
+  # reviewer-audit — 監査レビュー。責任が重いので Opus 単独。
+  - name: reviewer-audit
+    providers: [agent-claude-review]      # セキュリティ監査は Opus
+
+  # reviewer-light — 軽微レビュー。ローカル単独 (税ゼロ・低レイテンシ)。
+  - name: reviewer-light
+    providers: [local-reviewer]           # 軽微レビューはローカル
+
+# ── auto_router: クライアントが profile を明示しない場合の保険 ─────────
+#   本来の駆動は上位 orchestrator が X-CodeRouter-Profile を明示すること
+#   (上記「駆動方法」参照)。以下は「宣言なし」の単発リクエストに対する
+#   内容ベースの推測分岐にすぎない。
+auto_router:
+  default_rule_profile: coder
+  rules:
+    - id: user:image-to-multi
+      profile: planner
+      match: { has_image: true }
+    - id: user:dense-code-to-coder
+      profile: coder
+      match: { code_fence_ratio_min: 0.3 }
+    - id: user:long-context-to-planner
+      profile: planner
+      match: { content_token_count_min: 32000 }
+    - id: user:cjk-to-local
+      profile: coder
+      match: { cjk_ratio_min: 0.5 }
+    - id: user:review-keyword
+      profile: reviewer-audit
+      match: { content_contains: "レビュー" }
+
+# ── 運用メモ ──────────────────────────────────────────────────────────
+#
+# ・agent_cli の既定 capabilities は streaming: false / tools: false。
+#   fallback chain の中間には置けず、専用 profile の単独 provider か
+#   chain 終端に限定される(docs/guides/subagent-routing.md §7 の G6)。
+#
+# ・auto_router の各種 matcher は「1 ルール = 1 matcher」で AND 合成は
+#   できない(同 §7 の G1)。優先させたい条件を先に並べ、先着一致に任せる。
+#
+# ・model_pattern を追加で使う場合は re.fullmatch であることに注意
+#   (末尾の .* を忘れると一致しない。同 §4 参照)。
+# ============================================================

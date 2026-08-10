@@ -1,8 +1,16 @@
 # 外部コーディングエージェント統合アダプタ設計書（`kind="agent_cli"`）
 
 > 対象バージョン: CodeRouter v2.x 系 / Phase 1（in-core adapter）
-> 関連: [`docs/future.md`](../future.md) §1.2・§5、[`docs/backends/launcher.md`](../backends/launcher.md)
+> 関連: `docs/inside/future.md` §1.2・§5（ローカル専用 / 非公開）、[`docs/backends/launcher.md`](../backends/launcher.md)
 > ステータス: 設計確定 / Phase 1(1a claude・1b codex・1c antigravity・1d grok)実装済み・1c は antigravity として実装
+>
+> ⚠️ **本書が記述する in-core 実装は現存しません（2026-08-10 追記）。** Phase 2 として
+> v2.8.0（Adapter Protocol 配線）→ v2.8.1（`coderouter-plugin-agents` へ移設）→
+> **v2.9.0 で in-core `AgentCliAdapter` は削除**されました（BREAKING）。現在 `kind: agent_cli` を
+> 使うには外部プラグイン `coderouter-plugin-agents` の導入が必須です。
+> 移設の設計は [`agent-cli-plugin-extraction.md`](./agent-cli-plugin-extraction.md)、
+> 利用者向けの説明は [`docs/backends/external-agents.md`](../backends/external-agents.md) を参照。
+> 本書は **CLI の認証・argv・出力仕様の一次記録**、および plugin 側の設計典拠として残しています。
 
 本設計書は、OpenAI Codex CLI・Google Gemini CLI・xAI Grok・Anthropic Claude Code CLI の4つの外部コーディングエージェントを、CodeRouter の新しいアダプタ種別 `kind="agent_cli"` として本体に組み込む方式を定義するものである。CLI のフラグ・認証仕様はすべて調査レポート（`RESEARCH-cli.md`、2026-07 時点）を、コード上の拡張点はすべてコード解析報告書（`ANALYSIS-code.md`）を典拠とする。ユーザー確定事項（`DECISIONS.md`）は拘束条件であり、本書はそれを厳密に実装する。
 

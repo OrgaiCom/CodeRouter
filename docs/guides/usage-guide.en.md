@@ -309,6 +309,18 @@ That's exactly the `claude-code` profile in `examples/providers.yaml`.
 
 Layering NVIDIA NIM's developer tier (40 req/min) on top of the free lane gives you 2× the rate cap of OpenRouter free and access to 70B–480B-class models when local falls over. The sample `examples/providers.nvidia-nim.yaml` wires an 8-step local → NIM → OpenRouter free → paid chain as the `claude-code-nim` profile; [`free-tier-guide.en.md`](./free-tier-guide.en.md) covers the live-verified model roster and the five common footguns in detail.
 
+### Turning subscription auth into an ordinary provider — `credential.source: cli_session` (v2.14.0)
+
+Subscription-authenticated providers such as Kimi Code CLI or Grok CLI used to have only one option: `kind: agent_cli`, which spawns the external CLI once per request — no streaming, no tool-call repair, no context-budget guard, and it can't join a fallback chain. It was an island.
+
+`credential.source: cli_session` reads the OAuth token the vendor's CLI already wrote to disk, so the same subscription can be an ordinary `openai_compat` / `anthropic` entry instead. CodeRouter makes the HTTP call itself, so it becomes an ordinary link in the chain:
+
+```yaml
+providers: [kimi-sub, free-cloud, local-llama]
+```
+
+See [`examples/providers.cli-session.yaml`](../../examples/providers.cli-session.yaml) for a full config, and the [security guide](./security.en.md) for the trust boundary on the token file and the safety of `refresh.command` (an argv list, `shell=False`).
+
 ---
 
 ## 7. Verify it works (`doctor` + `verify`)
@@ -319,6 +331,29 @@ CodeRouter ships two verification tools:
 
 ```bash
 uv run coderouter doctor --check-model ollama-qwen-coder-7b
+```
+
+### `coderouter rollback` — undo an `--apply` (v2.14.0)
+
+Both `doctor --apply` and `vscode-init` have always written a `.bak` before rewriting a file, but there was no way to put it back. `coderouter rollback` restores `providers.yaml`, `~/.coderouter/model-capabilities.yaml`, and (with `--workspace`) `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
+
+Restoring is a **swap** — the current contents become the new `.bak`, so running `rollback` a **second time reverts back to where you started** (not a one-way overwrite).
+
+```bash
+uv run coderouter rollback                       # providers.yaml + model-capabilities.yaml
+uv run coderouter rollback --workspace ./myrepo   # + .vscode/settings.json, .envrc
+uv run coderouter rollback --dry-run              # preview only
+uv run coderouter rollback --path providers.yaml  # restore one file, skip discovery
+```
+
+Exit codes: `0` restored / `2` nothing to restore (no `.bak`) / `1` a restore failed.
+
+### `coderouter doctor --check-secrets` (v2.14.0)
+
+Proves the log-redaction filter actually scrubs (via a canary injection), reports which declared `api_key_env` vars are set, flags credentials pasted into a `base_url`, and scans the existing `requests.jsonl` / `audit.jsonl` (including rotated `.1`) for leftover live key values. Same 0 (clean) / 2 (needs attention) / 1 (blocker) exit contract as `--check-env`. See the [security guide](./security.en.md) for the full threat model.
+
+```bash
+uv run coderouter doctor --check-secrets
 ```
 
 **Full-system real-machine verify** — `bash scripts/verify_v1_0.sh`. Runs three paired bare/tuned scenarios end-to-end to prove the transformation + probe loop is closed. See `scripts/verify_v1_0.sh --help` for the scenario breakdown and [`docs/retrospectives/v1.0-verify.md`](../retrospectives/v1.0-verify.md) for the reference evidence doc.

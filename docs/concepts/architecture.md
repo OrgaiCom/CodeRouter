@@ -7,6 +7,16 @@ English: [`architecture.en.md`](./architecture.en.md)
 
 最終更新: v2.5.0 (2026-05-22)
 
+> **注記(2026-08-10 追記)**: 本図・本文は v2.5.0 時点のコア構造を対象としており、以降の変更に合わせた全面書き換えは行っていません。v2.5.0 以降に加わった主な層・機能は以下の通りです。
+> - Language Tax の計測/ルーティング/可視化 (v2.6.0) → [`docs/guides/language-tax.md`](../guides/language-tax.md)
+> - Token-savings accounting (v2.6.1)
+> - agent_cli(外部コーディングエージェント CLI 連携)は v2.9.0 で in-core 実装から外部プラグイン `coderouter-plugin-agents` へ移設され、**Core からは削除**されました → [`docs/backends/external-agents.md`](../backends/external-agents.md)
+> - Launcher の model swap (v2.9.1) と backend variants (v2.11.0) → [`docs/backends/launcher.md`](../backends/launcher.md)
+> - context-budget ガードのトークン推定修正 (v2.12.0)
+> - 認証情報衛生: `credential.source: cli_session` / ログの秘密スクラブ / `CODEROUTER_METRICS_TOKEN` (v2.14.0) → [`docs/guides/security.md`](../guides/security.md)
+>
+> 最新の全体像は [`CHANGELOG.md`](../../CHANGELOG.md) を参照してください。
+
 ---
 
 ## 全体像 — 3 層フォールバック + 6 系統障害ガード

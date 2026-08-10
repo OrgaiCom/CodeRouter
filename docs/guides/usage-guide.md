@@ -310,6 +310,18 @@ uv run coderouter serve --port 8088
 
 NVIDIA NIM の開発者枠（40 req/min）を無料層の上に重ねると、ローカルが落ちた際の退避先として OpenRouter より 2 倍広い rate cap と 70B〜480B 級モデルが使えます。設定サンプル `examples/providers.nvidia-nim.yaml` の `claude-code-nim` プロファイルが local → NIM → OpenRouter free → paid の 8 段チェーンを組んであり、詳細は [`free-tier-guide.md`](./free-tier-guide.md) に別建てでまとめています（live 検証済みモデル一覧・よくあるハマり所 5 点込み）。
 
+### サブスク認証を普通のプロバイダにする — `credential.source: cli_session` (v2.14.0)
+
+Kimi Code CLI や Grok CLI のようなサブスクリプション認証プロバイダは、これまで `kind: agent_cli`（リクエストごとに外部 CLI を one-shot 起動）しか選択肢がなく、ストリーミング不可・tool-call 修復なし・context-budget ガードなし・フォールバックチェーンにも入れない「孤立した島」でした。
+
+`credential.source: cli_session` は、ベンダー CLI が既にディスクへ書いた OAuth トークンを読むだけで、そのサブスク枠を普通の `openai_compat` / `anthropic` エントリとして扱えるようにします。CodeRouter 自身が HTTP を投げるので、チェーンの一リンクにできます:
+
+```yaml
+providers: [kimi-sub, free-cloud, local-llama]
+```
+
+設定例は [`examples/providers.cli-session.yaml`](../../examples/providers.cli-session.yaml)、トークンファイルの信頼境界や `refresh.command` の安全性（argv リスト・`shell=False`）などの詳細は [セキュリティガイド](./security.md) を参照。
+
 ---
 
 ## 7. 動作確認 (`doctor` + `verify`)
@@ -323,6 +335,29 @@ uv run coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
 **フルシステムの実機検証** — `bash scripts/verify_v1_0.sh`。3 つのペア（bare/tuned）シナリオをエンドツーエンドで回し、変換 + プローブのループが閉じていることを実証。シナリオ内訳は `scripts/verify_v1_0.sh --help`、参照エビデンスドキュメントは [`docs/retrospectives/v1.0-verify.md`](../retrospectives/v1.0-verify.md)。
+
+### `coderouter rollback` — `--apply` を元に戻す (v2.14.0)
+
+`doctor --apply` と `vscode-init` はどちらも書き換え前に `.bak` を書いていましたが、それを元に戻す手段がありませんでした。`coderouter rollback` は `providers.yaml`、`~/.coderouter/model-capabilities.yaml`、(`--workspace` 指定時) `.vscode/settings.json` / `.envrc` を `.bak` から復元します。
+
+復元は「スワップ」— 現在の内容がそのまま新しい `.bak` になるので、**もう一度 `rollback` を実行すると元に戻ります**(片道の上書きではなく往復可能)。
+
+```bash
+uv run coderouter rollback                       # providers.yaml + model-capabilities.yaml
+uv run coderouter rollback --workspace ./myrepo   # + .vscode/settings.json, .envrc
+uv run coderouter rollback --dry-run              # 何が復元されるかだけ確認
+uv run coderouter rollback --path providers.yaml  # 個別ファイル指定(discovery を使わない)
+```
+
+終了コード: `0` = 復元した / `2` = 復元対象なし(`.bak` が無い) / `1` = 復元に失敗したファイルがある。
+
+### `coderouter doctor --check-secrets` (v2.14.0)
+
+ログの秘匿化フィルタが実際に効いているかをカナリア注入で証明し、宣言済み `api_key_env` の実値有無を報告し、`base_url` に紛れ込んだ認証情報を検出し、既存の `requests.jsonl` / `audit.jsonl`(ローテーション済み `.1` を含む)に生の鍵が残っていないかを走査します。終了コードは `--check-env` と同じ 0(健全) / 2(要対応) / 1(致命)。詳しい読み方・脅威モデルは [セキュリティガイド](./security.md) を参照。
+
+```bash
+uv run coderouter doctor --check-secrets
+```
 
 v0.5 系にも `scripts/verify_v0_5.sh` があり、ケイパビリティゲート (`thinking` / `cache_control` / `reasoning`) の面を網羅。どちらも冪等で再実行して問題ありません。
 

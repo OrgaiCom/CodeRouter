@@ -24,9 +24,16 @@ The design contract:
   until a human debugged it.
 * Nothing an operator wrote is destroyed without a copy: before any
   existing file is rewritten, its previous bytes (and mode) land in
-  ``<name>.bak``. ``--force`` on ``.envrc`` is a whole-file replace,
-  not a merge, so this is the only thing standing between the user and
-  a lost ``source_env_if_exists .envrc.local`` line.
+  ``<name>.bak``, which ``coderouter rollback`` can swap back.
+* Since v2.14.0, ``.envrc`` is edited through a marker-delimited block
+  (``# BEGIN coderouter-managed`` … ``# END coderouter-managed``): only
+  that block is rewritten and every other line survives byte-for-byte.
+  A re-run over an already-fenced file therefore needs no ``--force``;
+  ``--force`` now means "adopt a file I did not write". Before v2.14.0
+  this was a whole-file replace, which is how the lost
+  ``source_env_if_exists .envrc.local`` line (H-11) happened — see the
+  "marker-delimited managed block in .envrc" section below for the full
+  rationale and the conflict rules.
 * A freshly generated ``.envrc`` is created 0600 — it carries
   ``ANTHROPIC_AUTH_TOKEN`` and sits next to the operator's real
   secrets. An existing file's mode is preserved across rewrites

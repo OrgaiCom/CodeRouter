@@ -17,8 +17,11 @@
 #   1. 先にベンダーの CLI でログインしておく (例: `kimi login`, `grok login`)
 #   2. cp examples/providers.cli-session.yaml ~/.coderouter/providers.yaml
 #   3. path / field / expiry_field を実際のファイルに合わせて調整
-#   4. coderouter doctor --check-secrets で読めているか確認
-#   5. coderouter serve
+#   4. coderouter serve を起動し、起動ログに credential-unavailable /
+#      credential-refresh-failed が出ないことを確認
+#      (doctor --check-secrets は api_key_env しか見ないため、
+#       cli_session トークンの読み取り可否は検証できません)
+#   5. 実際に 1 リクエスト投げて 401 が返らないことを確認
 #
 # ============================================================
 
@@ -105,9 +108,12 @@ allow_paid: false
 
 # ── 運用メモ ──────────────────────────────────────────────────────────
 #
-# ・借りたトークンは v2.14.0 のログスクラバに自動登録されます。
-#   ログや requests.jsonl に生の値が出ないことは
-#   `coderouter doctor --check-secrets` で実測確認できます。
+# ・借りたトークンは、読み取りに成功した時点で v2.14.0 のログスクラバへ
+#   自動登録されます (credentials.py の register_secret)。以後そのプロセスの
+#   ログ・requests.jsonl・audit.jsonl から生の値がマスクされます。
+#   なお `coderouter doctor --check-secrets` はスクラバ自体が効いていることを
+#   カナリアで証明しますが、走査対象は api_key_env 由来の値です
+#   (別プロセスなので cli_session トークンはまだ登録されていません)。
 #
 # ・セッションファイルが無い / 壊れている / まだログインしていない場合、
 #   CodeRouter は例外を投げずに「認証なしで送る」に倒します。

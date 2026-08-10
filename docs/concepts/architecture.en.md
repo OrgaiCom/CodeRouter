@@ -7,6 +7,16 @@
 
 Last updated: v2.5.0 (2026-05-22)
 
+> **Note (added 2026-08-10)**: This diagram and text cover the core structure as of v2.5.0; they have not been rewritten to track later changes. The main layers/features added since v2.5.0:
+> - Language Tax measurement, routing, and visualization (v2.6.0) → [`docs/guides/language-tax.md`](../guides/language-tax.md)
+> - Token-savings accounting (v2.6.1)
+> - agent_cli (external coding-agent CLI integration) moved from an in-core adapter to the external plugin `coderouter-plugin-agents` in v2.9.0, and was **removed from Core** → [`docs/backends/external-agents.md`](../backends/external-agents.md)
+> - Launcher model swap (v2.9.1) and backend variants (v2.11.0) → [`docs/backends/launcher.md`](../backends/launcher.md)
+> - context-budget guard token-estimation fix (v2.12.0)
+> - Credential hygiene: `credential.source: cli_session`, log secret scrubbing, `CODEROUTER_METRICS_TOKEN` (v2.14.0) → [`docs/guides/security.md`](../guides/security.md)
+>
+> See [`CHANGELOG.md`](../../CHANGELOG.md) for the current full picture.
+
 ---
 
 ## Big picture — 3-layer fallback + 6-family failure guards

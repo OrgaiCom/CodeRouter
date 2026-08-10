@@ -104,9 +104,10 @@ timestamp in `latest.json`).
    `⚠️ REMOVED` entries usually warrant action:
    - Update `examples/providers.yaml` if the removed model was
      referenced in any profile.
-   - Cross-check [`docs/openrouter-roster.md`](../openrouter-roster.md)
-     — the v0.4-B audit document — and either move the entry to its
-     "dropped" table or note it inline.
+   - Cross-check against the v0.4-B audit findings (see "Why this
+     exists" above — no standalone `docs/openrouter-roster.md` file
+     exists in this repo) and either move the entry to its "dropped"
+     table or note it inline.
    - Grep the code / tests / `README.md` for the model id and
      update anything that mentioned it as an example.
 3. `git commit docs/openrouter-roster/` with a message like

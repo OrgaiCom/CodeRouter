@@ -63,6 +63,8 @@ python3 launcher_gui.py --config ~/.coderouter/providers.yaml
 
 Config file lookup order: ① `--config` if given → ② `providers.yaml` in the current directory → ③ `~/.coderouter/providers.yaml`. If none exist, it starts with an empty configuration (you can still start things by entering values manually in the UI).
 
+> **As of v2.13.0, step ② (implicit discovery of `providers.yaml` in the current directory) is disabled by default.** This closes a code-execution vector: a hostile `providers.yaml` dropped into the working directory could otherwise hijack executable references such as `launcher.backends[*].binary`. It only becomes opt-in enabled when `CODEROUTER_ALLOW_CWD_CONFIG=1` is set (`true`/`yes`/`on` also work). If it's unset and a `providers.yaml` exists in the current directory, it is skipped rather than loaded.
+
 ### CodeRouter bar (desktop edition only)
 
 At the top of the desktop edition there is a **CodeRouter bar** not present in the Web edition.

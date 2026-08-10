@@ -3,23 +3,28 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-07-02 (全ソースレビュー改修マージ + 版況更新) → **2026-07-11 追記: agent_cli Phase 1 完結 (v2.7.10) + 方向性関連タスク追記**
+最終更新: 2026-08-10 (版況を v2.14.0 に更新 / 現況サマリを status.md へ移管 / リンク切れ修復)
 作成者: zephel01
-状態: **v2.7.0 リリース済み (2026-07-02)**。6 系統障害 (L1〜L6) 全対処 + 自己修復 + 状態永続化 + Plugin 層 + Goal モード + Launcher (llama.cpp / vllm / MLX GUI) + Language Tax 計測/ルーティング + Token-savings accounting に到達。Runtime deps: 5 (出荷以来据え置き連続)、完全互換。**2026-07-02: 全ソースレビュー (26,600 行) を経て高優先度 8 件 (H1〜H8) を PR #34、中優先度 14 件 (M1〜M14) を PR #35 で main にマージし、**v2.7.0 として出荷**。**
+状態: **v2.14.0 リリース済み (2026-08-09)**。Runtime deps: 5 (出荷以来据え置き連続)。
+
+- **今どこにいて次に何をするか (現況 / 未消化タスク / 実装スケジュール / 文書地図)**: [`docs/inside/status.md`](./docs/inside/status.md) ← **まずこれを読む**
 - **過去の出荷済みリリース (版履歴の正本)**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
-- **未来の方向性 (Vision / 中長期ロードマップ / v2.5+ ロードマップ / 市場分析 / 競合分析)**: [`docs/inside/future.md`](./docs/inside/future.md) を参照
+- **未来の方向性 (Vision / 中長期ロードマップ / 市場分析 / 競合分析)**: [`docs/inside/future.md`](./docs/inside/future.md) を参照
 - **本ドキュメント**: 出荷済みマイルストーンのスコープ / 設計判断の記録 + ローカル backend 別接続マトリクス + 検討中 / やらないこと
 
 ### 現況サマリ
 
-**v0.1〜v2.6 は全て出荷済み。** 各リリースの一言ゴールは §6.1 全景、版履歴は §6.2 / [`CHANGELOG.md`](./CHANGELOG.md)、出荷済みマイルストーンの設計判断は版別節 §7〜§13 を参照。
+> **現況・未消化タスク・実装スケジュールは [`docs/inside/status.md`](./docs/inside/status.md) へ移管しました (2026-08-10)。**
+> plan.md で二重管理すると必ず片方が腐ります (実際、この節は v2.6.1 時点で止まったまま v2.14.0 まで7リリース分ずれていました)。ここには版況を書きません。
 
-到達点 (v2.6.1 時点): 6 系統障害 (L1〜L6) 全対処 + 自己修復 (self-healing) + 状態永続化 (sqlite3 StateStore) + Plugin 層 (input_filter / observer hook) + Goal モード対応 + Launcher (llama.cpp / vllm / MLX GUI)。v2.5.4 で Gemma `<0xNN>` byte-fallback 修復フィルタ (Ollama 0.30 detokenizer 対策)、v2.5.5 で Claude Code CLI ≥ 2.1.154 の非仕様 `role: "system"` 正規化 (ingress 側 workaround)、v2.6.0 で **Language Tax** (CJK トークン税) の計測 / ルーティング (`cjk_ratio_min` matcher) / 可視化 + starlette 1.3.1 への CVE 更新、v2.6.1 で **Token-savings accounting** (trim / compress のトークン節約量をメトリクス・ダッシュボードに集約) を出荷。Runtime deps は出荷以来 5 本据え置き連続。
+plan.md 内の索引:
 
-- **2026-07-02 レビュー改修 (v2.7.0)**: 全ソース (26,600 行) レビューで検出した高優先度 8 件 (H1〜H8、PR #34) / 中優先度 14 件 (M1〜M14、PR #35) を main にマージ。テストは **1263 → 1401** (回帰テスト 139 件追加、既存非破壊)。運用に効く新要素: 環境変数 **`CODEROUTER_LAUNCHER_TOKEN`** (launcher start/stop/delete のトークン認証、opt-in・未設定は従来動作) / **`CODEROUTER_ALLOWED_HOSTS`** (Host 検証の追加許可) / **`CODEROUTER_MAX_BODY_BYTES`** (ボディ上限、既定 64MB)。挙動変更: 不正設定 (存在しない provider 名 / 重複名 / 逆転閾値 / `has_tools: false`) が起動時 fail-fast エラーに、drift 降格が adaptive 無効時も実効化、adaptive routing がストリーミングでも観測収集を実効化、request/audit ログが最大 20 件 / 2 秒の遅延書き込みに。詳細: `_OUTPUTS/02-レビュー監査/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) / 改修サマリ H1-H8 (`_OUTPUTS/02-レビュー監査/code-review/fixes_H/`) / 改修サマリ M1-M14 (`_OUTPUTS/02-レビュー監査/code-review/fixes_M/`)。
-- **2026-07-11 agent_cli Phase 1 完結 (v2.7.8〜v2.7.10)**: claude/codex/grok/antigravity の4 CLI をワンショット backend 化 (gemini は個人向け終了で antigravity `agy` に置換)。あわせて作者の方向性指示 (`_article/direction-brief-2026-07-11.md`) を受け、「作業ごとにモデルを割当・サブエージェントを利用する」路線を検討 — **結論: 既存資産 (auto_router + profiles + fallback + agent_cli) の構成パターンで表現可能**、詳細は [`docs/inside/future.md`](./docs/inside/future.md) §5・§2.5 参照。plan.md では検討中テーブルと docs/examples 作業に反映 (下記)。
-- **v2.5+ の今後ロードマップ / Vision / 競合分析 / 市場分析** は [`docs/inside/future.md`](./docs/inside/future.md) を参照 (plan.md では重複させない)。
-- **Reactive 発火条件** (運用ルール、reactive but focused) も future.md §3 に集約済み。
+- 各マイルストーンの設計判断: 版別節 §7〜§13
+- 検討中 / やらないこと: 下記「❓ 検討中」「❌ やらないこと」および §15
+- 横断タスク: §14、実装ログ: §18
+- リスク台帳: §16
+
+> 注: §6.1 全景 / §6.2 リリース履歴 / §13 の版一覧は **v2.6.1 で更新を止めています**。plan.md 冒頭で「版履歴の正本は CHANGELOG.md」と宣言しているのに版一覧を二重に持っていたことが、版況が腐った直接の原因でした。v2.7.0 以降の版は [`CHANGELOG.md`](./CHANGELOG.md) を参照してください。
 
 ### ローカル backend 別接続マトリクス + テスト方針 (現役、運用中)
 
@@ -27,9 +32,9 @@ CodeRouter は `kind: openai_compat` と `kind: anthropic` の 2 経路で **Oll
 
 | Backend | デフォルトポート | `base_url` (CodeRouter から) | 推奨 kind | 検証ステータス | 専用 doc |
 | --- | --- | --- | --- | --- | --- |
-| **Ollama** | `11434` | `http://localhost:11434` (Anthropic 互換) / `http://localhost:11434/v1` (OpenAI 互換) | **`anthropic`** (v0.23.1+) | ✅ v0.x 〜 v2.2 通して継続検証。**v0.23.1 Anthropic API 実機検証済み — Gemma 4 全サイズ Level 3 到達** ([検証記録](./docs/verify-ollama-0.23.1.md)) | [`docs/quickstart.md`](./docs/quickstart.md) / [`docs/troubleshooting.md` §4-2](./docs/troubleshooting.md) |
-| **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | `openai_compat` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/llamacpp-direct.md`](./docs/llamacpp-direct.md) |
-| **LM Studio** | `1234` | `http://localhost:1234` (Anthropic 互換) / `http://localhost:1234/v1` (OpenAI 互換) | **`anthropic`** (v0.4.12+) | ✅ v1.8.4 で実機検証 (Qwen3.5/3.6/Qwopus3.5 全動作、Anthropic prompt caching 成立) | [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md) |
+| **Ollama** | `11434` | `http://localhost:11434` (Anthropic 互換) / `http://localhost:11434/v1` (OpenAI 互換) | **`anthropic`** (v0.23.1+) | ✅ v0.x 〜 v2.2 通して継続検証。**v0.23.1 Anthropic API 実機検証済み — Gemma 4 全サイズ Level 3 到達** ([検証記録](./docs/backends/verify-ollama-0.23.1.md)) | [`docs/start/quickstart.md`](./docs/start/quickstart.md) / [`docs/guides/troubleshooting.md` §4-2](./docs/guides/troubleshooting.md) |
+| **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | `openai_compat` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/backends/llamacpp-direct.md`](./docs/backends/llamacpp-direct.md) |
+| **LM Studio** | `1234` | `http://localhost:1234` (Anthropic 互換) / `http://localhost:1234/v1` (OpenAI 互換) | **`anthropic`** (v0.4.12+) | ✅ v1.8.4 で実機検証 (Qwen3.5/3.6/Qwopus3.5 全動作、Anthropic prompt caching 成立) | [`docs/backends/lmstudio-direct.md`](./docs/backends/lmstudio-direct.md) |
 | **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | `openai_compat` | ⏳ E2E TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外)。**Launcher (v2.5.0+) から起動・管理可能** | [`docs/backends/install-backends.md`](./docs/backends/install-backends.md) |
 | **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | `openai_compat` | ⏳ E2E TODO (Mac native、量子化が Apple Silicon 最適化)。**Launcher (v2.5.1+) から起動・管理可能** (`python -m mlx_lm.server`) | [`docs/backends/install-backends.md`](./docs/backends/install-backends.md) |
 
@@ -71,18 +76,26 @@ lmstudio-anthropic:
 
 この経路では tool_use / thinking blocks / cache_control が全て Anthropic ネイティブ形式で透過する。**翻訳レイヤーを経由しないため、wire 上の情報欠落がゼロ**。
 
-検証記録: Ollama → [`docs/verify-ollama-0.23.1.md`](./docs/verify-ollama-0.23.1.md)、LM Studio → [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md)、providers.yaml sample → `examples/providers.yaml`。
+検証記録: Ollama → [`docs/verify-ollama-0.23.1.md`](./docs/backends/verify-ollama-0.23.1.md)、LM Studio → [`docs/backends/lmstudio-direct.md`](./docs/backends/lmstudio-direct.md)、providers.yaml sample → `examples/providers.yaml`。
 
 ### 今後の作業 (docs / examples 整備)
 
-実装本体は v2.6.1 まで出荷完了 + 2026-07-02 レビュー改修 (H1〜H8 / M1〜M14) を **v2.7.0 (2026-07-02)** として出荷済み。残るのは docs / examples 系の継続作業と、レビューで積み残した低優先度リファクタのみ:
+> **未消化タスクの正本は [`docs/inside/status.md`](./docs/inside/status.md) §3 に移しました (2026-08-10)。** 優先度・依存関係・スケジュールはそちらを見てください。
+> 以下は plan.md 固有の項目のうち、まだ残っているものだけです。
 
-- **新 env var の docs 反映**: `CODEROUTER_LAUNCHER_TOKEN` / `CODEROUTER_ALLOWED_HOSTS` / `CODEROUTER_MAX_BODY_BYTES` を運用ガイド・troubleshooting に追記 (レビュー改修で追加、未 doc 化)
-- **レビュー低優先度リファクタ (L1〜L5)**: バグ修正が落ち着いてから着手予定。L1 = `fallback.py` (2,416 行) の 1 試行前後処理の集約、L2 = `logging.py` (1,481 行) の汎用 `emit_event()` 化、L3 = `schemas.py` / `doctor.py` の分割、L4 = 重複コード (プロファイル解決 / adapter エラー変換 / output filter) の集約、L5 = その他小粒 (Prometheus 未出力メトリクス / `restart_command` の `shell=True` / 月次予算 TOCTOU 等)。詳細は `_OUTPUTS/02-レビュー監査/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) の「優先度: 低」節
+**2026-08-10 に解消済み (status.md P1 として実施):**
+
+- ~~**新 env var の docs 反映**~~ → `CODEROUTER_LAUNCHER_TOKEN` / `CODEROUTER_ALLOWED_HOSTS` / `CODEROUTER_MAX_BODY_BYTES` は `docs/guides/security.md` に記載済み。v2.13.0 / v2.14.0 で増えた `CODEROUTER_ALLOW_CWD_CONFIG` / `CODEROUTER_METRICS_TOKEN` も同日追記
+- ~~**`examples/providers.opusplan.yaml`**~~ → 作成済み (`docs/guides/subagent-routing.md` §5(a) から抽出)
+
+**残っているもの:**
+
+- **レビュー低優先度リファクタ (L1〜L5)**: バグ修正が落ち着いてから着手予定。L1 = `fallback.py` の 1 試行前後処理の集約 (v2.14.0 時点で 3,486 行)、L2 = `logging.py` の汎用 `emit_event()` 化、L3 = `schemas.py` / `doctor.py` の分割、L4 = 重複コード (プロファイル解決 / adapter エラー変換 / output filter) の集約、L5 = その他小粒 (Prometheus 未出力メトリクス / `restart_command` の `shell=True` / 月次予算 TOCTOU 等)。詳細は `_OUTPUTS/02-レビュー監査/code-review/2026-07-02_コードレビュー改善提案_v1.md` (ローカル保管) の「優先度: 低」節
+  - 注: `restart_command` の `shell=True` は **v2.13.0 で `shell=False` の argv 実行に変更済み** (この行の記述より先に個別対応された)
 - **`docs/verification.md` の精緻化**: MoE モデルの罠・rolling-window タイミング制約・goal_mode 実機検証知見を反映
 - **`examples/providers.production-grade.yaml`**: `monthly_budget_usd` / `memory_pressure_action` / `goal_mode: true` を組み合わせた production yaml 雛形
 - **Unsloth Studio プロバイダー検証**: E2E 手動テスト (~2h、安定版確認後)
-- **`examples/providers.opusplan.yaml`** (2026-07-11 追加、方向性 framing 由来): planner (agent_cli claude opus, read_only) / coder (local 優先→cloud-mid フォールバック) / reviewer-audit (agent_cli claude opus) / reviewer-light (local) の役割別 profile + auto_router 保険ルールの雛形。作者 Note 記事の opusplan 型ワークフロー提案を構成パターンとして実体化する。詳細スケッチは [`docs/inside/future.md`](./docs/inside/future.md) §2.5 参照
+- ~~**`examples/providers.opusplan.yaml`**~~ (2026-07-11 追加、方向性 framing 由来) → **2026-08-10 作成済み**。planner (agent_cli claude opus, read_only) / coder (local 優先→cloud-mid フォールバック) / reviewer-audit (agent_cli claude opus) / reviewer-light (local) の役割別 profile。公開ガイドは [`docs/guides/subagent-routing.md`](./docs/guides/subagent-routing.md) §5(a)
 
 > v2.5+ の機能ロードマップ (goal context bridge / public benchmark / plugin-memory backend 等) は [`docs/inside/future.md`](./docs/inside/future.md) に集約。plan.md では重複させない。
 
@@ -95,7 +108,7 @@ lmstudio-anthropic:
 | **`coderouter-cli` を Go で別配布** | Python 配布で詰んだ場合の B プラン (§16 リスク対応案) | 現状 PyPI publish が安定して機能しているため保留。将来 (i) Python 環境構築の摩擦が再燃 / (ii) single static binary の需要、いずれかで再評価 |
 | **`npm i -g coderouter` 経路** | Node ユーザー向け配布 | uvx で十分という判断。Claude Code が npm 経由なので「同じ install 経路」需要が顕在化したら検討 |
 | **依存最小主義の「次の絞り」** | 5 deps 据え置きの継続 vs `httpx` HTTP/2 / async 安定性のための backport 受容 | 需要なし、現状維持の方針 (§5.4)。BREAKING に踏み込むなら別途 |
-| **agent_cli Plugin 切り出し (Phase 2)** (2026-07-11 追加、詳細設計 2026-07-11 追記) | `docs/designs/external-agents-adapter.md` §9.3。詳細設計: [`docs/designs/agent-cli-plugin-extraction.md`](./docs/designs/agent-cli-plugin-extraction.md)（設計中・レビュー前）。状況: 構想確定。Adapter Protocol 配線後に in-core `AgentCliAdapter` を `coderouter-plugin-agents` へ前方互換移設。CLI churn (grok モデル廃止・gemini→antigravity・codex スキーマ未凍結) を Core リリース周期から分離するのが動機 | 着手は発火条件待ち: (i) agent_cli 利用比重の恒常化 (ii) CLI churn 追従コストが Core リリースを圧迫 (iii) コミュニティ要望 |
+| **agent_cli Plugin 切り出し (Phase 2)** (2026-07-11 追加) | `docs/designs/external-agents-adapter.md` §9.3 / 詳細設計: [`docs/designs/agent-cli-plugin-extraction.md`](./docs/designs/agent-cli-plugin-extraction.md)。in-core `AgentCliAdapter` を `coderouter-plugin-agents` へ移設し、CLI churn (grok モデル廃止・gemini→antigravity・codex スキーマ未凍結) を Core リリース周期から分離する | ✅ **完了 (2026-07-11)**。Phase 2a = v2.8.0 (Adapter Protocol 配線) / Phase 2b = v2.8.1 (plugin へ移設・in-core は deprecation) / **Phase 2c = v2.9.0 で in-core adapter を削除 (BREAKING)**。以後 `kind: agent_cli` は `coderouter-plugin-agents` の導入が必須 |
 | **orchestration companion (Ecosystem 層)** (2026-07-11 追加) | Plan→実行→レビューの制御ループ・safe-edit を持つ別プロセスの構想。`_OUTPUTS/04-計画-方向性/multiagent/` のプロトタイプ (orchestrator_v2.py / safe_edit_v1.py) を別 repo standalone 化する候補。骨子は [`docs/designs/orchestration-companion.md`](./docs/designs/orchestration-companion.md) (新設、構想) | 実プロダクト化する段で新設判断。現状は構想文書のみ。CodeRouter 本体 (Core/Plugin) には入れない (`docs/inside/future.md` §2.5・§5 参照) |
 | **サブエージェント明示指定チャネル** (2026-07-11 追加、ccr 由来の検討項目) | claude-code-router の `<CCR-SUBAGENT-MODEL>` タグ相当。system prompt/先頭メッセージから明示タグを検出する最優先ルールを `auto_router.py` の推測ベース分類の前段に追加する案 (`_competitive/2026-07-11_ccr実装解析_v1.md` §6 #1) | 未着手。着手条件は今後精査 (`docs/inside/future.md` §0 P2 #17) |
 | **Presets 的設定共有** (2026-07-11 追加、ccr 由来の検討項目) | `ccr preset export/install` 相当。provider chain + auto_router rules を 1 ファイルに export/import する CLI サブコマンド案。コミュニティでの設定共有・オンボーディング摩擦削減が動機 (`_competitive/2026-07-11_ccr実装解析_v1.md` §6 #2) | 未着手 (`docs/inside/future.md` §0 P2 #18) |

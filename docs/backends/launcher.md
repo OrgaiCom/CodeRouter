@@ -63,6 +63,8 @@ python3 launcher_gui.py --config ~/.coderouter/providers.yaml
 
 設定ファイルの探索順: ① `--config` 指定 → ② カレントの `providers.yaml` → ③ `~/.coderouter/providers.yaml`。どれも無ければ空の設定で起動します(UI から手動入力すれば起動自体は可能)。
 
+> **v2.13.0 以降、② のカレントディレクトリ `providers.yaml` の暗黙読込は既定で無効です。** 悪意のある `providers.yaml` を作業ディレクトリに置かれるだけで `launcher.backends[*].binary` 等の実行ファイル指定を乗っ取られ得るためのセキュリティ対策で、`CODEROUTER_ALLOW_CWD_CONFIG=1`(`true`/`yes`/`on` も可)を設定したときだけオプトインで有効になります。未設定のままカレントに `providers.yaml` があると読み込まずスキップします。
+
 ### CodeRouter バー(デスクトップ版のみ)
 
 デスクトップ版の最上部には、Web版に無い **CodeRouter バー**があります。

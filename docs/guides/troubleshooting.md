@@ -197,6 +197,40 @@ guard 発火を audit で確認してください。
 coderouter audit --tail 20 --filter provider-failed
 ```
 
+### 1-8. `providers.yaml` が読まれない / 設定が反映されない — v2.13.0 以降
+
+**症状**: `./providers.yaml` を編集したのに `coderouter serve` / `doctor` の挙動が変わらない。同じ手順が v2.12 以前では効いていた。
+
+**原因**: v2.13.0 で、カレントディレクトリの `./providers.yaml` の暗黙読込が既定オフになりました(セキュリティ強化 — 悪意ある `providers.yaml` が置かれたディレクトリでたまたま起動しただけで `restart_command` 等の実行系フィールドが刺さる経路を塞ぐため)。設定ファイルの探索順は次のとおりです:
+
+1. `--config` で明示したパス
+2. `$CODEROUTER_CONFIG` 環境変数
+3. カレントディレクトリの `./providers.yaml` — **`CODEROUTER_ALLOW_CWD_CONFIG` が truthy(`1`/`true`/`yes`/`on`)のときだけ**
+4. `~/.coderouter/providers.yaml`
+
+オプトインが未設定のまま `./providers.yaml` が存在する場合は、起動時に一度だけ `cwd-config-skipped` 警告が出ます。ログにこれが出ていれば原因はほぼ確定です。
+
+**対処**(いずれか):
+
+```bash
+# 1) 明示的にオプトインする(信頼できるディレクトリでのみ)
+CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
+
+# 2) --config で明示する
+coderouter serve --config ./providers.yaml
+
+# 3) 常用ファイルとして ~/.coderouter/providers.yaml へ移す
+mkdir -p ~/.coderouter && cp ./providers.yaml ~/.coderouter/providers.yaml
+```
+
+### 1-9. `/dashboard` や `/metrics.json` が 401 を返す — v2.14.0 以降
+
+`CODEROUTER_METRICS_TOKEN` を設定すると、`/dashboard` / `/metrics.json` / `/metrics` へのアクセスに `X-CodeRouter-Token` ヘッダ(値は同トークン)が必須になります(未設定なら従来どおり認証なしで開いたまま)。ブラウザでダッシュボードを開くと初回にトークン入力を求められ、以降は `sessionStorage` に保持されます。`curl` などから直接叩く場合はヘッダを明示してください:
+
+```bash
+curl -s -H "X-CodeRouter-Token: $CODEROUTER_METRICS_TOKEN" http://127.0.0.1:8088/metrics.json
+```
+
 ---
 
 ## 2. ログの読み方とよくあるパターン

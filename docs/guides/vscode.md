@@ -56,22 +56,45 @@ coderouter vscode-init [--target PATH]
                        [--profile NAME]     # CODEROUTER_MODE を追加
                        [--with-envrc]       # direnv 用 .envrc も生成
                        [--dry-run]          # 差分だけ表示、書き込まない
-                       [--force]            # 既存の異なる値を上書き
+                       [--force]            # 既存値の上書き / 未管理の .envrc の取り込み
 ```
 
 - `--port 4000`: `coderouter serve` を素で起動して 4000 で動かしている場合
 - `--profile local-first`: 常に `local-first` プロファイルへルーティング（`CODEROUTER_MODE=local-first` が terminal env に載る）
-- `--dry-run`: `.vscode/settings.json` に何を書くかの unified diff だけ表示
-- `--force`: 既存の `ANTHROPIC_BASE_URL` などが違う値だったとき上書き（既定はコンフリクト報告のみで書かない）
+- `--dry-run`: 書き込む予定の内容を unified diff で表示するだけ（`.envrc` を生成する場合はそれも含む）。ファイルは `.bak` も含めて一切作りません
+- `--force`: 既定はコンフリクト報告のみで書かない、を解除するフラグ。効き方はファイルごとに違うので次節を参照
 
-#### `--force` の挙動（v2.11 以降）
+#### `--force` の挙動（v2.14.0 以降）
 
 `--force` の効き方は 2 つのファイルで異なります。
 
 - `.vscode/settings.json`: **マージ**です。CodeRouter が管理する 3 キー（`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `CODEROUTER_MODE`）だけを上書きし、`editor.fontSize` などの無関係なキーはそのまま残ります
-- `.envrc`: **ファイル全体の置き換え**です。マージはしません。手で足した行（例: `source_env_if_exists .envrc.local`）は生成内容には含まれないため消えます
+- `.envrc`: **管理ブロックだけの書き換え**です。CodeRouter が書く部分はマーカーで囲まれ、その内側だけが差し替わります。フェンスの外側の行（例: 手で足した `source_env_if_exists .envrc.local`）は 1 バイトも変わりません
 
-そのため、既存ファイルを書き換える前に**必ず退避コピーを作ります**。
+```bash
+# BEGIN coderouter-managed
+# Managed by `coderouter vscode-init`. Edits inside this block are
+# overwritten on the next run; put your own lines outside it.
+export ANTHROPIC_BASE_URL="http://localhost:8088"
+export ANTHROPIC_AUTH_TOKEN="dummy"
+# END coderouter-managed
+```
+
+> v2.11〜v2.13 では `--force` 付きの `.envrc` は**ファイル全体の置き換え**で、手で足した行は消えていました。v2.14.0 からはフェンス方式になり、`--force` の意味も「既存の値を上書きする」から「**自分が書いていない `.envrc` を取り込む**」に変わっています。
+
+`.envrc` に `--force` が必要かどうかは、対象ファイルの状態で決まります。
+
+| `.envrc` の状態 | `--force` なし | `--force` あり |
+|---|---|---|
+| 存在しない | 新規作成 | 同じ |
+| フェンスがある | ブロックだけ書き換え（**`--force` 不要**） | 同じ |
+| v2.14.0 以前に CodeRouter が生成したまま（同じ `--port` / `--profile` の出力とバイト単位で一致） | 黙ってフェンスに取り込む | 同じ |
+| 自分で書いた `.envrc`（フェンスなし） | `conflict`（書かない） | 末尾に管理ブロックを**追記**。既存行はすべて残る |
+
+- フェンスの**外側**で `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `CODEROUTER_MODE` を export しているフェンス済みファイルは `conflict` になり、`--force` を付けても書きません。direnv は export を上から順に適用するため、どちらが有効か分からない重複を作らない、という判断です。その行を消すか、フェンスの内側へ移してください。`#` で始まるコメント行は競合と見なしません
+- フェンスの無い `.envrc` を `--force` で取り込む場合だけは例外で、この競合チェックは走りません。管理ブロックが末尾に追記されるため、同名の export が上にあっても後勝ちで CodeRouter の値が有効になります（元の行は消えずに残ります）
+
+既存ファイルの中身が変わるときは、`--force` の有無に関係なく**必ず退避コピーを作ります**。
 
 | 元のファイル | 退避先 |
 |---|---|
@@ -79,13 +102,29 @@ coderouter vscode-init [--target PATH]
 | `.vscode/settings.json` | `.vscode/settings.json.bak` |
 
 - 退避先のパスは実行結果の `→` 行に表示されます
-- `--dry-run` では退避も含めて**一切ファイルを作りません**
-- `.bak` は毎回上書きされます。2 世代前は残らないので、重要な `.envrc` は `--force` の前に自分でも控えを取るか、素直に `.envrc.local` へ分離してください
+- `unchanged`（変更なし）と `conflict`（書かない）のときは `.bak` も作りません
+- `--dry-run` では退避も含めて**一切ファイルを作りません**（差分と「どこへ退避するか」だけ表示）
+- `.bak` は 1 世代だけで、毎回上書きされます（mode と mtime は元ファイルのまま保存）。戻したいときは次節の `coderouter rollback`
 - `*.bak` はプロジェクトの `.gitignore` に入れておくことを推奨します
+
+#### 間違えたときの戻し方 — `coderouter rollback`（v2.14.0）
+
+`.bak` からの復元は CLI でできます。
+
+```bash
+coderouter rollback --workspace . --dry-run   # 何が戻るか確認
+coderouter rollback --workspace .             # .vscode/settings.json と .envrc を復元
+```
+
+- 復元は**スワップ**です。現在の内容が新しい `.bak` になるので、2 回実行すると元に戻ります
+- `--workspace` は復元対象の**追加**です。既定では `providers.yaml` と `~/.coderouter/model-capabilities.yaml`（`doctor --apply` の書き込み先）も対象に入ります。1 ファイルだけ戻したいときは `coderouter rollback --path .envrc` のように `--path` で指定してください（指定するとその他の探索は行いません）
+- 終了コードは **0**=復元した / **2**=戻すものが無かった / **1**=復元に失敗
 
 ### 再実行しても壊れない
 
 `vscode-init` は冪等です。同じ引数で再実行すれば `unchanged` を報告して終了。異なる値と衝突した場合は `conflict` を出して**ファイルに触りません**（`--force` 必要）。オンボーディングスクリプトに含めて安全です。
+
+`--port` を変えての再実行も、`.envrc` がフェンス済みなら単なる更新（`updated`）で、`--force` は要りません。`conflict` になるのは `.vscode/settings.json` の管理キーが違う値のときと、上表の `.envrc` のケースだけです。
 
 ### direnv 派の場合
 
@@ -100,7 +139,7 @@ coderouter vscode-init --with-envrc
 - **新規生成した `.envrc` は `0600`（所有者のみ読み書き）**で作られます。`ANTHROPIC_AUTH_TOKEN` を含むファイルなので、`coderouter --check-env` が `.env` に課しているのと同じ基準に揃えてあります
 - **既存ファイルを上書きするときは、そのファイルの現在の mode をそのまま維持**します（以前は `os.replace` で umask 既定＝多くの環境で `0644` に戻っていました）
 - Windows では POSIX の mode ビットに意味がないため、mode の設定・維持は行いません
-- なお `--force` で `source_env_if_exists .envrc.local` の行は消えます。消える前の内容は `.envrc.bak` に残るので、必要な行はそこから戻してください
+- なお v2.14.0 以降、`--force` を付けてもフェンスの外側の行は消えません。`source_env_if_exists .envrc.local` のような手書きの行はそのまま残ります（v2.13 以前は消えていました）
 
 ### 注意点
 
@@ -167,6 +206,8 @@ body.profile > X-CodeRouter-Profile ヘッダ > X-CodeRouter-Mode ヘッダ > au
 
 既存 `.vscode/settings.json` の `ANTHROPIC_BASE_URL` が違う値のときの安全側動作です。`--dry-run` で差分を確認し、上書きしていいなら `--force` で再実行。
 
+`.envrc` の `conflict` は 2 種類あります。フェンスの無い既存 `.envrc` を見つけた場合は `--force` で管理ブロックを追記できます（既存行は残ります）。フェンスの外側で `ANTHROPIC_BASE_URL` などを export している場合は `--force` でも書かないので、その行を消すかフェンスの内側へ移してから再実行してください。
+
 ### 統合ターミナルの `claude` が繋がらない
 
 VSCode を**開き直してください**。`terminal.integrated.env.*` は新規ターミナル起動時にしか反映されません。既存のターミナルは古い env を持ち続けます。
@@ -187,3 +228,7 @@ CodeRouter 側の Host 検証（DNS リバインディング対策）に引っ�
 - [利用ガイド](./usage-guide.md) — `providers.yaml` の書き方
 - [リモートアクセス](./remote-access.md) — 別 PC から繋ぐ
 - [セキュリティ](./security.md) — 信頼境界と脅威モデル
+
+---
+
+最終更新: 2026-08-10（v2.14.0 時点）
