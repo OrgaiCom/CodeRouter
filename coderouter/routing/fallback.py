@@ -3331,6 +3331,18 @@ class FallbackEngine:
         empty_response_action = self._resolve_empty_response_action(request.profile)
         empty_fallback = empty_response_action == "fallback"
         last_empty_stream_buffer: list[AnthropicStreamEvent] | None = None
+        # v2.15.0 (stream-truncation): does the buffer we are holding
+        # *terminate* the message? An empty stream's buffer does — it is a
+        # complete ``message_start`` … ``message_stop`` sequence, which is
+        # why flushing it on chain exhaustion gives the client a well-formed
+        # 200 blank. A truncated stream's buffer does NOT, by definition:
+        # the upstream went quiet with the message still open. Flushing that
+        # would hand the client an unterminated SSE stream and hang it, so
+        # the flush at the bottom is gated on this flag. Only
+        # ``stream_truncation_action: error`` can ever set it True (under
+        # ``off`` / ``warn`` no ``StreamTruncatedError`` is raised), which
+        # keeps the default byte-for-byte identical to v2.14.0.
+        last_empty_stream_truncated = False
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -3603,6 +3615,7 @@ class FallbackEngine:
                             adapter.name, REASON_EMPTY_STREAM, stream=True
                         )
                     last_empty_stream_buffer = buffer
+                    last_empty_stream_truncated = truncated
                     continue
                 # M2: mid-stream failure — record an error-only
                 # observation (no latency; first-event success already
@@ -3648,6 +3661,9 @@ class FallbackEngine:
                     adapter.name, REASON_EMPTY_STREAM, stream=True
                 )
                 last_empty_stream_buffer = buffer
+                # The stream ended *cleanly* — this buffer is a complete
+                # message_start … message_stop sequence and is safe to flush.
+                last_empty_stream_truncated = False
                 continue
             # v2.0-G (L4): drift detection observation (stream success).
             # P1-4: compute response fingerprint for goal_progress_stall.
@@ -3710,7 +3726,24 @@ class FallbackEngine:
         # (empty) preamble so the client gets a well-formed, terminating SSE
         # sequence (message_start … message_stop) instead of an error — a
         # 200 blank is a legitimate answer.
-        if last_empty_stream_buffer is not None:
+        #
+        # v2.15.0 (stream-truncation): ``last_empty_stream_truncated`` gates
+        # this. The buffer of a *truncated* stream stops mid-message — it has
+        # no ``message_stop`` — so flushing it would emit an unterminated SSE
+        # stream, no exception, no error frame, and a client that waits
+        # forever. It would also fire ``empty-response-detected`` for a
+        # stream that was not empty at all, inflating
+        # ``empty_responses_total``. When the buffer we are holding came from
+        # a truncation we fall through to ``NoProvidersAvailableError``
+        # instead: the ingress turns that into an ``event: error``
+        # (``overloaded_error``) frame, which terminates the stream and tells
+        # the operator the truth. An operator who set
+        # ``stream_truncation_action: error`` asked not to have truncation
+        # swallowed; silently synthesizing an ``end_turn`` over a half-written
+        # answer would be exactly that. Under the default ``off`` no
+        # ``StreamTruncatedError`` exists, the flag is never set, and this
+        # path is byte-identical to v2.14.0.
+        if last_empty_stream_buffer is not None and not last_empty_stream_truncated:
             log_empty_response_detected(
                 logger,
                 "unknown",
