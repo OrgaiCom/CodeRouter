@@ -47,11 +47,15 @@ are kept verbatim where the Japanese text itself is the subject).
   bytes forwarded yet → fall back to the next provider with reason
   `stream-truncated`; bytes already out → `MidStreamError`, which
   `partial_stitch_action: surface` renders as a graceful close carrying a
-  `coderouter_partial` event labelled `stream_truncated`. Because the
-  failure is an ordinary `AdapterError`, the L2/L4/L5/L6 self-healing
-  guards learn it for free — a backend that keeps going quiet gets demoted
-  by adaptive routing instead of being *preferred* for its fast first byte.
-  `warn` measures without changing a single byte of output; `off` is
+  `coderouter_partial` event labelled `stream_truncated`. If *every*
+  provider in the chain truncates before any byte reached the client, the
+  request ends in `NoProvidersAvailableError` (an `overloaded_error` SSE
+  frame) rather than flushing a half-written message — see **Fixed** below.
+  Because the failure is an ordinary `AdapterError`, the L2/L4/L5/L6
+  self-healing guards learn it — a backend that keeps going quiet gets
+  demoted by adaptive routing instead of being *preferred* for its fast
+  first byte. `warn` measures without changing a single byte of output;
+  `off` is
   byte-for-byte v2.14.0. Observability: a `stream-truncation-detected` log
   line (with `wire`, `events_forwarded`, `saw_stream_start`,
   `tool_call_in_flight`), `stream_truncated_total` in `/metrics.json` and
@@ -62,8 +66,13 @@ are kept verbatim where the Japanese text itself is the subject).
   providers that legitimately omit the sentinel are not flagged. On the
   Anthropic streaming path, pre-content fallback additionally needs
   `empty_response_action: fallback`, which is the knob that withholds the
-  opening events from the client. Docs:
-  `docs/concepts/stream-truncation.md` / `.en.md`.
+  opening events from the client. Known gap: the terminator synthesis this
+  entry refers to lives in `translation/convert.py`, so the one route that
+  does not pass through it — `/v1/messages` served by a `kind: anthropic`
+  backend, i.e. native passthrough — has never had it. Under `off` a
+  truncated native stream still reaches the client unterminated, exactly as
+  in v2.14.0; that route is the strongest argument for moving to `warn`.
+  Docs: `docs/concepts/stream-truncation.md` / `.en.md`.
 - **Tool-call integrity regression tests across a fallback hop**
   (`tests/test_fallback_tool_integrity.py`): the conversation handed to the
   second provider keeps every `tool_use` / `tool_result` id paired, and the
@@ -75,6 +84,46 @@ are kept verbatim where the Japanese text itself is the subject).
   engine-level fallback and `MidStreamError` integration, the ingress
   `coderouter_partial` labelling, and an explicit `off` regression proving
   the default path — including the H6 terminator synthesis — is unchanged.
+
+### Fixed
+
+- **Anthropic streaming: a provider that failed before forwarding any byte
+  was invisible to the self-healing guards.** Under
+  `empty_response_action: fallback` the engine withholds the opening events
+  until real content appears, and an `AdapterError` raised in that window
+  is handled by swapping providers instead of raising. That branch recorded
+  an adaptive failure but never called the L2 memory-pressure / L4 drift /
+  L5 backend-health hooks — while `_observe_provider_success` had *already*
+  fired the moment the first event landed. The net effect was a backend
+  that opens a stream and then dies keeping a clean bill of health, and
+  adaptive routing preferring it for its fast first byte. The identical
+  failure under `empty_response_action: off` takes the mid-stream path and
+  *was* observed, so provider health effectively depended on an unrelated
+  knob. Both hooks now run on that branch (and the error joins the `errors`
+  list carried by `NoProvidersAvailableError`), matching the mid-stream
+  sibling. A stream that terminates cleanly with no content is still not a
+  failure — it is a 200 blank, and reaches neither hook.
+- **Anthropic streaming: a chain where every provider truncated left the
+  client hanging.** On chain exhaustion the engine flushes the last
+  buffered preamble so a genuinely empty chain returns a well-formed 200
+  blank (`message_start` … `message_stop`). A *truncated* stream's buffer
+  has no `message_stop` by definition, so flushing it emitted an SSE
+  sequence that never ended — no exception, no error frame, and a client
+  waiting forever — and charged `empty_responses_total` for a stream that
+  was not empty. The flush is now gated on the buffer actually terminating;
+  a truncation-produced buffer falls through to `NoProvidersAvailableError`,
+  which the ingress turns into a terminal `overloaded_error` SSE frame. Only
+  reachable with `stream_truncation_action: error`, so the default path is
+  unchanged, and the empty-chain 200 blank is untouched (including the
+  mixed case where a truncated hop is followed by a provider that answered
+  with a well-formed empty message — that buffer still gets flushed).
+- **`partial-stitch-surfaced` log shape under the default `off`.** The
+  `reason` key added for truncation labelling was attached
+  unconditionally, so every `partial_stitch_action: surface` log line
+  gained a field even where truncation detection is disabled and the value
+  could only ever be `mid_stream_failure`. It is now emitted only when it
+  says something new, restoring the v2.14.0 key set. (`/metrics.json` was
+  never affected — `MetricsCollector` whitelists the fields it copies.)
 
 ---
 

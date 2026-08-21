@@ -25,6 +25,32 @@ v2.14.0 まで、この断絶は正常完了と区別が付きませんでした
 (Claude Code) がハングします。v2.15.0 が変えるのは「**合成した事実を
 エンジンに伝える**」ことだけです。
 
+### 重要: 終端合成は「全経路にある」わけではありません
+
+H6 / M9 は `translation/convert.py` のガードです。したがって
+**翻訳層を通らない経路には合成がありません。** 経路は 4 通りあります。
+
+| クライアント側ワイヤ | バックエンドの `kind` | 経由する変換 | 終端の保証 |
+|----------------------|------------------------|--------------|------------|
+| `/v1/messages` | `openai_compat` | `stream_chat_to_anthropic_events` (H6) | あり |
+| `/v1/chat/completions` | `anthropic` | `stream_anthropic_to_chat_chunks` (M9) | あり |
+| `/v1/chat/completions` | `openai_compat` | 素通し (ただし ingress が常に `data: [DONE]` を付与) | あり |
+| **`/v1/messages`** | **`anthropic`** | **素通し (変換なし)** | **なし** |
+
+最後の行 — **ネイティブ Anthropic パススルー** — では、アダプタが受け取った
+イベントをそのままクライアントへ流すだけで、`message_stop` を補う処理が
+どこにもありません。上流が沈黙すれば、`off` 既定でも**終端のない SSE が
+クライアントに渡ります**。これは v2.14.0 から変わらない挙動で、v2.15.0 が
+新たに持ち込んだものではありませんが、「`off` なら合成があるからハングしない」
+という前提はこの経路では成立しません。
+
+Claude Code + ローカル llama.cpp を `kind: anthropic` で繋いでいる構成は
+まさにこの経路です。`warn` → `error` への移行を検討する最大の理由が
+ここにあります。`error` + `empty_response_action: fallback` にすれば、
+実コンテンツ送出前の断絶は次プロバイダへ回り、チェーンが尽きた場合も
+`overloaded_error` の `event: error` フレームで**必ず終端します**
+(後述「チェーン全滅時の挙動」)。
+
 ## 設定
 
 ```yaml
@@ -81,6 +107,31 @@ mid-stream 枝に reason を差し替えて合流させているだけです。�
 `self_healing` (L6) の全ガードが断絶を「失敗」として自動的に学習します。
 断絶を繰り返すバックエンドは適応ルーティングで降格し、self-healing の
 再起動対象になります。
+
+### チェーン全滅時の挙動
+
+`empty_response_action: fallback` は、実コンテンツが現れるまで前置イベントを
+保留し、チェーンが尽きたら**最後に保留したバッファを吐き出して** SSE を
+正常終了させます (真に空のレスポンスは `message_start … message_stop` が
+揃った完全な列なので、これで 200 blank になります)。
+
+しかし**断絶ストリームのバッファには定義上 `message_stop` がありません。**
+そのまま吐き出すと終端のない SSE になり、例外も上がらずクライアントが
+待ち続けます。そのため v2.15.0 では、**吐き出しは「保持しているバッファが
+終端しているか」で判定します。**
+
+| チェーン全滅の内訳 | 結果 |
+|--------------------|------|
+| 全プロバイダが真に空 (正常終了) | 従来どおり 200 blank |
+| 最後に保持したバッファが断絶由来 | `NoProvidersAvailableError` → ingress が `event: error` (`overloaded_error`) を送出 |
+| 断絶した後、次が真に空で正常終了 | そのバッファは終端しているので 200 blank |
+
+`error` を明示的に指定した以上、半分書きかけの本文に `end_turn` を合成して
+「完結した回答」として渡すのは筋が通りません。断絶は正直にエラーとして
+返します。この分岐は `StreamTruncatedError` が存在するときにしか到達しない
+ため、既定 `off` の挙動は v2.14.0 と同一です。あわせて、断絶が
+`empty-response-detected` (= `empty_responses_total`) を水増しすることも
+なくなりました。
 
 ## `empty_response_action` との関係 (重要)
 
@@ -144,6 +195,15 @@ Anthropic streaming 経路では、**先頭の `message_start` は届いた瞬�
 - **偽陽性の残存**: `message_stop` も `message_delta.stop_reason` も
   `finish_reason` も一切送らない上流は、正常でも断絶と判定されます。
   `warn` での実測を挟む理由がこれです。
+- **ネイティブ Anthropic パススルーには終端合成がありません**:
+  `/v1/messages` × `kind: anthropic` の経路は `translation/convert.py` を
+  通らないため、`off` では断絶したストリームが終端なしでクライアントに
+  渡ります (前述「終端合成は全経路にあるわけではありません」)。
+  この経路だけは「何もしない = 安全」ではありません。
+- **マルチ choice (`n>1`) の判定は緩い**: OpenAI ワイヤの終端判定は
+  *いずれかの* choice に `finish_reason` があれば終端とみなします。
+  `n>1` で一部の choice だけが完了した状態で切れた場合は検知されません。
+  CodeRouter の主対象である Claude Code は `n>1` を使いません。
 
 ## ユースケース
 
