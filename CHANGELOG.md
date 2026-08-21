@@ -9,6 +9,34 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Fallback explainability — `X-CodeRouter-Fallback-*` response headers.**
+  When a request changes providers, the response now says who it left, who
+  took over, and why: `X-CodeRouter-Fallback-From` / `-To` / `-Reason` /
+  `-Chain` (multi-hop chains render as `local>ollama>openrouter` with one
+  comma-separated reason per departure). Reasons come from a single
+  canonical vocabulary in `coderouter/routing/fallback_trace.py` covering
+  both chain-resolve filters (`paid-gate`, `budget-exceeded`,
+  `memory-pressure`, `backend-unhealthy`, `self-healing-excluded`,
+  `unknown-provider`) and runtime attempt failures (`timeout`,
+  `rate-limit`, `auth`, `upstream-5xx`, `upstream-4xx`, `connection`,
+  `empty-response`, `empty-stream`). The same trail is emitted as
+  structured `fallback-occurred` log lines (auditable) and, on the
+  Anthropic streaming path, as a trailing `coderouter_fallback` SSE
+  metadata event for reasons discovered after the HTTP headers ship.
+  Purely additive — a request served by its first provider produces no new
+  headers, no SSE trailer and no log lines.
+- **Tool-call integrity regression tests across a fallback hop**
+  (`tests/test_fallback_tool_integrity.py`): the conversation handed to the
+  second provider keeps every `tool_use` / `tool_result` id paired, and the
+  response the client receives is still a structurally valid `tool_use`
+  block on both the buffered and the streaming path.
+
+---
+
 ## [v2.14.0] — 2026-08-09 (credential hygiene + undo)
 
 Five changes that came out of reading `duolahypercho/codex-router` and
