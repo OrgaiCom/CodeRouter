@@ -47,6 +47,11 @@ profiles:
 }
 ```
 
+`reason` defaults to `mid_stream_failure`. Since v2.15.0 it becomes
+`stream_truncated` when the failure came from truncation detection
+(`stream_truncation_action: error`) →
+[`stream-truncation.en.md`](./stream-truncation.en.md)
+
 **Compatibility**: the Anthropic SDK automatically ignores unknown event
 types, so there is no impact on existing clients. CodeRouter-aware clients
 can read the `coderouter_partial` event to display the partial response.
@@ -60,7 +65,7 @@ can read the `coderouter_partial` event to display the partial response.
 ## Logs / metrics
 
 - Log event: `partial-stitch-surfaced` (info)
-  - fields: `provider`, `profile`, `text_blocks`, `text_length`
+  - fields: `provider`, `profile`, `reason`, `text_blocks`, `text_length`
 - MetricsCollector: `partial_stitch_surfaced_total` counter
 - Prometheus: `coderouter_partial_stitch_surfaced_total`
 

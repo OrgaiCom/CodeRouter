@@ -89,6 +89,7 @@ How CodeRouter works and its reliability mechanisms.
 - **drift-detection** — Drift detection (v2.0-G) · [日本語](concepts/drift-detection.md) · [English](concepts/drift-detection.en.md)
 - **partial-stitch** — Mid-stream partial stitching (v2.0-H) · [日本語](concepts/partial-stitch.md) · [English](concepts/partial-stitch.en.md)
 - **continuous-probing** — Continuous probing (v2.0-I) · [日本語](concepts/continuous-probing.md) · [English](concepts/continuous-probing.en.md)
+- **stream-truncation** — Stream truncation detection (v2.15.0) · [日本語](concepts/stream-truncation.md) · [English](concepts/stream-truncation.en.md)
 - **low-memory-integration** — Integration guide for the proactive memory-budget guard on low-memory (8–16GB) hosts — VRAM/RAM detection, GGUF header introspection, and KV-cache-aware pre-dispatch fit decisions (`off`/`warn`/`fit`). **Implemented (v2.5.3)** · [日本語](low-memory-integration.md) · [English](low-memory-integration.en.md)
 
 ## 5. Design docs & records

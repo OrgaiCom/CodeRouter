@@ -47,6 +47,10 @@ profiles:
 }
 ```
 
+`reason` は既定で `mid_stream_failure`。v2.15.0 以降、断絶検知
+(`stream_truncation_action: error`) 起因の場合のみ `stream_truncated` に
+なります → [`stream-truncation.md`](./stream-truncation.md)
+
 **互換性**: Anthropic SDK は未知の event type を自動的に無視するため、
 既存クライアントに影響はありません。CodeRouter 対応クライアントは
 `coderouter_partial` イベントを読み取って部分応答を表示できます。
@@ -60,7 +64,7 @@ profiles:
 ## ログ / メトリクス
 
 - ログイベント: `partial-stitch-surfaced` (info)
-  - fields: `provider`, `profile`, `text_blocks`, `text_length`
+  - fields: `provider`, `profile`, `reason`, `text_blocks`, `text_length`
 - MetricsCollector: `partial_stitch_surfaced_total` counter
 - Prometheus: `coderouter_partial_stitch_surfaced_total`
 
