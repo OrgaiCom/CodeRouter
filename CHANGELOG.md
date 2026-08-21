@@ -55,8 +55,8 @@ are kept verbatim where the Japanese text itself is the subject).
   self-healing guards learn it — a backend that keeps going quiet gets
   demoted by adaptive routing instead of being *preferred* for its fast
   first byte. `warn` measures without changing a single byte of output;
-  `off` is
-  byte-for-byte v2.14.0. Observability: a `stream-truncation-detected` log
+  `off` is byte-for-byte v2.14.0 **on the wire** — see the caveat on
+  guard-internal state below. Observability: a `stream-truncation-detected` log
   line (with `wire`, `events_forwarded`, `saw_stream_start`,
   `tool_call_in_flight`), `stream_truncated_total` in `/metrics.json` and
   Prometheus (labelled by provider and by action), and the
@@ -103,6 +103,18 @@ are kept verbatim where the Japanese text itself is the subject).
   list carried by `NoProvidersAvailableError`), matching the mid-stream
   sibling. A stream that terminates cleanly with no content is still not a
   failure — it is a 200 blank, and reaches neither hook.
+  **Operational note:** this is a behavior change for anyone already
+  running `empty_response_action: fallback` — pre-content failures now
+  reach L2/L4/L5, so if `memory_pressure_action: skip` and/or
+  `backend_health_action: demote` are also set, skips and demotions can
+  become *more frequent* for a backend that was silently dying before real
+  content shipped, even though nothing about those knobs' own
+  configuration changed. This is independent of `stream_truncation_action`
+  — it fires under the default `off` exactly as it does under `warn` /
+  `error`, since the branch it lives in is the *pre-existing*
+  `empty_response_action: fallback` path, not the new truncation
+  detection. See `docs/concepts/stream-truncation.md` / `.en.md` for
+  details.
 - **Anthropic streaming: a chain where every provider truncated left the
   client hanging.** On chain exhaustion the engine flushes the last
   buffered preamble so a genuinely empty chain returns a well-formed 200

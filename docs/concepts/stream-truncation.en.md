@@ -64,7 +64,7 @@ profiles:
 
 | Value | Behavior |
 |------|------|
-| `off` (default) | No detection, no log, no metric. Byte-for-byte identical to v2.14.0 |
+| `off` (default) | No detection, no log, no metric. Byte-for-byte identical to v2.14.0 **on the SSE wire**. Guard-internal state is not covered by this — see "Guard observability" below if you also use `empty_response_action: fallback` |
 | `warn` | Emits a `stream-truncation-detected` log and metric only; the stream still ends through the legacy terminator synthesis |
 | `error` | The adapter raises `StreamTruncatedError` (a retryable `AdapterError`) and the engine's existing branches take over |
 
@@ -151,6 +151,37 @@ to the next provider without the client noticing.
 |---------------|-------------------------------|--------------------|
 | `stream_truncation_action: error` alone | `MidStreamError` | `MidStreamError` |
 | `+ empty_response_action: fallback` | **falls back to the next provider** | `MidStreamError` |
+
+## Guard observability change for `empty_response_action: fallback` (independent of `stream_truncation_action`)
+
+Before v2.15.0, a provider that opened a stream and then failed *before any
+real content shipped* — while `empty_response_action: fallback` was
+withholding the preamble — was invisible to the self-healing guards.
+`_observe_provider_success` had already fired the moment the first event
+(`message_start`) landed, so the guards saw a clean bill of health right up
+until the next failure elsewhere. The provider swap happened correctly, but
+L2 (`memory_pressure`), L4 (`drift_detection`) and L5 (`backend_health`)
+never learned anything went wrong.
+
+**This is now fixed**, and it matters even if you never touch
+`stream_truncation_action`: the branch that got the new observation calls is
+the *pre-existing* `empty_response_action: fallback` path, not the new
+truncation-detection machinery. Concretely:
+
+- If you run `empty_response_action: fallback` — with `stream_truncation_action`
+  left at its default `off`, or at `warn`, or at `error` — a pre-content
+  provider failure (a transport break, a plain `AdapterError`, or now also a
+  detected truncation) reaches L2/L4/L5 that previously did not.
+- If you also set `memory_pressure_action: skip` and/or
+  `backend_health_action: demote`, **skips and demotions can become more
+  frequent** for a backend that was quietly dying before real content
+  shipped — because that failure is now counted where it previously was not.
+- The SSE bytes the client receives are unaffected either way; this is
+  purely about what the self-healing guards observe internally.
+
+If this changes your dashboards or your fallback frequency after upgrading,
+this is why — no new knob was touched, an existing one (`empty_response_action:
+fallback`) started reporting failures it always should have.
 
 ## Cost note
 

@@ -63,7 +63,7 @@ profiles:
 
 | 値 | 動作 |
 |------|------|
-| `off` (デフォルト) | 検知なし・ログなし・メトリクスなし。v2.14.0 とバイト単位で同一 |
+| `off` (デフォルト) | 検知なし・ログなし・メトリクスなし。**SSE ワイヤ上は** v2.14.0 とバイト単位で同一。ガード内部の状態はこの限りではありません — `empty_response_action: fallback` を併用している場合は後述「ガード可観測性の変化」を参照してください |
 | `warn` | `stream-truncation-detected` ログ + メトリクスのみ。ストリームは従来どおり合成終端で正常終了する |
 | `error` | アダプタが `StreamTruncatedError` (retryable な `AdapterError`) を送出し、エンジンの既存分岐に合流する |
 
@@ -148,6 +148,38 @@ Anthropic streaming 経路では、**先頭の `message_start` は届いた瞬�
 |------|----------------------|----------------------|
 | `stream_truncation_action: error` のみ | `MidStreamError` | `MidStreamError` |
 | `+ empty_response_action: fallback` | **次プロバイダへフォールバック** | `MidStreamError` |
+
+## ガード可観測性の変化 (`stream_truncation_action` の設定値とは無関係)
+
+v2.15.0 より前は、`empty_response_action: fallback` が前置イベントを保留して
+いる間に**実コンテンツが届く前にプロバイダが失敗した**場合、self-healing
+ガードはそれに気付けませんでした。最初のイベント (`message_start`) が届いた
+瞬間に `_observe_provider_success` が既に発火しているため、別の失敗が
+起きるまでガード側は「健全」と見なし続けます。プロバイダの切り替え自体は
+正しく行われていましたが、L2 (`memory_pressure`) / L4 (`drift_detection`) /
+L5 (`backend_health`) には何も伝わっていませんでした。
+
+**これを修正しました。** そして、これは `stream_truncation_action` を
+一切触っていなくても関係してきます — 新たに観測呼び出しが追加された分岐は
+「新しい断絶検知の仕組み」ではなく、**既存の** `empty_response_action:
+fallback` の経路そのものだからです。具体的には:
+
+- `empty_response_action: fallback` を使っている場合、`stream_truncation_action`
+  が既定の `off` のままでも、`warn` でも、`error` でも、実コンテンツ送出前の
+  プロバイダ失敗 (トランスポート断絶、素の `AdapterError`、あるいは今回検知
+  対象になった断絶) が L2/L4/L5 に届くようになります。以前は届いていません
+  でした。
+- `memory_pressure_action: skip` や `backend_health_action: demote` を
+  併用している場合、**スキップ・降格の頻度が上がる可能性があります** —
+  実コンテンツ送出前に静かに死んでいたバックエンドの失敗が、これまで
+  カウントされていなかった箇所でカウントされるようになるためです。
+- クライアントが受け取る SSE のバイト列はどちらの場合も変わりません。
+  これは self-healing ガードの内部観測だけの話です。
+
+アップグレード後にダッシュボードの数値やフォールバック頻度が変わって
+見えたら、これが原因です。新しいノブを触ったわけではなく、既存の
+`empty_response_action: fallback` が本来報告すべきだった失敗を
+報告するようになっただけです。
 
 ## コスト上の注意
 
