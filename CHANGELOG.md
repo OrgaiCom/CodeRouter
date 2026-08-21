@@ -9,7 +9,7 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
-## [Unreleased]
+## [v2.15.0] — 2026-08-21 (fallback explainability + stream truncation detection)
 
 ### Added
 
