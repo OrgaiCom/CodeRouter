@@ -79,6 +79,7 @@ from coderouter.logging import (
     log_chain_paid_gate_blocked,
     log_demote_unhealthy_provider,
     log_empty_response_detected,
+    log_fallback_occurred,
     log_memory_pressure_detected,
     log_skip_budget_exceeded,
     log_skip_memory_pressure,
@@ -99,6 +100,22 @@ from coderouter.routing.capability import (
     provider_supports_tool_choice,
     strip_cache_control,
     strip_thinking,
+)
+from coderouter.routing.fallback_trace import (
+    REASON_BACKEND_UNHEALTHY,
+    REASON_BUDGET_EXCEEDED,
+    REASON_EMPTY_RESPONSE,
+    REASON_EMPTY_STREAM,
+    REASON_MEMORY_PRESSURE,
+    REASON_PAID_GATE,
+    REASON_SELF_HEALING_EXCLUDED,
+    REASON_UNKNOWN_PROVIDER,
+    FallbackTrace,
+    begin_fallback_trace,
+    classify_adapter_error,
+    current_fallback_trace,
+    describe_adapter_error,
+    ensure_fallback_trace,
 )
 from coderouter.translation import (
     AnthropicRequest,
@@ -1051,6 +1068,36 @@ def _stream_event_is_real_content(event: AnthropicStreamEvent) -> bool:
             if delta.get("type") == "input_json_delta":
                 return True
     return False
+
+
+def _log_fallback_trace(trace: FallbackTrace | None, *, profile: str | None) -> None:
+    """v2.15.0: emit one ``fallback-occurred`` line per recorded hop.
+
+    Called at every terminal point of a dispatch (successful return,
+    chain-exhausted raise, empty-chain flush). Deferring the emission to
+    the end is what lets each line carry a resolved ``to_provider`` — at
+    the moment a provider fails, the engine does not yet know who (if
+    anyone) will take over.
+
+    The ``logged`` latch makes the call idempotent, so a path with several
+    ``return`` statements cannot double-log. A request whose first
+    provider served produces no lines at all.
+    """
+    if trace is None or trace.logged or not trace.hops:
+        return
+    trace.logged = True
+    for index, hop in enumerate(trace.hops):
+        log_fallback_occurred(
+            logger,
+            from_provider=hop.from_provider,
+            to_provider=hop.to_provider,
+            reason=hop.reason,
+            detail=hop.detail,
+            profile=trace.profile or profile,
+            stream=hop.stream,
+            pre_attempt=hop.pre_attempt,
+            hop_index=index,
+        )
 
 
 class FallbackEngine:
@@ -2062,6 +2109,13 @@ class FallbackEngine:
         """
         chosen = profile_name or self.config.default_profile
         chain = self.config.profile_by_name(chosen)
+        # v2.15.0: every gate below that removes a provider also records a
+        # pre-attempt hop on the request-scoped fallback trace, so the
+        # ingress can answer "why did my request not go to `local`?" with
+        # `budget-exceeded` instead of silence. ``ensure_`` (not ``begin_``)
+        # because this method also runs from the ingress's
+        # ``apply_context_budget`` pre-pass, before dispatch starts a trace.
+        trace = ensure_fallback_trace(profile=chosen)
 
         # Pass 1: paid gate. Same shape as v0.6-C; produces the
         # post-paid candidate list and tracks the names that were
@@ -2076,6 +2130,7 @@ class FallbackEngine:
                     "skip-unknown-provider",
                     extra={"profile": chosen, "provider": prov_name},
                 )
+                trace.record_skip(prov_name, REASON_UNKNOWN_PROVIDER)
                 continue
             if provider_cfg.paid and not self.config.allow_paid:
                 logger.info(
@@ -2083,6 +2138,7 @@ class FallbackEngine:
                     extra={"profile": chosen, "provider": prov_name},
                 )
                 blocked_by_paid.append(prov_name)
+                trace.record_skip(prov_name, REASON_PAID_GATE)
                 continue
             post_paid.append((prov_name, self._adapters[prov_name], provider_cfg))
 
@@ -2107,6 +2163,11 @@ class FallbackEngine:
                     month=self._budget.current_month(),
                 )
                 blocked_by_budget.append(prov_name)
+                trace.record_skip(
+                    prov_name,
+                    REASON_BUDGET_EXCEEDED,
+                    detail=f"monthly_budget_usd={budget_usd}",
+                )
                 continue
             post_budget.append((prov_name, adapter))
 
@@ -2134,6 +2195,11 @@ class FallbackEngine:
                     seconds_until_eligible=seconds,
                 )
                 blocked_by_pressure.append(prov_name)
+                trace.record_skip(
+                    prov_name,
+                    REASON_MEMORY_PRESSURE,
+                    detail=f"eligible_in_s={seconds}",
+                )
                 continue
             adapters.append(adapter)
 
@@ -2209,6 +2275,11 @@ class FallbackEngine:
         if chain.backend_health_action == "exclude":
             excluded = self.self_healing.excluded_providers()
             if excluded:
+                for adapter in adapters:
+                    if adapter.name in excluded:
+                        trace.record_skip(
+                            adapter.name, REASON_SELF_HEALING_EXCLUDED
+                        )
                 adapters = [a for a in adapters if a.name not in excluded]
 
         # Pass 4c: v2.x ``skip`` action — self-contained half-open circuit
@@ -2223,6 +2294,7 @@ class FallbackEngine:
         # failing with NoProvidersAvailableError before trying anything.
         if chain.backend_health_action == "skip":
             kept: list[BaseAdapter] = []
+            skipped_unhealthy: list[str] = []
             for adapter in adapters:
                 if self._backend_health.should_skip(
                     adapter.name,
@@ -2233,10 +2305,17 @@ class FallbackEngine:
                         provider=adapter.name,
                         profile=chosen,
                     )
+                    skipped_unhealthy.append(adapter.name)
                 else:
                     kept.append(adapter)
             if kept:
                 adapters = kept
+                # v2.15.0: only record the skips that actually took effect.
+                # In the last-resort branch below nobody is removed, so
+                # recording there would invent a fallback that never
+                # happened.
+                for name in skipped_unhealthy:
+                    trace.record_skip(name, REASON_BACKEND_UNHEALTHY)
             elif adapters:
                 # Everyone was skipped — last-resort: try the unfiltered
                 # chain rather than 502 without attempting a single provider.
@@ -2385,10 +2464,17 @@ class FallbackEngine:
         the full per-provider error list so the ingress layer can
         surface a single 502.
         """
+        # v2.15.0: open the trace *before* chain resolution so the gate
+        # skips inside ``_resolve_chain`` land on this request's trace and
+        # not on a leftover from an earlier call in the same context.
+        trace = begin_fallback_trace(
+            profile=request.profile or self.config.default_profile
+        )
         adapters = self._resolve_chain(request.profile)
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         for adapter in adapters:
+            trace.record_attempt(adapter.name)
             logger.info(
                 "try-provider",
                 extra={"provider": adapter.name, "stream": False},
@@ -2416,6 +2502,7 @@ class FallbackEngine:
                 self._observe_provider_success(
                     adapter.name, profile=request.profile
                 )
+                _log_fallback_trace(trace, profile=request.profile)
                 return response
             except AdapterError as exc:
                 # M2: record the failed attempt. Auth failures carry no
@@ -2444,10 +2531,17 @@ class FallbackEngine:
                     adapter.name, exc, profile=request.profile
                 )
                 errors.append(exc)
+                trace.record_failure(
+                    adapter.name,
+                    classify_adapter_error(exc),
+                    detail=describe_adapter_error(exc),
+                    stream=False,
+                )
                 if not exc.retryable:
                     break
         profile = request.profile or self.config.default_profile
         _warn_if_uniform_auth_failure(errors, profile=profile)
+        _log_fallback_trace(trace, profile=profile)
         raise NoProvidersAvailableError(profile=profile, errors=errors)
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
@@ -2473,10 +2567,15 @@ class FallbackEngine:
         fall back mid-stream (the client has already received partial content).
         We only fall through if the *initial* response is an error.
         """
+        # v2.15.0: mirror of ``_generate_impl`` — see the comment there.
+        trace = begin_fallback_trace(
+            profile=request.profile or self.config.default_profile
+        )
         adapters: list[BaseAdapter] = self._resolve_chain(request.profile)
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         for adapter in adapters:
+            trace.record_attempt(adapter.name)
             logger.info(
                 "try-provider",
                 extra={"provider": adapter.name, "stream": True},
@@ -2498,6 +2597,9 @@ class FallbackEngine:
                     success=False,
                 )
                 errors.append(AdapterError("empty stream", provider=adapter.name, retryable=True))
+                trace.record_failure(
+                    adapter.name, REASON_EMPTY_STREAM, stream=True
+                )
                 continue
             except AdapterError as exc:
                 # M2: record the pre-first-event failure.
@@ -2524,6 +2626,12 @@ class FallbackEngine:
                     adapter.name, exc, profile=request.profile
                 )
                 errors.append(exc)
+                trace.record_failure(
+                    adapter.name,
+                    classify_adapter_error(exc),
+                    detail=describe_adapter_error(exc),
+                    stream=True,
+                )
                 if not exc.retryable:
                     break
                 continue
@@ -2546,6 +2654,7 @@ class FallbackEngine:
             self._observe_provider_success(
                 adapter.name, profile=request.profile
             )
+            _log_fallback_trace(trace, profile=request.profile)
             yield first
             # Mid-stream fallback guard: once the first byte is out the door,
             # any subsequent adapter exception is terminal — we cannot fall
@@ -2583,6 +2692,7 @@ class FallbackEngine:
 
         profile = request.profile or self.config.default_profile
         _warn_if_uniform_auth_failure(errors, profile=profile)
+        _log_fallback_trace(trace, profile=profile)
         raise NoProvidersAvailableError(profile=profile, errors=errors)
 
     # ==================================================================
@@ -2626,6 +2736,23 @@ class FallbackEngine:
         """
         chain = self._resolve_anthropic_chain(request)
         first_provider_config = chain[0][0].config if chain else None
+        # v2.15.0: ``_resolve_chain`` (called above, underneath
+        # ``_resolve_anthropic_chain``) recorded a pre-attempt hop for every
+        # provider a gate removed — paid / budget / memory-pressure /
+        # backend-health — but each of those hops is still missing its
+        # ``to_provider``. Here, and only here, the successor is already
+        # known: ``chain`` is post-reorder (adaptive, drift demotion,
+        # thinking-capability bucketing), so its head is the provider the
+        # engine will actually try first. Resolving now is what lets the
+        # streaming ingress ship a complete ``X-CodeRouter-Fallback-To``
+        # header, since SSE headers commit before the generator starts.
+        # Runtime attempt failures are still resolved later by
+        # ``record_attempt``; ``resolve_pending`` only fills hops holding
+        # ``None``, so the two cannot contradict each other.
+        if chain:
+            budget_trace = current_fallback_trace()
+            if budget_trace is not None:
+                budget_trace.resolve_pending(chain[0][0].name)
         trimmed_request, status = _apply_context_budget_guard(
             request, config=self.config, first_provider_config=first_provider_config,
         )
@@ -2810,6 +2937,15 @@ class FallbackEngine:
         # ``skip_prepared_dispatch`` (swap) forces a fresh resolution —
         # see ``generate_anthropic``'s docstring.
         prepared = None if skip_prepared_dispatch else self._take_prepared_dispatch(request)
+        # v2.15.0: open the request-scoped fallback trace. ``keep_existing``
+        # is True exactly when the M11 prepared dispatch was consumed —
+        # proof that the ingress already resolved the chain for *this*
+        # request, so the pre-attempt hops it recorded (budget / health /
+        # paid gate) must be carried forward rather than dropped.
+        trace = begin_fallback_trace(
+            keep_existing=prepared is not None,
+            profile=request.profile or self.config.default_profile,
+        )
         if prepared is not None:
             chain = prepared.chain
             request = prepared.request
@@ -2886,6 +3022,10 @@ class FallbackEngine:
                 action=cache_control_action,
                 request_had_cache_control=request_had_cache_control,
             )
+            # v2.15.0: recording the attempt resolves every pending hop's
+            # ``to_provider`` — including consecutive chain-resolve skips,
+            # which all point at whoever actually ran.
+            trace.record_attempt(adapter.name)
             logger.info(
                 "try-provider",
                 extra={
@@ -2958,6 +3098,16 @@ class FallbackEngine:
                     stream=False,
                 )
                 errors.append(exc)
+                # v2.15.0: capture the departure reason (timeout / 5xx /
+                # auth / ...). Non-retryable errors are recorded too: the
+                # hop simply never gets a ``to_provider``, which is exactly
+                # the "we left and had nowhere to go" narrative.
+                trace.record_failure(
+                    adapter.name,
+                    classify_adapter_error(exc),
+                    detail=describe_adapter_error(exc),
+                    stream=False,
+                )
                 if not exc.retryable:
                     break
                 continue
@@ -3019,6 +3169,9 @@ class FallbackEngine:
                     log_empty_response_detected(
                         logger, adapter.name, action="fallback", stream=False
                     )
+                    trace.record_failure(
+                        adapter.name, REASON_EMPTY_RESPONSE, stream=False
+                    )
                     continue
                 # ``warn``: log only; fall through and return the empty resp.
                 log_empty_response_detected(
@@ -3062,6 +3215,7 @@ class FallbackEngine:
                 latency_ms=(time.monotonic() - attempt_started) * 1000.0,
                 stream=False,
             )
+            _log_fallback_trace(trace, profile=request.profile)
             return resp
 
         # ⑧ (empty-response): the chain is exhausted. Under ``fallback``,
@@ -3076,10 +3230,12 @@ class FallbackEngine:
                 stream=False,
                 chain_exhausted=True,
             )
+            _log_fallback_trace(trace, profile=request.profile)
             return last_empty_resp
 
         profile = request.profile or self.config.default_profile
         _warn_if_uniform_auth_failure(errors, profile=profile)
+        _log_fallback_trace(trace, profile=profile)
         raise NoProvidersAvailableError(profile=profile, errors=errors)
 
     async def stream_anthropic(
@@ -3127,6 +3283,12 @@ class FallbackEngine:
         # non-streaming path — avoids a redundant resolution + estimate.
         # ``skip_prepared_dispatch`` (swap) forces a fresh resolution.
         prepared = None if skip_prepared_dispatch else self._take_prepared_dispatch(request)
+        # v2.15.0: mirror of the non-streaming path — see the comment there
+        # for why ``keep_existing`` tracks the prepared dispatch.
+        trace = begin_fallback_trace(
+            keep_existing=prepared is not None,
+            profile=request.profile or self.config.default_profile,
+        )
         if prepared is not None:
             chain = prepared.chain
             request = prepared.request
@@ -3191,6 +3353,8 @@ class FallbackEngine:
                 action=cache_control_action,
                 request_had_cache_control=request_had_cache_control,
             )
+            # v2.15.0: see the non-streaming sibling.
+            trace.record_attempt(adapter.name)
             logger.info(
                 "try-provider",
                 extra={
@@ -3253,6 +3417,9 @@ class FallbackEngine:
                     success=False,
                 )
                 errors.append(AdapterError("empty stream", provider=adapter.name, retryable=True))
+                trace.record_failure(
+                    adapter.name, REASON_EMPTY_STREAM, stream=True
+                )
                 continue
             except AdapterError as exc:
                 # M2: record the pre-first-event failure. Auth failures
@@ -3289,6 +3456,14 @@ class FallbackEngine:
                     stream=True,
                 )
                 errors.append(exc)
+                # v2.15.0: pre-first-event failure — no bytes reached the
+                # client, so this really is a fallback.
+                trace.record_failure(
+                    adapter.name,
+                    classify_adapter_error(exc),
+                    detail=describe_adapter_error(exc),
+                    stream=True,
+                )
                 if not exc.retryable:
                     break
                 continue
@@ -3365,6 +3540,9 @@ class FallbackEngine:
                     log_empty_response_detected(
                         logger, adapter.name, action="fallback", stream=True
                     )
+                    trace.record_failure(
+                        adapter.name, REASON_EMPTY_STREAM, stream=True
+                    )
                     last_empty_stream_buffer = buffer
                     continue
                 # M2: mid-stream failure — record an error-only
@@ -3406,6 +3584,9 @@ class FallbackEngine:
             if empty_fallback and not content_started:
                 log_empty_response_detected(
                     logger, adapter.name, action="fallback", stream=True
+                )
+                trace.record_failure(
+                    adapter.name, REASON_EMPTY_STREAM, stream=True
                 )
                 last_empty_stream_buffer = buffer
                 continue
@@ -3462,6 +3643,7 @@ class FallbackEngine:
                 latency_ms=None,  # streaming latency is end-of-stream-relative; left to plugin
                 stream=True,
             )
+            _log_fallback_trace(trace, profile=request.profile)
             return
 
         # ⑧ (empty-response): the chain is exhausted under ``fallback`` and
@@ -3477,10 +3659,12 @@ class FallbackEngine:
                 stream=True,
                 chain_exhausted=True,
             )
+            _log_fallback_trace(trace, profile=request.profile)
             for buffered_ev in last_empty_stream_buffer:
                 yield buffered_ev
             return
 
         profile = request.profile or self.config.default_profile
         _warn_if_uniform_auth_failure(errors, profile=profile)
+        _log_fallback_trace(trace, profile=profile)
         raise NoProvidersAvailableError(profile=profile, errors=errors)

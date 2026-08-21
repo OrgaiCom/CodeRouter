@@ -29,12 +29,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from coderouter.adapters.base import ChatRequest
 from coderouter.logging import get_logger
 from coderouter.routing import FallbackEngine, NoProvidersAvailableError
 from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
+from coderouter.routing.fallback_trace import current_fallback_trace
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -179,7 +180,7 @@ async def chat_completions(
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
     x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
-) -> StreamingResponse | dict[str, Any]:
+) -> StreamingResponse | JSONResponse | dict[str, Any]:
     """OpenAI Chat Completions endpoint.
 
     Validates the body into :class:`ChatRequest`, resolves the profile
@@ -251,6 +252,34 @@ async def chat_completions(
         response = await engine.generate(chat_req)
     except NoProvidersAvailableError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # v2.15.0: fallback reason headers, same shape and same construction as
+    # ``anthropic_routes.messages`` — the engine filled the request-scoped
+    # trace while ``generate`` was awaited, and ``header_values()`` is empty
+    # unless the chain actually moved. A request served by its first
+    # provider therefore still returns the bare dict, byte-identical to
+    # v2.14.0.
+    #
+    # Only the non-streaming half exists here, and that is deliberate. The
+    # Anthropic streaming path can carry the trail two ways: chain-resolve
+    # hops ride the HTTP headers (``apply_context_budget`` resolves the
+    # chain before the response commits) and runtime hops ride the trailing
+    # ``coderouter_fallback`` SSE event (Anthropic's wire is typed, so an
+    # unknown event type is ignored by spec-compliant SDKs). Neither is
+    # available on the OpenAI wire: this route has no pre-dispatch chain
+    # resolution, and OpenAI SSE frames are untyped — every ``data:`` line
+    # is parsed as a ChatCompletionChunk, so injecting a metadata frame
+    # would hand strict clients an object they cannot deserialize. That is
+    # a breaking change, so the streaming OpenAI path stays untouched and
+    # its reasons are available via the ``fallback-occurred`` log lines.
+    fallback_trace = current_fallback_trace()
+    if fallback_trace is not None:
+        resp_headers = fallback_trace.header_values()
+        if resp_headers:
+            return JSONResponse(
+                content=response.model_dump(exclude_none=True),
+                headers=resp_headers,
+            )
 
     return response.model_dump(exclude_none=True)
 

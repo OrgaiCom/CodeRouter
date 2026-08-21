@@ -38,6 +38,10 @@ from coderouter.routing import (
     NoProvidersAvailableError,
 )
 from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
+from coderouter.routing.fallback_trace import (
+    SSE_FALLBACK_EVENT,
+    current_fallback_trace,
+)
 from coderouter.token_estimation import extract_text_from_anthropic_request
 from coderouter.token_estimation_accurate import count_tokens, is_accuracy_available
 from coderouter.translation import (
@@ -54,6 +58,11 @@ _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 _ANTHROPIC_BETA_HEADER = "anthropic-beta"
 _CTX_BUDGET_HEADER = "X-CodeRouter-Context-Budget"
 _DRIFT_HEADER = "X-CodeRouter-Drift"
+# v2.15.0: the ``X-CodeRouter-Fallback-*`` family is built by
+# ``FallbackTrace.header_values()`` rather than named here, because the set
+# of headers varies with the trace (``-To`` is absent when the whole chain
+# was exhausted). The names themselves live next to the trace so the
+# engine, the ingress and the tests all read one definition.
 
 # M14: overall SSE stream ceiling. A single streamed request can legitimately
 # run much longer than one provider call (long generations, tool turns), so we
@@ -258,6 +267,20 @@ async def messages(
         drift_severity = engine.last_drift_severity
         if drift_severity:
             stream_headers[_DRIFT_HEADER] = drift_severity
+        # v2.15.0: fallback headers on the streaming path carry what is
+        # already known when the response commits — i.e. the pre-attempt
+        # hops (paid gate / budget / backend health / self-healing) that
+        # ``apply_context_budget`` recorded while resolving the chain just
+        # above. Runtime attempt failures happen *after* the HTTP headers
+        # have shipped and are therefore physically unreachable here; they
+        # are delivered instead as the trailing ``coderouter_fallback`` SSE
+        # metadata event emitted by ``_anthropic_sse_iterator`` (the same
+        # trailer mechanism v2.0-H uses for ``coderouter_partial``), and as
+        # ``fallback-occurred`` log lines. Same commit-order constraint the
+        # drift header comment above describes.
+        pre_dispatch_trace = current_fallback_trace()
+        if pre_dispatch_trace is not None:
+            stream_headers.update(pre_dispatch_trace.header_values())
         # M14: wrap the SSE iterator with an overall timeout + client
         # disconnect cleanup so a wedged upstream cannot pin the client
         # (or the upstream socket) open forever.
@@ -309,6 +332,15 @@ async def messages(
         resp_headers[_CTX_BUDGET_HEADER] = ctx_budget_status
     if drift_severity:
         resp_headers[_DRIFT_HEADER] = drift_severity
+    # v2.15.0: fallback reason headers. The engine wrote its hops onto the
+    # request-scoped trace while ``generate_anthropic`` was awaited above,
+    # so by here the trail is complete — ``header_values()`` returns an
+    # empty dict (and this whole block is inert) when the first provider
+    # served the request, which keeps the healthy path byte-identical to
+    # v2.14.0.
+    fallback_trace = current_fallback_trace()
+    if fallback_trace is not None:
+        resp_headers.update(fallback_trace.header_values())
 
     if resp_headers:
         return JSONResponse(
@@ -560,6 +592,21 @@ async def _anthropic_sse_iterator(
                 },
             )
             yield _format_anthropic_sse(err_event)
+
+    # v2.15.0: trailing fallback metadata. Emitted after the stream has
+    # terminated (normally or with an in-stream error frame), so it never
+    # interleaves with the Anthropic event sequence a client is parsing —
+    # exactly the position ``coderouter_partial`` occupies. Client-optional:
+    # spec-compliant Anthropic SDKs ignore unknown event types, and the
+    # frame is only produced when a fallback actually happened.
+    trace = current_fallback_trace()
+    if trace is not None and trace.occurred:
+        yield _format_anthropic_sse(
+            AnthropicStreamEvent(
+                type=SSE_FALLBACK_EVENT,
+                data=trace.as_event_payload(),
+            )
+        )
 
 
 def _format_anthropic_sse(ev: AnthropicStreamEvent) -> str:

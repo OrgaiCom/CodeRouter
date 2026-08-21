@@ -78,6 +78,10 @@ _AUDIT_EVENTS: frozenset[str] = frozenset(
         "chain-paid-gate-blocked",
         "chain-memory-pressure-blocked",
         "chain-uniform-auth-failure",
+        # Fallback reason trail (v2.15.0) — one line per chain transition.
+        # Low volume by construction: nothing is emitted when the first
+        # provider serves the request.
+        "fallback-occurred",
         # Memory pressure
         "memory-pressure-detected",
         # Drift (v2.0-G)

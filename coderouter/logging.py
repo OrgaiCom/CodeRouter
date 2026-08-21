@@ -1612,3 +1612,89 @@ def log_probe_capabilities_drift(
         "in_registry": in_registry,
     }
     logger.warning("probe-capabilities-drift", extra=payload)
+
+
+# ---------------------------------------------------------------------------
+# v2.15.0: fallback reason logging
+#
+# One ``fallback-occurred`` line per hop. Fires only when the chain
+# actually moves — a request served by its first provider produces no
+# line at all, so this adds zero volume to the healthy path.
+#
+# The vocabulary of ``reason`` is defined in
+# :mod:`coderouter.routing.fallback_trace` (a single canonical set that
+# also names the pre-existing ``provider-does-not-support`` /
+# ``translation-lossy`` degrade reasons, which never appear here — a
+# degrade keeps the request on the same provider).
+#
+# ``to_provider`` is ``None`` when the hop is the chain's last one and no
+# successor was ever attempted (chain exhausted). The line is still
+# emitted: "we left A because of R and had nowhere to go" is the single
+# most diagnostic event in the whole engine.
+# ---------------------------------------------------------------------------
+
+
+class FallbackOccurredPayload(TypedDict):
+    """Structured shape of the ``fallback-occurred`` log record.
+
+    Fields
+        provider: the provider being left. Duplicated from
+            ``from_provider`` under the field name every other engine
+            event uses, so existing per-provider log queries keep working
+            without learning a new key.
+        from_provider: the provider being left.
+        to_provider: the provider taking over, or None if the chain was
+            exhausted with no successor.
+        reason: canonical fallback reason (see ``fallback_trace``).
+        detail: short human-readable context (HTTP status, truncated
+            error text), or None.
+        profile: the resolved profile name, when known.
+        stream: True when the hop happened on a streaming request.
+        pre_attempt: True when the provider was filtered out during chain
+            resolution (budget / health / paid gate) and therefore never
+            actually called; False when it was called and failed.
+        hop_index: 0-based position of this hop within the request.
+    """
+
+    provider: str
+    from_provider: str
+    to_provider: str | None
+    reason: str
+    detail: str | None
+    profile: str | None
+    stream: bool
+    pre_attempt: bool
+    hop_index: int
+
+
+def log_fallback_occurred(
+    logger: logging.Logger,
+    *,
+    from_provider: str,
+    to_provider: str | None,
+    reason: str,
+    detail: str | None = None,
+    profile: str | None = None,
+    stream: bool = False,
+    pre_attempt: bool = False,
+    hop_index: int = 0,
+) -> None:
+    """Emit a ``fallback-occurred`` warning line for one chain transition.
+
+    Warn level, matching ``provider-failed`` — a fallback is a
+    degradation of the intended routing even when the request ultimately
+    succeeds, and operators grep for it when a profile's primary provider
+    stops earning its place at the front of the chain.
+    """
+    payload: FallbackOccurredPayload = {
+        "provider": from_provider,
+        "from_provider": from_provider,
+        "to_provider": to_provider,
+        "reason": reason,
+        "detail": detail,
+        "profile": profile,
+        "stream": stream,
+        "pre_attempt": pre_attempt,
+        "hop_index": hop_index,
+    }
+    logger.warning("fallback-occurred", extra=payload)
