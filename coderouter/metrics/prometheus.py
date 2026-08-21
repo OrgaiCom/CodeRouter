@@ -443,6 +443,52 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             )
         )
 
+    # ---- v2.15.0: stream truncation metric -----------------------------------
+    # Exported per (provider, action) so the ``warn``-phase measurement and
+    # the ``error``-phase enforcement are separable on one dashboard: a
+    # rising ``action="warn"`` series is the evidence an operator needs
+    # before flipping a profile to ``error``.
+    stream_truncated_by_provider = counters.get("stream_truncated_by_provider", {})
+    stream_truncated_total = counters.get("stream_truncated_total", 0)
+    if stream_truncated_total:
+        trunc_samples: list[tuple[tuple[tuple[str, str], ...], int]] = [
+            ((("provider", provider),), count)
+            for provider, count in sorted(stream_truncated_by_provider.items())
+        ]
+        if not trunc_samples:
+            # Detections whose log line carried no provider still count.
+            trunc_samples = [((), stream_truncated_total)]
+        lines.extend(
+            _counter(
+                name="stream_truncated_total",
+                help_text=(
+                    "Upstream SSE streams that ended without a protocol "
+                    "terminator (no message_stop / no [DONE] and no "
+                    "finish_reason), by provider. Requires "
+                    "stream_truncation_action=warn or error."
+                ),
+                samples=trunc_samples,
+            )
+        )
+        action_samples: list[tuple[tuple[tuple[str, str], ...], int]] = [
+            ((("action", action),), count)
+            for action, count in sorted(
+                counters.get("stream_truncated_by_action", {}).items()
+            )
+        ]
+        if action_samples:
+            lines.extend(
+                _counter(
+                    name="stream_truncated_by_action_total",
+                    help_text=(
+                        "Stream truncation detections by the "
+                        "stream_truncation_action value in effect "
+                        "(warn = measured only, error = fallback attempted)."
+                    ),
+                    samples=action_samples,
+                )
+            )
+
     # ---- v2.0-I: continuous probe metrics ------------------------------------
     probe_total_samples: list[tuple[tuple[tuple[str, str], ...], int]] = []
     for provider, count in sorted(counters.get("probe_total", {}).items()):

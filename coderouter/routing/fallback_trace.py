@@ -106,6 +106,11 @@ REASON_CONNECTION: Final = "connection"
 REASON_UPSTREAM_ERROR: Final = "upstream-error"
 REASON_EMPTY_RESPONSE: Final = "empty-response"
 REASON_EMPTY_STREAM: Final = "empty-stream"
+# v2.15.0: the upstream SSE stream ended without its protocol terminator —
+# distinct from ``empty-stream`` (nothing at all arrived) and from
+# ``connection`` (the transport itself broke). Produced only when the profile
+# sets ``stream_truncation_action: error``.
+REASON_STREAM_TRUNCATED: Final = "stream-truncated"
 
 # -- degrade reasons (pre-existing strings; never produce a hop) -----------
 # Kept here so the whole ``reason`` vocabulary is readable in one place.
@@ -135,6 +140,7 @@ ATTEMPT_FAILURE_REASONS: Final[frozenset[str]] = frozenset(
         REASON_UPSTREAM_ERROR,
         REASON_EMPTY_RESPONSE,
         REASON_EMPTY_STREAM,
+        REASON_STREAM_TRUNCATED,
     }
 )
 
@@ -196,7 +202,12 @@ def describe_adapter_error(exc: AdapterError) -> str:
     """
     if exc.status_code is not None:
         return f"status={exc.status_code}"
-    return f"transport={classify_adapter_error(exc)}"
+    reason = classify_adapter_error(exc)
+    if reason == REASON_STREAM_TRUNCATED:
+        # Not a transport fault — the HTTP body ended cleanly; it was the
+        # LLM protocol inside it that never closed.
+        return "no-terminator"
+    return f"transport={reason}"
 
 
 def classify_adapter_error(exc: AdapterError) -> str:
@@ -208,7 +219,18 @@ def classify_adapter_error(exc: AdapterError) -> str:
     message text the adapters already write — ``timeout ...`` and
     ``transport error: ...`` are stable prefixes in both
     ``adapters/openai_compat.py`` and ``adapters/anthropic_native.py``.
+
+    v2.15.0: ``StreamTruncatedError`` is checked first and by type, not by
+    message text. It carries ``status_code=None`` and would otherwise land in
+    the generic ``upstream-error`` bucket, hiding the one failure mode this
+    reason exists to name. The import is function-local because
+    ``adapters.base`` is a TYPE_CHECKING-only import at module scope here
+    (the runtime import order would otherwise cycle through the registry).
     """
+    from coderouter.adapters.base import StreamTruncatedError
+
+    if isinstance(exc, StreamTruncatedError):
+        return REASON_STREAM_TRUNCATED
     status = exc.status_code
     if status is None:
         message = str(exc).lower()

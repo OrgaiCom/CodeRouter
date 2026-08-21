@@ -53,6 +53,8 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
     ``drift-reload-attempted``   → ``drift_reload_total`` / success
     ``partial-stitch-surfaced``  → ``partial_stitch_surfaced_total`` (v2.0-H)
     ``empty-response-detected``  → ``empty_responses_total`` + per-provider (⑧)
+    ``stream-truncation-detected`` → ``stream_truncated_total`` + per-provider
+                                   + per-action (v2.15.0)
     ``probe-completed`` (v2.0-I) → ``probe_total`` / ``probe_success`` / ``probe_failure``
                                    + per-provider latency gauge
     ``probe-round-completed``    → ``probe_rounds_total`` (v2.0-I)
@@ -111,6 +113,7 @@ _KNOWN_EVENTS: Final[frozenset[str]] = frozenset(
         "drift-reload-attempted",
         "partial-stitch-surfaced",
         "empty-response-detected",
+        "stream-truncation-detected",
         "probe-completed",
         "probe-round-completed",
         "probe-capabilities-drift",
@@ -281,6 +284,16 @@ class MetricsCollector(logging.Handler):
         self._empty_responses_total: int = 0
         self._empty_responses_by_provider: Counter[str] = Counter()
 
+        # v2.15.0 (stream-truncation): count of upstream SSE streams that
+        # ended without a protocol terminator, under either ``warn`` or
+        # ``error``. Per-provider answers "which backend goes quiet"; the
+        # per-action split separates measurement from enforcement so a
+        # dashboard can show the ``warn``-phase rate before an operator
+        # commits to ``error``.
+        self._stream_truncated_total: int = 0
+        self._stream_truncated_by_provider: Counter[str] = Counter()
+        self._stream_truncated_by_action: Counter[str] = Counter()
+
         # v2.0-I: continuous probe counters. Per-provider probe attempts
         # and outcomes, plus a round counter for the dashboard's
         # "probes/min" panel.
@@ -339,6 +352,7 @@ class MetricsCollector(logging.Handler):
             "drift-reload-attempted": self._on_drift_reload_attempted,
             "partial-stitch-surfaced": self._on_partial_stitch_surfaced,
             "empty-response-detected": self._on_empty_response_detected,
+            "stream-truncation-detected": self._on_stream_truncation_detected,
             "probe-completed": self._on_probe_completed,
             "probe-round-completed": self._on_probe_round_completed,
             "probe-capabilities-drift": self._on_probe_capabilities_drift,
@@ -691,6 +705,20 @@ class MetricsCollector(logging.Handler):
             self._empty_responses_by_provider[provider] += 1
         self._push_recent("empty-response-detected", extras, record)
 
+    def _on_stream_truncation_detected(
+        self, extras: dict[str, Any], record: logging.LogRecord
+    ) -> None:
+        # v2.15.0 (stream-truncation): an upstream SSE stream ended without
+        # its terminator under a ``warn`` / ``error`` action.
+        self._stream_truncated_total += 1
+        provider = _str(extras.get("provider"))
+        if provider:
+            self._stream_truncated_by_provider[provider] += 1
+        action = _str(extras.get("action"))
+        if action:
+            self._stream_truncated_by_action[action] += 1
+        self._push_recent("stream-truncation-detected", extras, record)
+
     def _on_probe_completed(
         self, extras: dict[str, Any], record: logging.LogRecord
     ) -> None:
@@ -914,6 +942,14 @@ class MetricsCollector(logging.Handler):
                     "empty_responses_by_provider": dict(
                         self._empty_responses_by_provider
                     ),
+                    # v2.15.0 (stream-truncation).
+                    "stream_truncated_total": self._stream_truncated_total,
+                    "stream_truncated_by_provider": dict(
+                        self._stream_truncated_by_provider
+                    ),
+                    "stream_truncated_by_action": dict(
+                        self._stream_truncated_by_action
+                    ),
                     # v2.0-I: continuous probe counters.
                     "probe_total": dict(self._probe_total),
                     "probe_success": dict(self._probe_success),
@@ -1071,6 +1107,10 @@ class MetricsCollector(logging.Handler):
             # ⑧ (empty-response)
             self._empty_responses_total = 0
             self._empty_responses_by_provider.clear()
+            # v2.15.0 (stream-truncation)
+            self._stream_truncated_total = 0
+            self._stream_truncated_by_provider.clear()
+            self._stream_truncated_by_action.clear()
             # v2.0-I
             self._probe_total.clear()
             self._probe_success.clear()

@@ -1232,6 +1232,71 @@ class FallbackChain(BaseModel):
         ),
     )
 
+    # --- v2.15.0 (stream-truncation): upstream SSE cut without a terminator --
+    #
+    # A streaming upstream can end its HTTP body *cleanly* while the LLM
+    # protocol carried inside it is still mid-message: no ``message_stop`` on
+    # the Anthropic wire, no ``data: [DONE]`` and no ``finish_reason`` on the
+    # OpenAI wire. llama.cpp slot preemption, an ``--n-predict`` cut-off, a
+    # front proxy closing an EOF-delimited body, or an OOM'd local server all
+    # produce exactly this shape. Transport-level breakage (timeout,
+    # ``httpx.RemoteProtocolError``) was already caught; this is the layer the
+    # transport cannot see.
+    #
+    # Before v2.15.0 that stream was indistinguishable from a complete one:
+    # the adapters never recorded whether a terminator arrived, and the
+    # translation layer's terminator-synthesis guards (H6 / M9 in
+    # ``coderouter.translation.convert``) then fabricated a ``stop_reason:
+    # end_turn`` / ``finish_reason: "stop"`` so the client would not hang. The
+    # synthesis is correct and stays; what was missing is telling the *engine*
+    # that it happened.
+    #
+    #   * ``off``   — no detection, no log, no metric. Backward-compatible
+    #                 default: byte-for-byte identical to v2.14.0 on every path.
+    #   * ``warn``  — emit a ``stream-truncation-detected`` log line (and the
+    #                 ``stream_truncated_total`` metric); the stream still
+    #                 terminates through the legacy synthesis path, so the
+    #                 client sees exactly what it saw before.
+    #   * ``error`` — the adapter raises ``StreamTruncatedError`` (a retryable
+    #                 ``AdapterError``) at the point the terminator should have
+    #                 arrived. The engine's existing branches take over: no
+    #                 bytes forwarded yet → fall back to the next provider with
+    #                 reason ``stream-truncated``; bytes already forwarded →
+    #                 ``MidStreamError``, which ``partial_stitch_action:
+    #                 surface`` renders as a graceful close carrying a
+    #                 ``coderouter_partial`` event with reason
+    #                 ``stream_truncated``.
+    #
+    # Caveats for ``error``:
+    #   * False positives are possible against an upstream that legitimately
+    #     omits the terminator. A ``message_delta`` carrying a ``stop_reason``
+    #     (Anthropic) and a ``finish_reason`` on any choice (OpenAI) are both
+    #     accepted as terminators to keep that risk low, but running ``warn``
+    #     first to measure the real rate is the recommended rollout.
+    #   * Falling back re-generates the answer on the next provider, so the
+    #     tokens the truncated attempt burned are paid twice.
+    #   * On the Anthropic streaming path the pre-content fallback requires
+    #     ``empty_response_action: fallback`` as well — that is the knob that
+    #     withholds the opening events from the client. Without it the opening
+    #     ``message_start`` has already shipped, so a truncation is by
+    #     definition mid-stream.
+    stream_truncation_action: Literal["off", "warn", "error"] = Field(
+        default="off",
+        description=(
+            "v2.15.0: action when an upstream SSE stream ends without its "
+            "protocol terminator (no ``message_stop`` / no ``[DONE]`` and no "
+            "``finish_reason``). ``off`` (default) does nothing — identical to "
+            "v2.14.0. ``warn`` emits a ``stream-truncation-detected`` log and "
+            "metric while the stream still ends through the legacy terminator "
+            "synthesis. ``error`` raises a retryable ``StreamTruncatedError`` "
+            "so the engine falls back to the next provider (reason "
+            "``stream-truncated``) when nothing has reached the client yet, or "
+            "raises ``MidStreamError`` when it has. Pair with "
+            "``empty_response_action: fallback`` for pre-content fallback on "
+            "the Anthropic streaming path."
+        ),
+    )
+
     # --- ⑧ (empty-response): per-request empty-response fallback ------------
     #
     # Some local backends (observed: gemma4:26b on ``no_tool_temptation``

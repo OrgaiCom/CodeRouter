@@ -28,12 +28,14 @@ from coderouter.adapters.base import (
     ChatResponse,
     ProviderCallOverrides,
     StreamChunk,
+    StreamTruncatedError,
 )
 from coderouter.credentials import resolve_provider_credential
 from coderouter.logging import (
     get_logger,
     log_capability_degraded,
     log_output_filter_applied,
+    log_stream_truncation_detected,
 )
 from coderouter.output_filters import OutputFilterChain
 
@@ -347,6 +349,20 @@ class OpenAICompatAdapter(BaseAdapter):
         # Captured for the closing flush chunk (if any): reuse the last
         # seen chunk's id/model so the flush emission looks native.
         last_chunk_template: dict[str, Any] | None = None
+
+        # v2.15.0 (stream-truncation): the loop below used to treat "saw
+        # [DONE]" and "the line iterator ran out" as the same event. These
+        # three flags are the memory that tells them apart.
+        #
+        # A terminator is EITHER ``data: [DONE]`` OR a ``finish_reason`` on
+        # any choice. Accepting ``finish_reason`` matters: a provider that
+        # emits a complete message and then closes without the ``[DONE]``
+        # sentinel is not truncated, and flagging it would be a false
+        # positive. See ``stream_truncation_action`` in ``config/schemas.py``.
+        truncation_action = self.effective_stream_truncation_action(overrides)
+        saw_terminator = False
+        chunks_seen = 0
+        tool_call_in_flight = False
         try:
             # H3: stream over the shared client so the connection pool /
             # keep-alive / TLS session are reused. Only the ``stream(...)``
@@ -376,11 +392,31 @@ class OpenAICompatAdapter(BaseAdapter):
                         continue
                     data_str = line[len("data:") :].strip()
                     if data_str == "[DONE]":
+                        # v2.15.0: the sentinel — this stream ended on purpose.
+                        saw_terminator = True
                         break
                     try:
                         payload_obj = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue  # skip malformed chunks rather than abort
+                    # v2.15.0 (stream-truncation): fold this chunk into the
+                    # terminator state before any filtering / validation, so a
+                    # chunk that is later dropped as malformed still counts as
+                    # "the upstream got this far".
+                    chunks_seen += 1
+                    for _choice in payload_obj.get("choices") or []:
+                        if not isinstance(_choice, dict):
+                            continue
+                        if _choice.get("finish_reason"):
+                            # A finish_reason means the message is complete
+                            # even if the [DONE] sentinel never arrives, and
+                            # it also closes any tool call that was open.
+                            saw_terminator = True
+                            tool_call_in_flight = False
+                        elif isinstance(_choice.get("delta"), dict) and _choice[
+                            "delta"
+                        ].get("tool_calls"):
+                            tool_call_in_flight = True
                     if strip_reasoning:
                         stripped = _strip_reasoning_field(
                             payload_obj.get("choices"), delta_key=True
@@ -446,6 +482,30 @@ class OpenAICompatAdapter(BaseAdapter):
                         streaming=True,
                     )
                     output_filter_logged = True
+
+            # v2.15.0 (stream-truncation): decided AFTER the filter flush on
+            # purpose — the flush is the last chance to hand the caller every
+            # safe byte the filter chain was still holding, and under
+            # ``partial_stitch_action: surface`` those bytes end up in the
+            # partial content the client receives. Under ``off`` this block is
+            # inert, keeping the default byte-for-byte identical to v2.14.0.
+            if truncation_action != "off" and not saw_terminator:
+                log_stream_truncation_detected(
+                    logger,
+                    self.name,
+                    action=truncation_action,
+                    wire="openai",
+                    events_forwarded=chunks_seen,
+                    saw_stream_start=chunks_seen > 0,
+                    tool_call_in_flight=tool_call_in_flight,
+                )
+                if truncation_action == "error":
+                    raise StreamTruncatedError(
+                        "upstream stream truncated "
+                        "(no [DONE] sentinel and no finish_reason)",
+                        provider=self.name,
+                        tool_call_in_flight=tool_call_in_flight,
+                    )
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout streaming from {url}", provider=self.name, retryable=True

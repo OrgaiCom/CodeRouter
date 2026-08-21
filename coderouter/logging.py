@@ -1480,6 +1480,63 @@ def log_empty_response_detected(
 
 
 # ---------------------------------------------------------------------------
+# v2.15.0 (stream-truncation): upstream SSE ended without a terminator
+#
+# Fired from the adapter's SSE parse loop when ``stream_truncation_action``
+# is ``warn`` or ``error`` and the upstream line iterator was exhausted
+# without a ``message_stop`` (Anthropic wire) / ``[DONE]`` or a
+# ``finish_reason`` (OpenAI wire).
+#
+# ``action`` records which knob value produced the line, so a dashboard can
+# separate "we only measured it" (``warn``) from "we acted on it" (``error``).
+# ``events_forwarded`` is how many events/chunks the adapter had already
+# yielded — 0 means nothing reached the engine and a clean fallback is still
+# possible. ``tool_call_in_flight`` is the sharp edge: True means a
+# ``tool_use`` / ``tool_calls`` block was still open, so whatever the
+# translation layer synthesizes closes a block whose argument JSON is
+# provably incomplete.
+# ---------------------------------------------------------------------------
+
+
+def log_stream_truncation_detected(
+    logger: logging.Logger,
+    provider: str,
+    *,
+    action: str,
+    wire: str,
+    events_forwarded: int,
+    saw_stream_start: bool,
+    tool_call_in_flight: bool = False,
+) -> None:
+    """Emit a ``stream-truncation-detected`` warn line.
+
+    Args:
+        logger: Target logger.
+        provider: ``ProviderConfig.name`` whose stream was cut.
+        action: The ``stream_truncation_action`` value in effect (``warn``
+            or ``error`` — ``off`` never reaches here).
+        wire: ``anthropic`` or ``openai`` — which SSE dialect was being
+            parsed, i.e. which terminator went missing.
+        events_forwarded: Count of events/chunks already yielded downstream.
+        saw_stream_start: Whether the opening event (``message_start`` /
+            first data chunk) had arrived at all. False means the upstream
+            produced nothing before closing.
+        tool_call_in_flight: Whether a tool-call block was still open.
+    """
+    logger.warning(
+        "stream-truncation-detected",
+        extra={
+            "provider": provider,
+            "action": action,
+            "wire": wire,
+            "events_forwarded": events_forwarded,
+            "saw_stream_start": saw_stream_start,
+            "tool_call_in_flight": tool_call_in_flight,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # v2.0-I: Continuous probe log shapes
 #
 # Two event lanes mirror the backend-health triplet:

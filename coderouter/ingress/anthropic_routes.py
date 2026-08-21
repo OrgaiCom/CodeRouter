@@ -30,6 +30,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from coderouter.adapters.base import StreamTruncatedError
 from coderouter.guards.tool_loop import ToolCountExceededError, ToolLoopBreakError
 from coderouter.logging import get_logger
 from coderouter.routing import (
@@ -543,6 +544,17 @@ async def _anthropic_sse_iterator(
         except (KeyError, ValueError):
             pass
 
+        # v2.15.0 (stream-truncation): name the specific failure on the
+        # metadata event. ``mid_stream_failure`` stays the default so every
+        # pre-v2.15.0 case is byte-identical; ``stream_truncated`` tells the
+        # client the difference between "the provider errored out" and "the
+        # provider went quiet with the message still open".
+        partial_reason = (
+            "stream_truncated"
+            if isinstance(exc.original, StreamTruncatedError)
+            else "mid_stream_failure"
+        )
+
         if partial_action == "surface" and exc.partial_content:
             # Emit message_delta with accumulated usage (signals stream end).
             yield _format_anthropic_sse(AnthropicStreamEvent(
@@ -565,7 +577,7 @@ async def _anthropic_sse_iterator(
                     "type": "coderouter_partial",
                     "partial_content": exc.partial_content,
                     "provider": exc.provider,
-                    "reason": "mid_stream_failure",
+                    "reason": partial_reason,
                     "original_error": str(exc.original)[:200],
                 },
             ))
@@ -574,6 +586,9 @@ async def _anthropic_sse_iterator(
                 extra={
                     "provider": exc.provider,
                     "profile": profile_name,
+                    # v2.15.0: lets a dashboard split "provider errored" from
+                    # "provider went quiet" without re-parsing the SSE.
+                    "reason": partial_reason,
                     "text_blocks": len(exc.partial_content),
                     "text_length": sum(
                         len(b.get("text", "")) for b in exc.partial_content

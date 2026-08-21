@@ -46,6 +46,7 @@ from coderouter.adapters.base import (
     ChatResponse,
     ProviderCallOverrides,
     StreamChunk,
+    StreamTruncatedError,
 )
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
@@ -109,6 +110,7 @@ from coderouter.routing.fallback_trace import (
     REASON_MEMORY_PRESSURE,
     REASON_PAID_GATE,
     REASON_SELF_HEALING_EXCLUDED,
+    REASON_STREAM_TRUNCATED,
     REASON_UNKNOWN_PROVIDER,
     FallbackTrace,
     begin_fallback_trace,
@@ -2036,12 +2038,21 @@ class FallbackEngine:
         Invariant across every adapter call on one chain (profiles are
         immutable per request), so callers resolve this once at the top of
         each engine method and pass to every adapter invocation.
+
+        v2.15.0: ``stream_truncation_action`` rides along. It is not a
+        provider-level knob, but the adapter's SSE parse loop is the only
+        place that can see a missing terminator, and this object is the
+        channel that already reaches it. ``getattr`` with an ``off`` default
+        keeps ``model_construct``-built / stub profiles working.
         """
         chosen = profile_name or self.config.default_profile
         profile = self.config.profile_by_name(chosen)
         return ProviderCallOverrides(
             timeout_s=profile.timeout_s,
             append_system_prompt=profile.append_system_prompt,
+            stream_truncation_action=getattr(
+                profile, "stream_truncation_action", "off"
+            ),
         )
 
     def _resolve_shim_actions(self, profile_name: str | None) -> tuple[str, str]:
@@ -3537,12 +3548,26 @@ class FallbackEngine:
                     self._adaptive.record_attempt(
                         adapter.name, latency_ms=None, success=False
                     )
-                    log_empty_response_detected(
-                        logger, adapter.name, action="fallback", stream=True
-                    )
-                    trace.record_failure(
-                        adapter.name, REASON_EMPTY_STREAM, stream=True
-                    )
+                    # v2.15.0 (stream-truncation): same branch, different
+                    # label. A truncated stream is not an *empty* one — the
+                    # upstream produced events, it just never finished the
+                    # message — so the hop is recorded as ``stream-truncated``
+                    # and the empty-response log is skipped. The adapter has
+                    # already emitted ``stream-truncation-detected``.
+                    if isinstance(exc, StreamTruncatedError):
+                        trace.record_failure(
+                            adapter.name,
+                            REASON_STREAM_TRUNCATED,
+                            detail=describe_adapter_error(exc),
+                            stream=True,
+                        )
+                    else:
+                        log_empty_response_detected(
+                            logger, adapter.name, action="fallback", stream=True
+                        )
+                        trace.record_failure(
+                            adapter.name, REASON_EMPTY_STREAM, stream=True
+                        )
                     last_empty_stream_buffer = buffer
                     continue
                 # M2: mid-stream failure — record an error-only

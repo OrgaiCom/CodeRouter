@@ -44,9 +44,14 @@ from coderouter.adapters.base import (
     ChatResponse,
     ProviderCallOverrides,
     StreamChunk,
+    StreamTruncatedError,
 )
 from coderouter.credentials import resolve_provider_credential
-from coderouter.logging import get_logger, log_output_filter_applied
+from coderouter.logging import (
+    get_logger,
+    log_output_filter_applied,
+    log_stream_truncation_detected,
+)
 from coderouter.output_filters import OutputFilterChain
 from coderouter.translation.anthropic import (
     AnthropicRequest,
@@ -72,6 +77,74 @@ logger = get_logger(__name__)
 _RETRYABLE_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
 
 _DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
+
+
+class _AnthropicTerminatorTracker:
+    """v2.15.0: watch an Anthropic SSE event stream for its terminator.
+
+    The parse loop in :meth:`AnthropicAdapter.stream_anthropic` used to be
+    stateless across events — ``current_event`` was reset on every blank
+    line and nothing remembered whether the stream had ended *properly*.
+    That made "upstream sent 30 deltas and hung up" indistinguishable from
+    "upstream sent the whole message". This tracker is the missing memory.
+
+    What counts as a terminator (deliberately generous, to keep the false
+    positive rate down — see ``stream_truncation_action`` in
+    ``config/schemas.py``):
+
+    * ``message_stop`` — the canonical Anthropic terminator.
+    * ``message_delta`` carrying a non-null ``stop_reason`` — the message is
+      semantically complete even if the provider omits ``message_stop``.
+      Some Anthropic-compatible local servers do exactly that, and their
+      content is *not* truncated, so flagging them would be a false positive.
+    * a top-level ``error`` event — the upstream ended the stream on purpose
+      and the frame is forwarded to the client verbatim (current behavior).
+      Reporting truncation on top would double-report one failure.
+
+    ``open_block_type`` tracks the currently-open content block so a stream
+    cut in the middle of a ``tool_use`` block's ``input_json_delta`` can be
+    reported as such: that is the case where the translation layer's
+    terminator synthesis closes a block whose argument JSON is provably
+    incomplete.
+    """
+
+    __slots__ = ("events", "open_block_type", "saw_start", "saw_terminator")
+
+    def __init__(self) -> None:
+        """Start with nothing observed."""
+        self.saw_terminator: bool = False
+        self.saw_start: bool = False
+        self.events: int = 0
+        self.open_block_type: str | None = None
+
+    def observe(self, event_type: str, data: Any) -> None:
+        """Fold one parsed SSE event into the tracked state.
+
+        ``data`` is whatever ``json.loads`` produced for the block, so it is
+        not guaranteed to be a mapping; non-dict payloads are treated as
+        empty rather than raising inside a streaming hot path.
+        """
+        self.events += 1
+        if not isinstance(data, dict):
+            data = {}
+        if event_type == "message_start":
+            self.saw_start = True
+        elif event_type == "content_block_start":
+            block = data.get("content_block")
+            self.open_block_type = block.get("type") if isinstance(block, dict) else None
+        elif event_type == "content_block_stop":
+            self.open_block_type = None
+        elif event_type == "message_delta":
+            delta = data.get("delta")
+            if isinstance(delta, dict) and delta.get("stop_reason"):
+                self.saw_terminator = True
+        elif event_type in {"message_stop", "error"}:
+            self.saw_terminator = True
+
+    @property
+    def tool_call_in_flight(self) -> bool:
+        """True when a ``tool_use`` block was still open at end-of-stream."""
+        return self.open_block_type == "tool_use"
 
 
 def anthropic_messages_url(base_url: str) -> str:
@@ -475,6 +548,12 @@ class AnthropicAdapter(BaseAdapter):
         filter_chains: dict[int, OutputFilterChain] = {}
         logged_flag: list[bool] = [False]
 
+        # v2.15.0 (stream-truncation): remember whether the upstream ever
+        # terminated its message. Resolved once per call — the knob is a
+        # profile-level setting threaded in through ProviderCallOverrides.
+        truncation_action = self.effective_stream_truncation_action(overrides)
+        terminator = _AnthropicTerminatorTracker()
+
         try:
             # H3: stream over the shared client (pool / keep-alive / TLS
             # reuse). Only the ``stream(...)`` context is scoped here; the
@@ -514,6 +593,7 @@ class AnthropicAdapter(BaseAdapter):
                                 current_event = None
                                 data_lines = []
                                 continue
+                            terminator.observe(current_event, data_obj)
                             for out_event in self._process_stream_event_for_filters(
                                 AnthropicStreamEvent(type=current_event, data=data_obj),
                                 chains=filter_chains,
@@ -542,12 +622,37 @@ class AnthropicAdapter(BaseAdapter):
                     except json.JSONDecodeError:
                         data_obj = None
                     if data_obj is not None:
+                        terminator.observe(current_event, data_obj)
                         for out_event in self._process_stream_event_for_filters(
                             AnthropicStreamEvent(type=current_event, data=data_obj),
                             chains=filter_chains,
                             logged_flag=logged_flag,
                         ):
                             yield out_event
+
+            # v2.15.0 (stream-truncation): the upstream line iterator is
+            # exhausted. Reaching here with no terminator observed means the
+            # HTTP body ended cleanly while the Anthropic message was still
+            # open — the exact case transport-level error handling below
+            # cannot see (``httpx.RemoteProtocolError`` and timeouts already
+            # raise). Under ``off`` this block is inert, which is what keeps
+            # the default byte-for-byte identical to v2.14.0.
+            if truncation_action != "off" and not terminator.saw_terminator:
+                log_stream_truncation_detected(
+                    logger,
+                    self.name,
+                    action=truncation_action,
+                    wire="anthropic",
+                    events_forwarded=terminator.events,
+                    saw_stream_start=terminator.saw_start,
+                    tool_call_in_flight=terminator.tool_call_in_flight,
+                )
+                if truncation_action == "error":
+                    raise StreamTruncatedError(
+                        "upstream stream truncated (no message_stop terminator)",
+                        provider=self.name,
+                        tool_call_in_flight=terminator.tool_call_in_flight,
+                    )
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout streaming from {url}", provider=self.name, retryable=True

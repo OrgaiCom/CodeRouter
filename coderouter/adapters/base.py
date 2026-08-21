@@ -137,6 +137,49 @@ class AdapterError(CodeRouterError):
         return f"[{self.provider}{sc}] {super().__str__()}"
 
 
+# v2.15.0 (stream-truncation): raised by an adapter when the upstream SSE
+# stream ended *without* its protocol terminator (``message_stop`` on the
+# Anthropic wire, ``data: [DONE]`` / a ``finish_reason`` on the OpenAI wire).
+#
+# HTTP-level breakage (timeout, ``httpx.RemoteProtocolError``) already became a
+# plain ``AdapterError`` in both adapters. This subclass covers the layer
+# mismatch the transport cannot see: the HTTP body ended cleanly, but the *LLM
+# protocol* carried inside it was still mid-message.
+#
+# It subclasses ``AdapterError`` on purpose — every existing engine branch
+# (``except AdapterError``) keeps working untouched, and the L2/L4/L5/L6 guards
+# learn from the failure automatically. The subclass only adds identity, so
+# ``classify_adapter_error`` can label the hop ``stream-truncated`` instead of
+# the generic ``upstream-error``.
+#
+# Raised only when the active profile sets ``stream_truncation_action: error``.
+# Under ``off`` (the default) and ``warn`` the adapter returns normally and the
+# legacy terminator-synthesis path in ``coderouter.translation.convert`` (H6 /
+# M9) runs byte-for-byte as before.
+class StreamTruncatedError(AdapterError):
+    """Upstream SSE stream ended without its protocol terminator event."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        tool_call_in_flight: bool = False,
+    ) -> None:
+        """Construct a truncation error.
+
+        Args:
+            message: Human-readable reason. Never contains upstream body text.
+            provider: The ``ProviderConfig.name`` whose stream was cut.
+            tool_call_in_flight: True when the stream was cut while a
+                ``tool_use`` / ``tool_calls`` block was still open, i.e. the
+                accumulated argument JSON is certainly incomplete. Carried for
+                observability only — it never changes control flow.
+        """
+        super().__init__(message, provider=provider, status_code=None, retryable=True)
+        self.tool_call_in_flight = tool_call_in_flight
+
+
 # v0.6-B: per-call overrides resolved from the active profile. The engine
 # builds one instance per request (since a profile is invariant across its
 # chain) and threads it through every adapter call on that chain. Adapters
@@ -150,6 +193,13 @@ class AdapterError(CodeRouterError):
 #   - ``append_system_prompt=""`` is a meaningful explicit value: "for
 #     this profile, clear the provider's directive". The adapter must
 #     distinguish ``None`` (no override) from ``""`` (override-to-empty).
+#
+# v2.15.0 (stream-truncation): ``stream_truncation_action`` rides the same
+# channel. It is a *profile*-level knob but has to be read inside the adapter's
+# SSE parse loop, and ``ProviderCallOverrides`` is the only object the engine
+# already threads into every adapter call. Its default of ``"off"`` keeps
+# ``ProviderCallOverrides()`` (and every legacy call site that passes nothing)
+# on the pre-v2.15.0 behavior.
 class ProviderCallOverrides(BaseModel):
     """Per-call provider overrides, resolved from the active profile."""
 
@@ -157,6 +207,7 @@ class ProviderCallOverrides(BaseModel):
 
     timeout_s: float | None = None
     append_system_prompt: str | None = None
+    stream_truncation_action: Literal["off", "warn", "error"] = "off"
 
 
 class BaseAdapter(ABC):
@@ -235,6 +286,20 @@ class BaseAdapter(ABC):
         if overrides is not None and overrides.append_system_prompt is not None:
             return overrides.append_system_prompt or None
         return self.config.append_system_prompt
+
+    def effective_stream_truncation_action(
+        self, overrides: ProviderCallOverrides | None
+    ) -> str:
+        """v2.15.0: resolve ``stream_truncation_action`` for this call.
+
+        There is no per-provider counterpart — the knob lives on the profile
+        only — so this is just a null-safe read. ``None`` overrides (legacy
+        call sites, unit tests constructing adapters directly) resolve to
+        ``"off"``, which is the pre-v2.15.0 behavior.
+        """
+        if overrides is None:
+            return "off"
+        return overrides.stream_truncation_action
 
     @abstractmethod
     async def healthcheck(self) -> bool:
