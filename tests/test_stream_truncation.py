@@ -955,3 +955,358 @@ class TestMetrics:
         """Zero-cost when nobody enabled the knob."""
         text = format_prometheus(MetricsCollector().snapshot())
         assert "stream_truncated_total" not in text
+
+
+# ======================================================================
+# 6. Post-review hardening (v2.15.0)
+#
+# Three defects found by adversarial review of the initial implementation:
+#
+#   (1) the "no bytes forwarded yet" fallback branch recorded an adaptive
+#       failure but never told the L2 / L4 / L5 self-healing guards, while
+#       ``_observe_provider_success`` had *already* fired at first event —
+#       so a backend that kept going quiet stayed "healthy";
+#   (2) a chain where every provider truncated flushed the last (unterminated)
+#       buffer and hung the client, and mislabelled it ``empty-response``;
+#   (3) the ``partial-stitch-surfaced`` log gained an unconditional ``reason``
+#       key, changing the JSON log shape even under the default ``off``.
+# ======================================================================
+
+
+def _fake_pair(
+    config: CodeRouterConfig,
+    first: Any,
+    second: Any,
+) -> Any:
+    return _engine_with_adapters(config, {"first": first, "second": second})
+
+
+def _spy_guards(monkeypatch: pytest.MonkeyPatch, engine: Any) -> dict[str, list[Any]]:
+    """Wrap the L2/L5 and L4 observation hooks, keeping real behavior."""
+    seen: dict[str, list[Any]] = {"failure": [], "drift": []}
+    orig_failure = engine._observe_provider_failure
+    orig_drift = engine._observe_drift_signal
+
+    def spy_failure(provider: str, exc: Any, **kwargs: Any) -> Any:
+        seen["failure"].append((provider, exc))
+        return orig_failure(provider, exc, **kwargs)
+
+    def spy_drift(provider: str, **kwargs: Any) -> Any:
+        seen["drift"].append((provider, kwargs))
+        return orig_drift(provider, **kwargs)
+
+    monkeypatch.setattr(engine, "_observe_provider_failure", spy_failure)
+    monkeypatch.setattr(engine, "_observe_drift_signal", spy_drift)
+    return seen
+
+
+class TestSelfHealingLearnsPreContentFailures:
+    """(1) The guards must see a failure that never reached the client."""
+
+    async def test_truncation_before_any_byte_notifies_the_guards(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The headline path: first provider opens a stream, goes quiet,
+        engine swaps to the second — and L2/L4/L5 learn about it.
+
+        Without this, ``_observe_provider_success`` (fired the moment the
+        first event landed) is the *only* health signal the silent backend
+        ever produces, so adaptive routing keeps preferring it for its fast
+        first byte. That is precisely what the release notes promise not to
+        happen.
+        """
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        first = FakeAnthropicAdapter(
+            config.provider_by_name("first"),
+            stream_fail_with=StreamTruncatedError(
+                "upstream stream truncated (no message_stop terminator)",
+                provider="first",
+            ),
+            stream_fail_after=1,  # message_start out, then silence
+        )
+        second = FakeAnthropicAdapter(config.provider_by_name("second"), text="ok")
+        engine = _fake_pair(config, first, second)
+        seen = _spy_guards(monkeypatch, engine)
+
+        events = await _collect_stream(engine, _anth_req())
+
+        assert [e.type for e in events][-1] == "message_stop"
+        # L2 / L5
+        assert [p for p, _ in seen["failure"]] == ["first"]
+        assert isinstance(seen["failure"][0][1], StreamTruncatedError)
+        # L4 — recorded as an error observation on the streaming wire.
+        drift_errors = [
+            (p, kw) for p, kw in seen["drift"] if kw.get("is_error") is True
+        ]
+        assert [p for p, _ in drift_errors] == ["first"]
+        assert drift_errors[0][1]["stream"] is True
+
+    async def test_plain_adapter_error_before_any_byte_notifies_the_guards(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same branch also carries the pre-existing empty-stream case.
+
+        The observations are deliberately NOT gated on
+        ``StreamTruncatedError``: an ``AdapterError`` raised here means the
+        provider failed, whatever the label. Before this fix, whether a
+        provider's failure reached the health guards depended on
+        ``empty_response_action`` — an unrelated knob — because the identical
+        failure under ``off`` takes the mid-stream path and *is* observed.
+        """
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+
+        config = _two_provider_config(
+            truncation_action="off", empty_response_action="fallback"
+        )
+        first = FakeAnthropicAdapter(
+            config.provider_by_name("first"),
+            stream_fail_with=AdapterError("boom", provider="first", retryable=True),
+            stream_fail_after=1,
+        )
+        second = FakeAnthropicAdapter(config.provider_by_name("second"), text="ok")
+        engine = _fake_pair(config, first, second)
+        seen = _spy_guards(monkeypatch, engine)
+
+        events = await _collect_stream(engine, _anth_req())
+
+        assert [e.type for e in events][-1] == "message_stop"
+        assert [p for p, _ in seen["failure"]] == ["first"]
+        assert any(kw.get("is_error") is True for _, kw in seen["drift"])
+
+    async def test_a_clean_empty_stream_is_still_not_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression guard on the *other* side of the line.
+
+        A stream that terminates properly but carries no content is a 200
+        blank, not a provider failure — it exits the loop normally and must
+        not reach the failure hooks. Only the ``except AdapterError`` branch
+        got the new observations.
+        """
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+        from tests.test_fallback_empty_response import _empty_native_events
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        first = FakeAnthropicAdapter(
+            config.provider_by_name("first"),
+            events=_empty_native_events("m"),
+        )
+        second = FakeAnthropicAdapter(config.provider_by_name("second"), text="ok")
+        engine = _fake_pair(config, first, second)
+        seen = _spy_guards(monkeypatch, engine)
+
+        events = await _collect_stream(engine, _anth_req())
+
+        assert [e.type for e in events][-1] == "message_stop"
+        assert first.stream_calls and second.stream_calls
+        assert seen["failure"] == []
+        assert not any(kw.get("is_error") for _, kw in seen["drift"])
+
+
+class TestChainExhaustedByTruncation:
+    """(2) A fully-truncated chain must not hand the client a dead stream."""
+
+    @staticmethod
+    def _truncating(config: CodeRouterConfig, name: str) -> Any:
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+
+        return FakeAnthropicAdapter(
+            config.provider_by_name(name),
+            stream_fail_with=StreamTruncatedError(
+                "upstream stream truncated (no message_stop terminator)",
+                provider=name,
+            ),
+            stream_fail_after=1,
+        )
+
+    async def test_every_provider_truncated_raises_no_providers(self) -> None:
+        """The buffered preamble of a truncated stream has no
+        ``message_stop`` — flushing it would emit an SSE sequence that never
+        ends, with no exception raised and nothing logged as an error. The
+        engine raises instead."""
+        from coderouter.routing import NoProvidersAvailableError
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            self._truncating(config, "first"),
+            self._truncating(config, "second"),
+        )
+
+        seen: list[Any] = []
+        with pytest.raises(NoProvidersAvailableError) as excinfo:
+            async for ev in engine.stream_anthropic(_anth_req()):
+                seen.append(ev)
+
+        # Nothing was ever forwarded, so raising is safe.
+        assert seen == []
+        # (1) put the per-hop errors on the exception — this is where they
+        # become visible to the operator.
+        assert len(excinfo.value.errors) == 2
+        assert all(isinstance(e, StreamTruncatedError) for e in excinfo.value.errors)
+
+    async def test_no_empty_response_metric_is_charged_for_a_truncation(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``empty_responses_total`` counted truncations as empty responses.
+        A truncated stream is not empty — the provider produced events."""
+        from coderouter.routing import NoProvidersAvailableError
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            self._truncating(config, "first"),
+            self._truncating(config, "second"),
+        )
+
+        with caplog.at_level(logging.INFO), pytest.raises(NoProvidersAvailableError):
+            await _collect_stream(engine, _anth_req())
+
+        assert [r for r in caplog.records if r.msg == "empty-response-detected"] == []
+
+    async def test_the_client_still_gets_a_terminating_sse_stream(self) -> None:
+        """Constraint (iii): whatever we do, the client must not hang.
+
+        ``NoProvidersAvailableError`` is raised before any byte is
+        forwarded, so the ingress converts it into an ``event: error``
+        frame — a terminal frame the client acts on.
+        """
+        from coderouter.ingress.anthropic_routes import _anthropic_sse_iterator
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            self._truncating(config, "first"),
+            self._truncating(config, "second"),
+        )
+
+        chunks = [c async for c in _anthropic_sse_iterator(engine, _anth_req())]
+
+        err = next(c for c in chunks if c.startswith("event: error"))
+        payload = json.loads(err.split("data: ")[1].strip())
+        assert payload["error"]["type"] == "overloaded_error"
+        # No half-open message was emitted ahead of it.
+        assert not any(c.startswith("event: message_start") for c in chunks)
+
+    async def test_all_empty_still_returns_a_blank_200(self) -> None:
+        """Constraint (i), the load-bearing back-compat guard: a chain that
+        is genuinely *empty* (every provider terminated cleanly with no
+        content) still flushes the last buffer and ends on ``message_stop``
+        — even with ``stream_truncation_action: error`` switched on."""
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+        from tests.test_fallback_empty_response import _empty_native_events
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            FakeAnthropicAdapter(
+                config.provider_by_name("first"), events=_empty_native_events("m")
+            ),
+            FakeAnthropicAdapter(
+                config.provider_by_name("second"), events=_empty_native_events("m")
+            ),
+        )
+
+        events = await _collect_stream(engine, _anth_req())
+
+        types = [e.type for e in events]
+        assert types[0] == "message_start"
+        assert types[-1] == "message_stop"
+
+    async def test_a_clean_empty_last_hop_is_flushed_even_after_a_truncation(
+        self,
+    ) -> None:
+        """The gate tracks the buffer we are *holding*, not "did a truncation
+        ever happen". A truncated first hop followed by a provider that
+        answered with a well-formed empty message still yields that 200
+        blank — its buffer terminates."""
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+        from tests.test_fallback_empty_response import _empty_native_events
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            self._truncating(config, "first"),
+            FakeAnthropicAdapter(
+                config.provider_by_name("second"), events=_empty_native_events("m")
+            ),
+        )
+
+        events = await _collect_stream(engine, _anth_req())
+
+        assert [e.type for e in events][-1] == "message_stop"
+
+
+class TestPartialStitchLogShape:
+    """(3) ``off`` must not change the shape of an existing log line."""
+
+    @staticmethod
+    async def _stitch_records(
+        original: AdapterError, caplog: pytest.LogCaptureFixture
+    ) -> list[logging.LogRecord]:
+        from coderouter.ingress.anthropic_routes import _anthropic_sse_iterator
+        from coderouter.translation import AnthropicStreamEvent
+
+        mid = MidStreamError(
+            "first", original, partial_content=[{"type": "text", "text": "x"}]
+        )
+
+        async def _raise(req):
+            yield AnthropicStreamEvent(
+                type="message_start",
+                data={"type": "message_start", "message": {"usage": {}}},
+            )
+            raise mid
+
+        engine = MagicMock()
+        engine.stream_anthropic = _raise
+        profile_cfg = MagicMock()
+        profile_cfg.partial_stitch_action = "surface"
+        engine.config = MagicMock()
+        engine.config.default_profile = "default"
+        engine.config.profile_by_name.return_value = profile_cfg
+
+        with caplog.at_level(logging.INFO):
+            async for _ in _anthropic_sse_iterator(engine, _anth_req()):
+                pass
+        return [r for r in caplog.records if r.msg == "partial-stitch-surfaced"]
+
+    async def test_off_keeps_the_v2_14_0_log_keys(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An ordinary mid-stream failure — the only kind that can occur
+        under the default ``off`` — logs no ``reason`` key. The JSON
+        formatter emits whatever ``extra`` carries, so an unconditional key
+        would change every such line."""
+        (rec,) = await self._stitch_records(
+            AdapterError("boom", provider="first", status_code=502), caplog
+        )
+        assert not hasattr(rec, "reason")
+        assert rec.provider == "first"
+        assert rec.text_blocks == 1
+
+    async def test_truncation_still_labels_the_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The key is not removed — it is conditional. A truncation, which
+        can only happen when the operator opted in, still carries it."""
+        (rec,) = await self._stitch_records(
+            StreamTruncatedError("no terminator", provider="first"), caplog
+        )
+        assert rec.reason == "stream_truncated"
