@@ -581,20 +581,28 @@ async def _anthropic_sse_iterator(
                     "original_error": str(exc.original)[:200],
                 },
             ))
-            logger.info(
-                "partial-stitch-surfaced",
-                extra={
-                    "provider": exc.provider,
-                    "profile": profile_name,
-                    # v2.15.0: lets a dashboard split "provider errored" from
-                    # "provider went quiet" without re-parsing the SSE.
-                    "reason": partial_reason,
-                    "text_blocks": len(exc.partial_content),
-                    "text_length": sum(
-                        len(b.get("text", "")) for b in exc.partial_content
-                    ),
-                },
-            )
+            # v2.15.0: keep the pre-v2.15.0 key set (and order) intact for
+            # every failure that is not a truncation. The JSON formatter
+            # walks ``record.__dict__`` and emits whatever ``extra`` carries,
+            # so an unconditional ``reason`` would change the shape of this
+            # log line even under the default ``stream_truncation_action:
+            # off`` — where no truncation can be detected in the first place
+            # and the release claims byte-for-byte compatibility with
+            # v2.14.0. The key is therefore appended only when it says
+            # something new.
+            _stitch_extra: dict[str, Any] = {
+                "provider": exc.provider,
+                "profile": profile_name,
+                "text_blocks": len(exc.partial_content),
+                "text_length": sum(
+                    len(b.get("text", "")) for b in exc.partial_content
+                ),
+            }
+            if partial_reason != "mid_stream_failure":
+                # Lets a dashboard split "provider errored" from "provider
+                # went quiet" without re-parsing the SSE.
+                _stitch_extra["reason"] = partial_reason
+            logger.info("partial-stitch-surfaced", extra=_stitch_extra)
         else:
             err_event = AnthropicStreamEvent(
                 type="error",
