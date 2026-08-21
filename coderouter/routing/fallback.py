@@ -3548,13 +3548,47 @@ class FallbackEngine:
                     self._adaptive.record_attempt(
                         adapter.name, latency_ms=None, success=False
                     )
+                    # v2.15.0 (self-healing): the guards learn about this
+                    # branch too. ``_observe_provider_success`` already fired
+                    # the moment the first event landed, so without the two
+                    # observations below a backend that opens a stream and
+                    # then goes quiet keeps a *clean* bill of health on L2 /
+                    # L4 / L5 — and adaptive routing would keep preferring it
+                    # for its fast first byte. That is the opposite of what
+                    # this feature is for. The calls mirror the mid-stream
+                    # sibling below verbatim; the only difference in this
+                    # branch is that no bytes reached the client, so we fall
+                    # back instead of raising ``MidStreamError``.
+                    #
+                    # This is deliberately NOT gated on
+                    # ``StreamTruncatedError``: an ``AdapterError`` raised
+                    # here means the provider genuinely failed, whatever the
+                    # label. The pre-v2.15.0 behavior made provider health
+                    # depend on ``empty_response_action`` — an unrelated
+                    # knob — because the identical failure under ``off`` /
+                    # ``warn`` goes down the mid-stream path and *is*
+                    # observed. A truly empty-but-clean stream is a
+                    # different case entirely: it exits the loop normally
+                    # (see below) and is still not treated as a failure.
+                    self._observe_provider_failure(
+                        adapter.name, exc, profile=request.profile
+                    )
+                    self._observe_drift_signal(
+                        adapter.name,
+                        profile=request.profile,
+                        is_error=True,
+                        request_had_tools=bool(request.tools),
+                        stream=True,
+                    )
+                    errors.append(exc)
                     # v2.15.0 (stream-truncation): same branch, different
                     # label. A truncated stream is not an *empty* one — the
                     # upstream produced events, it just never finished the
                     # message — so the hop is recorded as ``stream-truncated``
                     # and the empty-response log is skipped. The adapter has
                     # already emitted ``stream-truncation-detected``.
-                    if isinstance(exc, StreamTruncatedError):
+                    truncated = isinstance(exc, StreamTruncatedError)
+                    if truncated:
                         trace.record_failure(
                             adapter.name,
                             REASON_STREAM_TRUNCATED,
@@ -3675,7 +3709,7 @@ class FallbackEngine:
         # every provider produced an empty stream. Flush the last buffered
         # (empty) preamble so the client gets a well-formed, terminating SSE
         # sequence (message_start … message_stop) instead of an error — a
-        # 200 blank is a legitimate answer. errors is empty in that case.
+        # 200 blank is a legitimate answer.
         if last_empty_stream_buffer is not None:
             log_empty_response_detected(
                 logger,
