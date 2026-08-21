@@ -3743,7 +3743,31 @@ class FallbackEngine:
         # answer would be exactly that. Under the default ``off`` no
         # ``StreamTruncatedError`` exists, the flag is never set, and this
         # path is byte-identical to v2.14.0.
-        if last_empty_stream_buffer is not None and not last_empty_stream_truncated:
+        #
+        # v2.15.0 post-review fix: ``last_empty_stream_truncated`` only ever
+        # becomes True for a ``StreamTruncatedError`` — it says nothing about
+        # a transport break (``httpx.RemoteProtocolError``) or a read timeout
+        # further down the same chain, which leave an equally unterminated
+        # buffer (no ``message_stop``) but arrive as a plain ``AdapterError``.
+        # Under ``stream_truncation_action: error`` those must not be
+        # flushed either, or the client hangs on an unterminated SSE stream
+        # exactly like the case above — the operator asked not to have
+        # truncation swallowed, and a TCP-level break mid-message is a
+        # truncation. ``_buffer_unterminated`` is gated on ``error`` so
+        # ``off`` / ``warn`` never reach the buffer inspection below and stay
+        # byte-identical to v2.14.0 — under those actions a buffer with no
+        # ``message_stop`` can legitimately be a clean-but-empty stream
+        # (preamble only, no content, no terminator emitted by the
+        # translator) that v2.14.0 flushes as a 200 blank.
+        _buffer_unterminated = (
+            overrides.stream_truncation_action == "error"
+            and not any(
+                ev.type == "message_stop" for ev in (last_empty_stream_buffer or [])
+            )
+        )
+        if last_empty_stream_buffer is not None and not (
+            last_empty_stream_truncated or _buffer_unterminated
+        ):
             log_empty_response_detected(
                 logger,
                 "unknown",

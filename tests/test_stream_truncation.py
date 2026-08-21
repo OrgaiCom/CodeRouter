@@ -1253,6 +1253,138 @@ class TestChainExhaustedByTruncation:
         assert [e.type for e in events][-1] == "message_stop"
 
 
+class TestTransportBreakUnterminatedBufferNotFlushed:
+    """Round-2 adversarial review fix: a transport break / timeout leaves an
+    unterminated buffer exactly like a ``StreamTruncatedError`` does, but
+    ``last_empty_stream_truncated`` only ever tracks the latter. Under
+    ``stream_truncation_action: error`` that buffer must not be flushed
+    either, or the client hangs on an SSE stream with no ``message_stop``
+    and no error frame — see ``_buffer_unterminated`` in
+    ``FallbackEngine._stream_anthropic_impl``.
+    """
+
+    @staticmethod
+    def _transport_break(config: CodeRouterConfig, name: str) -> Any:
+        """A provider whose stream opens, then dies with a *plain*
+        ``AdapterError`` — the shape a ``httpx.RemoteProtocolError`` /
+        ``ReadTimeout`` takes once the adapter has wrapped it. Deliberately
+        NOT a ``StreamTruncatedError``: that is exactly what
+        ``last_empty_stream_truncated`` misses.
+        """
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+
+        return FakeAnthropicAdapter(
+            config.provider_by_name(name),
+            stream_fail_with=AdapterError(
+                "peer closed connection without sending complete message body "
+                "(RemoteProtocolError)",
+                provider=name,
+                retryable=True,
+            ),
+            stream_fail_after=1,  # message_start out, then the transport dies
+        )
+
+    async def test_transport_break_on_every_provider_terminates_the_client(
+        self,
+    ) -> None:
+        """(A) The headline fix: under ``error``, a chain where every
+        provider's stream dies mid-flight from a transport break — not a
+        detected truncation — must still raise so the ingress can turn it
+        into a terminating ``event: error`` frame instead of hanging the
+        client on an unterminated SSE stream.
+        """
+        from coderouter.ingress.anthropic_routes import _anthropic_sse_iterator
+        from coderouter.routing import NoProvidersAvailableError
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            self._transport_break(config, "first"),
+            self._transport_break(config, "second"),
+        )
+
+        # At the engine level: the chain-exhausted flush must not hand back
+        # the dead buffer — it raises instead.
+        with pytest.raises(NoProvidersAvailableError):
+            await _collect_stream(engine, _anth_req())
+
+        # At the ingress level: the client actually gets a terminating
+        # frame, not a stream that just stops.
+        engine2 = _fake_pair(
+            config,
+            self._transport_break(config, "first"),
+            self._transport_break(config, "second"),
+        )
+        chunks = [c async for c in _anthropic_sse_iterator(engine2, _anth_req())]
+        err = next(c for c in chunks if c.startswith("event: error"))
+        payload = json.loads(err.split("data: ")[1].strip())
+        assert payload["error"]["type"] == "overloaded_error"
+        assert not any(c.startswith("event: message_start") for c in chunks)
+
+    async def test_off_still_flushes_an_unterminated_clean_buffer(self) -> None:
+        """(B) Safety proof for (A): under the default ``off`` a buffer with
+        no ``message_stop`` must keep flushing exactly as v2.14.0 did — the
+        new gate is hard-wired to ``error`` only. This is the case the fix
+        must NOT touch: a stream that ends cleanly (no exception at all,
+        just ``StopAsyncIteration`` after the preamble) with no terminator
+        ever emitted.
+        """
+        from tests.test_fallback_anthropic import (
+            FakeAnthropicAdapter,
+            _default_native_events,
+        )
+
+        config = _two_provider_config(
+            truncation_action="off", empty_response_action="fallback"
+        )
+        # Only the preamble (message_start) — the fake's iterator ends
+        # normally right after, no exception, no message_stop.
+        preamble_only = _default_native_events("hi", "m")[:1]
+        engine = _fake_pair(
+            config,
+            FakeAnthropicAdapter(
+                config.provider_by_name("first"), events=preamble_only
+            ),
+            FakeAnthropicAdapter(
+                config.provider_by_name("second"), events=preamble_only
+            ),
+        )
+
+        # Must NOT raise — the chain-exhausted flush still fires.
+        events = await _collect_stream(engine, _anth_req())
+
+        assert [e.type for e in events] == ["message_start"]
+
+    async def test_truly_empty_clean_stream_is_still_a_blank_200(self) -> None:
+        """(C) Unchanged invariant: a genuinely empty stream that terminates
+        properly (``message_stop`` present) is a legitimate 200 blank under
+        ``error`` too — ``_buffer_unterminated`` only fires when
+        ``message_stop`` is actually missing."""
+        from tests.test_fallback_anthropic import FakeAnthropicAdapter
+        from tests.test_fallback_empty_response import _empty_native_events
+
+        config = _two_provider_config(
+            truncation_action="error", empty_response_action="fallback"
+        )
+        engine = _fake_pair(
+            config,
+            FakeAnthropicAdapter(
+                config.provider_by_name("first"), events=_empty_native_events("m")
+            ),
+            FakeAnthropicAdapter(
+                config.provider_by_name("second"), events=_empty_native_events("m")
+            ),
+        )
+
+        events = await _collect_stream(engine, _anth_req())
+
+        types = [e.type for e in events]
+        assert types[0] == "message_start"
+        assert types[-1] == "message_stop"
+
+
 class TestPartialStitchLogShape:
     """(3) ``off`` must not change the shape of an existing log line."""
 
