@@ -29,11 +29,52 @@ are kept verbatim where the Japanese text itself is the subject).
   metadata event for reasons discovered after the HTTP headers ship.
   Purely additive — a request served by its first provider produces no new
   headers, no SSE trailer and no log lines.
+- **Stream truncation detection — `stream_truncation_action`
+  (`off` | `warn` | `error`, default `off`).** An upstream can end its HTTP
+  body *cleanly* while the LLM protocol carried inside it is still
+  mid-message: no `message_stop` on the Anthropic wire, no `data: [DONE]`
+  and no `finish_reason` on the OpenAI wire. llama.cpp slot preemption, an
+  `--n-predict` cut-off, a proxy closing an EOF-delimited body, or a local
+  server that OOM'd all look exactly like that. Transport breakage
+  (timeouts, `httpx.RemoteProtocolError`) was already caught; this is the
+  layer the transport cannot see, and until now CodeRouter reported it as a
+  *successful* completion — the translation layer's terminator-synthesis
+  guards fabricated `stop_reason: end_turn` so the client would not hang,
+  which also erased every trace of the cut. The synthesis stays (removing
+  it hangs Claude Code); what is new is that the engine gets told. Both
+  adapters now track whether a terminator arrived, and under `error` raise
+  a retryable `StreamTruncatedError` that joins the *existing* branches: no
+  bytes forwarded yet → fall back to the next provider with reason
+  `stream-truncated`; bytes already out → `MidStreamError`, which
+  `partial_stitch_action: surface` renders as a graceful close carrying a
+  `coderouter_partial` event labelled `stream_truncated`. Because the
+  failure is an ordinary `AdapterError`, the L2/L4/L5/L6 self-healing
+  guards learn it for free — a backend that keeps going quiet gets demoted
+  by adaptive routing instead of being *preferred* for its fast first byte.
+  `warn` measures without changing a single byte of output; `off` is
+  byte-for-byte v2.14.0. Observability: a `stream-truncation-detected` log
+  line (with `wire`, `events_forwarded`, `saw_stream_start`,
+  `tool_call_in_flight`), `stream_truncated_total` in `/metrics.json` and
+  Prometheus (labelled by provider and by action), and the
+  `stream-truncated` reason on the `X-CodeRouter-Fallback-*` headers.
+  Terminator matching is deliberately lenient — a `message_delta` carrying
+  a `stop_reason`, or a `finish_reason` on any choice, both count — so
+  providers that legitimately omit the sentinel are not flagged. On the
+  Anthropic streaming path, pre-content fallback additionally needs
+  `empty_response_action: fallback`, which is the knob that withholds the
+  opening events from the client. Docs:
+  `docs/concepts/stream-truncation.md` / `.en.md`.
 - **Tool-call integrity regression tests across a fallback hop**
   (`tests/test_fallback_tool_integrity.py`): the conversation handed to the
   second provider keeps every `tool_use` / `tool_result` id paired, and the
   response the client receives is still a structurally valid `tool_use`
   block on both the buffered and the streaming path.
+- **Stream truncation tests** (`tests/test_stream_truncation.py`): both
+  adapters driven over real SSE bodies (off / warn / error, the
+  terminator-leniency false-positive guards, the tool-call-in-flight flag),
+  engine-level fallback and `MidStreamError` integration, the ingress
+  `coderouter_partial` labelling, and an explicit `off` regression proving
+  the default path — including the H6 terminator synthesis — is unchanged.
 
 ---
 
