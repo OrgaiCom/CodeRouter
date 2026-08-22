@@ -231,7 +231,18 @@ async def messages(
             extra={"mode": x_coderouter_mode, "profile": anth_req.profile},
         )
 
+    # Resolve profile from request model field if profile is not explicitly specified
+    if anth_req.profile is None and anth_req.model:
+        resolved = config.resolve_model_to_profile(anth_req.model)
+        if resolved:
+            anth_req.profile = resolved
+            logger.info(
+                "model-resolved-to-profile",
+                extra={"model": anth_req.model, "profile": anth_req.profile},
+            )
+
     # v1.6-A: auto router slot. Symmetric with the OpenAI route — fires only
+
     # when ``default_profile: auto`` is set and no explicit profile signal won
     # above. When inactive the engine falls through to ``default_profile`` on
     # its own. ``classify`` inspects the raw ``payload`` dict (not the
@@ -428,6 +439,9 @@ async def count_tokens_route(
             profile = config.resolve_mode(x_coderouter_mode)
         except (KeyError, AttributeError):
             profile = None
+    if profile is None and payload.get("model"):
+        profile = config.resolve_model_to_profile(payload.get("model"))
+
 
     # Combine system + messages (+ tool JSON length) into one text blob and
     # count. tools contribute their JSON length as a coarse proxy for the

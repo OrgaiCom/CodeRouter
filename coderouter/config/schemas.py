@@ -3149,3 +3149,74 @@ class CodeRouterConfig(BaseModel):
         if mode in self.mode_aliases:
             return self.mode_aliases[mode]
         raise KeyError(f"Unknown mode alias: {mode!r}")
+
+    def resolve_model_to_profile(self, model_name: str | None) -> str | None:
+        """Resolve a model name string to a profile name.
+
+        Priority order:
+        1. Exact match with a profile's primary (first) provider `model` or `name`.
+        2. Exact match with any provider's `model` or `name`.
+        3. Exact match with declared profile name.
+        4. Exact match in `mode_aliases`.
+        5. Substring match in `mode_aliases` (longest key first).
+        6. Substring match with provider's `model` or `name`.
+        """
+        if not model_name:
+            return None
+
+        model_lower = model_name.lower().strip()
+        provider_map = {p.name: p for p in self.providers}
+
+        # 1. Exact match with primary (first) provider of each profile
+        for prof in self.profiles:
+            if not prof.providers:
+                continue
+            primary_name = prof.providers[0]
+            prov_cfg = provider_map.get(primary_name)
+            if prov_cfg:
+                if prov_cfg.model and prov_cfg.model.lower().strip() == model_lower:
+                    return prof.name
+                if prov_cfg.name.lower().strip() == model_lower:
+                    return prof.name
+
+        # 2. Exact match with any configured provider in any profile
+        for prof in self.profiles:
+            for prov_name in prof.providers:
+                prov_cfg = provider_map.get(prov_name)
+                if prov_cfg:
+                    if prov_cfg.model and prov_cfg.model.lower().strip() == model_lower:
+                        return prof.name
+                    if prov_cfg.name.lower().strip() == model_lower:
+                        return prof.name
+
+        # 3. Exact match with declared profile name
+        for prof in self.profiles:
+            if prof.name.lower().strip() == model_lower:
+                return prof.name
+
+        # 4. Exact match in mode_aliases
+        if model_name in self.mode_aliases:
+            return self.mode_aliases[model_name]
+
+        # 5. Substring match in mode_aliases (case-insensitive, longest alias first)
+        sorted_aliases = sorted(self.mode_aliases.keys(), key=len, reverse=True)
+        for alias_key in sorted_aliases:
+            if alias_key.lower() in model_lower:
+                return self.mode_aliases[alias_key]
+
+        # 6. Substring match with provider's model or name
+        for prof in self.profiles:
+            for prov_name in prof.providers:
+                prov_cfg = provider_map.get(prov_name)
+                if prov_cfg:
+                    target_model = (prov_cfg.model or "").lower().strip()
+                    target_name = prov_cfg.name.lower().strip()
+                    if target_model and (target_model in model_lower or (len(model_lower) >= 3 and model_lower in target_model)):
+                        return prof.name
+                    if target_name in model_lower or (len(model_lower) >= 3 and model_lower in target_name):
+                        return prof.name
+
+        return None
+
+
+
