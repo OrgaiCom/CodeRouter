@@ -1,5 +1,5 @@
-import pytest
 from coderouter.config.schemas import CodeRouterConfig, FallbackChain, ProviderConfig
+
 
 def test_resolve_model_to_profile_with_fallback_chains():
     # Setup matching exact providers.yaml structure with fallback chains

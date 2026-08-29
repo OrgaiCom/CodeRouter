@@ -93,6 +93,11 @@ jobs:
       - name: Install dependencies (lockfile-frozen)
         run: uv sync --frozen --extra dev
 
+      - name: Verify UTF-8 encoding (C-3)
+        run: |
+          python -c "from pathlib import Path; Path('README.md').read_text(encoding='utf-8'); print('README.md utf-8 ok')"
+          python -c "from pathlib import Path; Path('coderouter/messages.py').read_text(encoding='utf-8'); print('messages.py utf-8 ok')"
+
       - name: Lint (ruff)
         run: uv run ruff check .
 

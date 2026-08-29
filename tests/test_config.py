@@ -379,6 +379,12 @@ def test_display_timezone_none_by_default() -> None:
 
 def test_display_timezone_accepts_valid_iana_name() -> None:
     """Well-known IANA zones round-trip without modification."""
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo("Asia/Tokyo")
+    except Exception:
+        pytest.skip("IANA timezone database not available on this platform")
     cfg = CodeRouterConfig(
         **_minimal_config_kwargs(display_timezone="Asia/Tokyo"),  # type: ignore[arg-type]
     )
@@ -392,6 +398,12 @@ def test_display_timezone_accepts_utc() -> None:
     declaration (rather than relying on the ``None`` default) should
     not be blocked.
     """
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo("UTC")
+    except Exception:
+        pytest.skip("IANA timezone database not available on this platform")
     cfg = CodeRouterConfig(
         **_minimal_config_kwargs(display_timezone="UTC"),  # type: ignore[arg-type]
     )

@@ -45,6 +45,10 @@ def _reset_cwd_warning_once_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     independent scenarios in one pytest process, so each test needs its
     own clean slate to observe (or not observe) the warnings on its own
     terms.
+
+    Windows Path.home parity is handled globally by conftest's
+    ``_patch_home_for_windows`` autouse fixture (M-3 DRY fix); no per-file
+    patch needed here.
     """
     monkeypatch.setattr(loader_module, "_cwd_config_warning_emitted", False)
     monkeypatch.setattr(loader_module, "_cwd_config_skip_warning_emitted", False)

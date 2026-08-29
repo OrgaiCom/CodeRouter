@@ -20,6 +20,7 @@ from coderouter.ingress.launcher_routes import router as launcher_router
 from coderouter.ingress.metrics_routes import router as metrics_router
 from coderouter.ingress.openai_routes import router as openai_router
 from coderouter.logging import configure_logging, get_logger
+from coderouter.messages import tr
 from coderouter.metrics import install_collector
 from coderouter.plugins import discover_and_load
 from coderouter.routing import FallbackEngine
@@ -128,9 +129,10 @@ class BodySizeLimitMiddleware:
         return JSONResponse(
             status_code=413,
             content={
-                "detail": (
-                    f"Request body too large: {observed} bytes exceeds "
-                    f"the {self._max_bytes}-byte limit."
+                "detail": tr(
+                    "E1202_BODY_TOO_LARGE",
+                    observed=observed,
+                    limit=self._max_bytes,
                 )
             },
         )
@@ -195,7 +197,7 @@ class HostValidationMiddleware(BaseHTTPMiddleware):
         if host not in self._allowed:
             return JSONResponse(
                 status_code=403,
-                content={"detail": f"Host {host_header!r} is not allowed."},
+                content={"detail": tr("E1201_HOST_NOT_ALLOWED", host=host_header)},
             )
         return await call_next(request)
 

@@ -264,6 +264,22 @@ CodeRouter runs as an independent backend router layer. Point any project's `OPE
 
 ---
 
+## Language
+
+Human-facing messages (CLI / Doctor / startup warnings) support English and Japanese. JSON logs stay English.
+
+```bash
+# Japanese
+CODEROUTER_LANG=ja coderouter serve
+
+# English (default when no locale hint)
+CODEROUTER_LANG=en coderouter serve
+```
+
+- `CODEROUTER_LANG=ja` / `en` takes precedence when set
+- Otherwise `LANG` / `LC_MESSAGES` is auto-detected (`ja_JP.UTF-8` → Japanese)
+- Invalid values fall back to English
+
 ## Security
 
 Secrets go in env vars, not config files. See [`docs/security.en.md`](./docs/guides/security.en.md) for the full policy and reporting instructions.

@@ -179,6 +179,13 @@ select = [
 ]
 ignore = ["E501"]  # line length handled by formatter
 
+[tool.ruff.lint.per-file-ignores]
+# v2.15.0 i18n: Japanese catalog strings intentionally use fullwidth
+# punctuation （）／： etc. — RUF001/002/003 flag them as ambiguous
+# unicode but they are correct Japanese typography. Ignore only here;
+# the rest of the codebase keeps the check to catch homoglyph bugs.
+"coderouter/messages.py" = ["RUF001", "RUF002", "RUF003"]
+
 [tool.ruff.format]
 quote-style = "double"
 

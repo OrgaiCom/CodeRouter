@@ -284,6 +284,23 @@ CodeRouter は backend ルーター層として独立して動きます。`OPENA
 
 ---
 
+## 言語設定
+
+CodeRouter の人間向けメッセージ（CLI / Doctor / 起動警告）は日本語と英語を切り替えられます。JSONログは常に英語のままです。
+
+```bash
+# 日本語で表示（推奨: 日本語OSでは自動で日本語になります）
+CODEROUTER_LANG=ja coderouter serve
+CODEROUTER_LANG=ja coderouter doctor --check-model local
+
+# 英語で表示
+CODEROUTER_LANG=en coderouter serve
+```
+
+- `CODEROUTER_LANG=ja` / `en` を明示すると最優先されます
+- 未設定時は `LANG` / `LC_MESSAGES` の OSロケールから自動判定（`ja_JP.UTF-8` → 日本語）
+- 不正な値は英語にフォールバックします
+
 ## Security
 
 シークレットは環境変数に置きます。[`docs/security.md`](./docs/guides/security.md) に完全な方針と報告手順があります。

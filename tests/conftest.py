@@ -47,8 +47,36 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CODEROUTER_CONFIG",
         "CODEROUTER_MODE",
         "OPENROUTER_API_KEY",
+        "CODEROUTER_LANG",
     ):
         monkeypatch.delenv(var, raising=False)
+    # Ensure tests run with deterministic English messages by default
+    monkeypatch.setenv("CODEROUTER_LANG", "en")
+
+
+@pytest.fixture(autouse=True)
+def _patch_home_for_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows: Path.home() reads USERPROFILE, not HOME.
+
+    Tests isolate HOME via monkeypatch.setenv("HOME", tmp_path).
+    This fixture makes Path.home() honour HOME for cross-platform parity,
+    so the same test logic works on Windows and POSIX without per-test
+    copy-paste patches (M-3 DRY fix).
+    """
+    import os as _os
+
+    _orig_home = Path.home
+
+    def _patched_home() -> Path:
+        h = _os.environ.get("HOME")
+        if h:
+            return Path(h)
+        u = _os.environ.get("USERPROFILE")
+        if u:
+            return Path(u)
+        return _orig_home()
+
+    monkeypatch.setattr(Path, "home", _patched_home)
 
 
 @pytest.fixture
