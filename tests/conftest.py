@@ -79,6 +79,32 @@ def _patch_home_for_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "home", _patched_home)
 
 
+@pytest.fixture(autouse=True)
+def _reset_translator_manager() -> Iterator[None]:
+    """B-M1: clear translator manager between tests to avoid cross-test leakage.
+
+    The ingress lifespan writes to both app.state.translator_manager and
+    engine._translator_manager; when the engine is reused across tests (via
+    _lazy_app), a stale manager would survive. Reset both sides.
+    """
+    yield
+    try:
+        import contextlib
+
+        from coderouter.ingress import app as app_module
+
+        lazy = getattr(app_module, "_lazy_app", None)
+        if lazy is not None:
+            with contextlib.suppress(Exception):
+                if hasattr(lazy.state, "translator_manager"):
+                    lazy.state.translator_manager = None  # type: ignore[attr-defined]
+                eng = getattr(lazy.state, "engine", None)
+                if eng is not None and hasattr(eng, "_translator_manager"):
+                    eng._translator_manager = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def basic_config() -> CodeRouterConfig:
     return CodeRouterConfig(

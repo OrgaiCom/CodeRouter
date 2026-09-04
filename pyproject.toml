@@ -72,6 +72,16 @@ accuracy = [
 repair = [
     "json-repair>=0.60.1",
 ]
+# Translation layer — CPU Argos Translate. Optional: only needed when
+# translation.enabled = true. Argos 1.x is pydantic v1 based → Python 3.12-3.13 only.
+# NOTE: lower bound is 1.11 (not 1.11.1) because 1.11.1 is not yet on PyPI
+# (2026-09-02 only 1.11.0 published); keep <2 for future breaking changes.
+# Marker restricts to 3.12-3.13 so pip on 3.14+/3.11 does not try to resolve
+# pydantic-v1 Argos (would fail). Base package requires-python is >=3.12,
+# so 3.11 is already excluded, but marker makes intent explicit.
+translation = [
+    "argostranslate>=1.11,<2; python_version >= '3.12' and python_version < '3.14'",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",

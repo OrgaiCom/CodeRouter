@@ -2482,6 +2482,37 @@ class PluginsConfig(BaseModel):
     )
 
 
+class TranslationConfig(BaseModel):
+    """Translation layer config (doc/翻訳層設計書.md §4, providers.yaml)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable JA↔EN translation layer. False = pass-through (default).",
+    )
+    # Literal["cpu"] is for type-checker; validator provides runtime message (S-1)
+    device: Literal["cpu"] = Field(
+        default="cpu",
+        description='Execution device. Only "cpu" allowed (VRAM zero guarantee). providers.yaml setting.',
+    )
+    log_translations: bool = Field(
+        default=False,
+        description="Enable detailed translation logging (debug, redacted).",
+    )
+    model_dir: str | None = Field(
+        default=None,
+        description="Argos model directory. None = Argos standard cache.",
+    )
+
+    @field_validator("device")
+    @classmethod
+    def _check_device(cls, v: str) -> str:
+        if v != "cpu":
+            raise ValueError("translation.device must be 'cpu' (VRAM zero guarantee)")
+        return v
+
+
 class CodeRouterConfig(BaseModel):
     """Top-level config loaded from providers.yaml."""
 
@@ -2693,6 +2724,10 @@ class CodeRouterConfig(BaseModel):
             "The Launcher UI itself is always available at /launcher "
             "regardless of this setting."
         ),
+    )
+    translation: TranslationConfig = Field(
+        default_factory=TranslationConfig,
+        description="JA↔EN translation layer (CPU Argos Translate, providers.yaml). Disabled by default.",
     )
 
     @model_validator(mode="after")
