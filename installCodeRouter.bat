@@ -56,8 +56,8 @@ if "%DO_TRANSLATE%"=="" set DO_TRANSLATE=Y
 
 if /i "%DO_TRANSLATE%"=="Y" (
     echo.
-    echo [2/2] Downloading and setting up translation models...
-    python scripts\setup_argos_models.py --download
+    echo [2/2] Checking and setting up translation models...
+    python -u scripts\setup_argos_models.py --download
     if %ERRORLEVEL% equ 0 (
         echo.
         echo [INFO] 翻訳モデルのセットアップが完了しました。
@@ -73,13 +73,13 @@ if /i "%DO_TRANSLATE%"=="Y" (
         echo.
         echo [WARN] 翻訳モデルのセットアップでエラーが発生しました。
         echo 手動で再試行する場合は以下を実行してください:
-        echo   python scripts\setup_argos_models.py --download
+        echo   python -u scripts\setup_argos_models.py --download
     )
 ) else (
     echo.
     echo 翻訳モデルのダウンロードをスキップしました。
     echo 後からセットアップする場合は以下を実行してください:
-    echo   python scripts\setup_argos_models.py --download
+    echo   python -u scripts\setup_argos_models.py --download
 )
 
 echo.
