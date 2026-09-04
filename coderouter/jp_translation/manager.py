@@ -49,7 +49,7 @@ class TranslatorManager:
             from argostranslate import translate as _translate  # type: ignore[import-untyped]
         except ImportError as exc:
             raise RuntimeError(
-                "argostranslate is not installed. Install via `pip install coderouter-cli[translation]`"
+                "argostranslate is not installed. Install via `pip install coderouter-t[translation]`"
             ) from exc
 
         self._translate_module = _translate

@@ -101,7 +101,7 @@ def argos_direct_available() -> bool:
     try:
         from argostranslate import translate  # type: ignore[import-untyped]
     except ImportError:
-        print("[warn] argostranslate not installed -- skipping direct model check (pip install coderouter-cli[translation])")
+        print("[warn] argostranslate not installed -- skipping direct model check (pip install coderouter-t[translation])")
         return False
     try:
         ja_en = translate.get_translation_from_codes("ja", "en")  # type: ignore[attr-defined]

@@ -1,4 +1,4 @@
-"""CLI entry: `coderouter serve` (and friends)."""
+"""CLI entry: `coderouter-t serve` (and `coderouter` alias)."""
 
 from __future__ import annotations
 
@@ -34,10 +34,10 @@ def _external_bind_warning(host: str, allowed_hosts_env: str | None) -> str | No
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="coderouter",
-        description="Local-first, free-first, fallback-built-in LLM router.",
+        prog="coderouter-t",
+        description="Local-first, free-first, fallback-built-in LLM router (translate fork).",
     )
-    parser.add_argument("--version", action="version", version=f"coderouter {__version__}")
+    parser.add_argument("--version", action="version", version=f"coderouter-t {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="Run the HTTP server.")
@@ -185,7 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "created next to each modified file. Idempotent: a re-run "
             "after a successful apply is a no-op (no write, exit 0). "
             "Requires the optional `ruamel.yaml` dependency — install "
-            "via `pip install coderouter-cli[doctor]`."
+            "via `pip install coderouter-t[doctor]` (or `coderouter-cli[doctor]` for upstream)."
         ),
     )
     doctor.add_argument(

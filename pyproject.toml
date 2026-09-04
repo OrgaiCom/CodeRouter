@@ -1,16 +1,15 @@
 [project]
-# v1.7-A: PyPI distribution name is `coderouter-cli` because the bare
+# v1.7-A: PyPI distribution name was `coderouter-cli` because the bare
 # `coderouter` slot was already taken by Lawrence Chen's unrelated HTTP
-# routing library (uploaded 2025-06, single 0.1.0 release). The
-# Python *import* name and the *console script* name both stay
-# `coderouter` (unchanged), so user-facing commands look identical:
-#     pip install coderouter-cli         # install
-#     coderouter serve --port 8088       # run
-#     import coderouter                  # import
-# A PEP 541 reclamation request for `coderouter` is tracked separately
-# in plan.md §11.B; once granted, this name will become an alias and
-# `coderouter` will become the canonical distribution name.
-name = "coderouter-cli"
+# routing library (uploaded 2025-06, single 0.1.0 release).
+# Fork: this distribution is `coderouter-t` (t = translate) - a
+# translate-enhanced fork of zephel01/CodeRouter. The Python *import*
+# name stays `coderouter` (unchanged) so existing code keeps working:
+#     pip install coderouter-t           # install (fork)
+#     coderouter-t serve --port 8088     # run (fork, primary)
+#     coderouter serve --port 8088       # run (alias, kept for compatibility)
+#     import coderouter                  # import (unchanged)
+name = "coderouter-t"
 version = "2.16.0"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
@@ -52,8 +51,8 @@ dependencies = [
 # comments or formatting on dump. Kept OPTIONAL (not in the strict 5 base
 # deps) because the typical user path (``serve``) never needs it; only
 # operators who actually run ``doctor --apply`` install it via
-# ``pip install coderouter-cli[doctor]`` (or ``uv tool install
-# coderouter-cli --with ruamel.yaml``). Lazy-imported in
+# ``pip install coderouter-t[doctor]`` (or ``uv tool install
+# coderouter-t --with ruamel.yaml``). Lazy-imported in
 # ``coderouter.doctor_apply`` so the absence is invisible until the
 # feature is invoked.
 doctor = [
@@ -98,14 +97,15 @@ dev = [
 ]
 
 [project.scripts]
+coderouter-t = "coderouter.cli:main"
 coderouter = "coderouter.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/zephel01/CodeRouter"
-Repository = "https://github.com/zephel01/CodeRouter"
-Issues = "https://github.com/zephel01/CodeRouter/issues"
-Changelog = "https://github.com/zephel01/CodeRouter/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/zephel01/CodeRouter#documentation"
+Homepage = "https://github.com/OrgaiCom/CodeRouter"
+Repository = "https://github.com/OrgaiCom/CodeRouter"
+Issues = "https://github.com/OrgaiCom/CodeRouter/issues"
+Changelog = "https://github.com/OrgaiCom/CodeRouter/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/OrgaiCom/CodeRouter#documentation"
 
 [build-system]
 requires = ["hatchling"]

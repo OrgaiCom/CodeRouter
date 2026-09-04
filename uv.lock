@@ -263,7 +263,7 @@ wheels = [
 ]
 
 [[package]]
-name = "coderouter-cli"
+name = "coderouter-t"
 version = "2.16.0"
 source = { editable = "." }
 dependencies = [
