@@ -17,11 +17,11 @@ if not exist "pyproject.toml" (
 )
 
 echo [1/2] Installing CodeRouter (with translation support)...
-pip install -e ".[translation]"
+python -m pip install -e ".[translation]"
 
 if %ERRORLEVEL% neq 0 (
     echo [WARN] Failed to install with [translation] extra. Trying base install...
-    pip install -e .
+    python -m pip install -e .
     if %ERRORLEVEL% neq 0 (
         echo.
         echo ============================================================
@@ -39,13 +39,21 @@ echo ============================================================
 echo.
 
 echo ------------------------------------------------------------
-echo  [OPTIONAL] Translation Layer Setup (Argos Translate JA<->EN)
+echo  [OPTIONAL] Translation Layer Setup (Argos Translate JA - EN)
 echo ------------------------------------------------------------
 echo  CodeRouter の日本語・英語 双方向翻訳層（Argos Translate）用の
 echo  モデル（約230MB）をダウンロード＆セットアップしますか？
 echo.
-set /p DO_TRANSLATE="セットアップを実行しますか？ [Y/n]: "
+
+set DO_TRANSLATE=
+if /i "%~1"=="-y" set DO_TRANSLATE=Y
+if /i "%~1"=="/y" set DO_TRANSLATE=Y
+
+if "%DO_TRANSLATE%"=="" (
+    set /p DO_TRANSLATE="セットアップを実行しますか？ [Y/n]: "
+)
 if "%DO_TRANSLATE%"=="" set DO_TRANSLATE=Y
+
 if /i "%DO_TRANSLATE%"=="Y" (
     echo.
     echo [2/2] Downloading and setting up translation models...
