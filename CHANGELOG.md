@@ -9,6 +9,64 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.16.0] — 2026-09-04 (JA<->EN translation layer, bilingual i18n, profile resolution + installer hardening)
+
+### Added
+
+- **JA<->EN translation layer (CPU Argos, masking, buffered streaming).**
+  `TranslationConfig` (cpu-only, fail-open, disabled by default) in `config/schemas.py`.
+  JA->EN request translation in `ingress/anthropic_routes.py` via `asyncio.to_thread`
+  with 5s timeout (system/tool_use/tool_result are excluded; only user text with
+  Japanese detection is translated). EN->JA response translation after repair in
+  `routing/fallback.py` with buffered-streaming guard and 64KB limit.
+  `TranslatorManager` (thread-safe, resident, direct `translate-ja_en` /
+  `translate-en_ja` models only) plus `jp_translation/masking.py` that preserves
+  code/paths/identifiers. Optional dependency `argostranslate>=1.11,<2`
+  (Python 3.12-3.13) and `scripts/setup_argos_models.py` with hash gate.
+  Includes B-M1/M-1..M-4/F-1/F-2/J-1/J-4 fixes, BOM removal and slow-startup warnings.
+- **Bilingual messages (ja/en) for CLI/doctor/config.**
+  New `coderouter/messages.py` catalog with `CODEROUTER_LANG` priority (`ja`/`en`,
+  `LANG` fallback) and `tr()`. Migrated `cli.py`, `doctor.py`, `config/loader.py`,
+  `config/schemas.py`, `config/env_file.py`, `ingress/app.py` to `tr()`
+  (`E1xxx`/`W1xxx`/`I1xxx`). Added `ConfigNotFoundError`/`ConfigValidationError`
+  with `message_id`/`hint`. Refined `resolve_model_to_profile`: vendor prefix
+  stripping, threshold 3->5 chars, case-insensitive alias. Windows parity in
+  `conftest.py` and Language section in `README`/`README.en.md`.
+- **Automated Argos Translate model setup with official SHA256 verification.**
+  `scripts/setup_argos_models.py` now carries canonical SHA256 checksums for both
+  `translate-ja_en-1_1.argosmodel` and `translate-en_ja-1_1.argosmodel`
+  (`623e3477...`), verifies downloads before installing into the Argos package
+  index, and satisfies the CI `--require-hash` gate (resolves TODO(K-1)).
+- **Fast-path detection for installed translation models.**
+  `scripts/setup_argos_models.py` checks whether direct JA<->EN models are
+  already installed and usable before attempting remote package index updates or
+  downloads, eliminating redundant 230MB re-downloads on subsequent installer runs.
+- **Windows installer scripts.**
+  Added `installCodeRouter.bat` / `installCodeR.bat` automated installers and
+  integrated the Argos model downloader into the installation flow. Enforced CRLF
+  in `.gitattributes` (`*.bat text eol=crlf`) and updated CI to cover the new
+  `--require-hash` path.
+
+### Fixed
+
+- **Resolve profile from request `model` field in ingress routes.**
+  When `profile` is not explicitly specified (`X-Coderouter-Profile` / body
+  `profile` / mode header), `POST /v1/messages`, `POST /v1/chat/completions`
+  and `POST /v1/messages/count_tokens` now resolve `config.resolve_model_to_profile(payload.model)`
+  and route accordingly. Logged as `model-resolved-to-profile`. Covers both
+  `kind: anthropic` passthrough and OpenAI-compat paths (`coderouter/ingress/anthropic_routes.py`,
+  `openai_routes.py`, `config/schemas.py`, `tests/unit/test_resolve_model.py`).
+- **Windows batch installer parsing and multibyte CRLF stability.**
+  Fixed cmd.exe syntax errors caused by LF line endings and unescaped redirect /
+  parenthesis characters in `installCodeRouter.bat` and `installCodeR.bat`. Ensured
+  enforced CRLF in `.gitattributes`.
+- **Argos model download fallback endpoints.**
+  Updated `FALLBACK_URLS` in `scripts/setup_argos_models.py` to active official
+  `https://argos-net.com/v1/` endpoints for direct download when the Argos
+  package index is unavailable.
+
+---
+
 ## [v2.15.0] — 2026-08-21 (fallback explainability + stream truncation detection)
 
 ### Added
