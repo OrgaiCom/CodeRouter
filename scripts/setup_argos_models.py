@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import sys
+import urllib.request
 from pathlib import Path
 
 # Known model file names
@@ -117,10 +119,125 @@ def argos_direct_available() -> bool:
         return False
 
 
+# Direct fallback URLs in case argostranslate.package index update fails or for direct download
+FALLBACK_URLS: dict[str, str] = {
+    "translate-ja_en-1_1.argosmodel": "https://argosopentech.nyc3.cdn.digitaloceanspaces.com/argospm/translate-ja_en-1_1.argosmodel",
+    "translate-en_ja-1_1.argosmodel": "https://argosopentech.nyc3.cdn.digitaloceanspaces.com/argospm/translate-en_ja-1_1.argosmodel",
+}
+
+
+def _download_with_progress(url: str, dest_path: Path) -> None:
+    """Download a file with console progress indicator."""
+    print(f"  Downloading: {url}")
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
+
+    def _progress(count: int, block_size: int, total_size: int) -> None:
+        if total_size > 0:
+            pct = min(100.0, count * block_size * 100.0 / total_size)
+            mb = (count * block_size) / (1024 * 1024)
+            total_mb = total_size / (1024 * 1024)
+            sys.stdout.write(f"\r    Progress: {pct:5.1f}% ({mb:5.1f} / {total_mb:5.1f} MB)")
+            sys.stdout.flush()
+
+    try:
+        urllib.request.urlretrieve(url, str(temp_path), reporthook=_progress)
+        sys.stdout.write("\n")
+        if temp_path.exists():
+            temp_path.replace(dest_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def download_and_install_models(model_dir: Path | None = None) -> bool:
+    """Download and install Argos direct JA<->EN models."""
+    try:
+        from argostranslate import package  # type: ignore[import-untyped]
+    except ImportError:
+        print("[error] argostranslate not installed -- cannot download/install models", file=sys.stderr)
+        print("  Please run: pip install -e \".[translation]\" or pip install argostranslate", file=sys.stderr)
+        return False
+
+    print("=== Downloading & Installing Argos JA<->EN Models ===")
+    success = True
+
+    # Method 1: Try argostranslate package index
+    index_updated = False
+    try:
+        print("[1/2] Updating Argos package index...")
+        package.update_package_index()
+        index_updated = True
+    except Exception as exc:
+        print(f"[warn] Failed to update package index via API: {exc}")
+        print("  Falling back to direct download URLs...")
+
+    if index_updated:
+        try:
+            available = package.get_available_packages()
+            targets = [("ja", "en"), ("en", "ja")]
+            for from_code, to_code in targets:
+                pair_str = f"{from_code}→{to_code}"
+                pkg = next((p for p in available if p.from_code == from_code and p.to_code == to_code), None)
+                if pkg is None:
+                    print(f"[warn] Package for {pair_str} not found in index, will try direct URL", file=sys.stderr)
+                    continue
+
+                print(f"[info] Downloading {pair_str} package ({pkg.package_version})...")
+                download_path = pkg.download()
+                dl_p = Path(download_path)
+                print(f"[info] Installing {dl_p.name} into Argos package index...")
+                package.install_from_path(download_path)
+
+                if model_dir:
+                    model_dir.mkdir(parents=True, exist_ok=True)
+                    # match standard filename in MODELS if possible
+                    std_name = f"translate-{from_code}_{to_code}-1_1.argosmodel"
+                    target_file = model_dir / std_name
+                    shutil.copy2(dl_p, target_file)
+                    print(f"[ok] Copied model to {target_file}")
+        except Exception as exc:
+            print(f"[warn] Package index installation encountered error: {exc}", file=sys.stderr)
+            print("  Attempting direct download fallback...", file=sys.stderr)
+            index_updated = False
+
+    # Method 2: Direct URL fallback if index failed or models still missing
+    if not argos_direct_available():
+        print("[2/2] Direct downloading models from Argos OpenTech...")
+        cache_dir = Path(model_dir) if model_dir else (Path.home() / ".cache" / "argos-translate" / "downloads")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, url in FALLBACK_URLS.items():
+            dest = cache_dir / filename
+            if not dest.exists() or dest.stat().st_size < 1024 * 1024:
+                try:
+                    _download_with_progress(url, dest)
+                except Exception as exc:
+                    print(f"[error] Failed to download {filename}: {exc}", file=sys.stderr)
+                    success = False
+                    continue
+
+            try:
+                print(f"[info] Installing {dest.name} into Argos...")
+                package.install_from_path(str(dest))
+            except Exception as exc:
+                print(f"[error] Failed to install {dest.name}: {exc}", file=sys.stderr)
+                success = False
+
+    # Final check
+    if argos_direct_available():
+        print("[SUCCESS] Argos JA<->EN models successfully installed and verified!")
+        return True
+    else:
+        print("[ERROR] Failed to make direct JA<->EN models available in Argos.", file=sys.stderr)
+        return False
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Setup Argos JA<->EN models (verify .argosmodel hash and Argos availability)")
-    parser.add_argument("--model-dir", type=str, default=None, help="Model directory containing .argosmodel files (optional, default: Argos cache). No auto-install; use argospm install manually.")
-    parser.add_argument("--verify-only", action="store_true", help="Only verify files and Argos index; do not attempt install (verify-only is the safe default)")
+    parser = argparse.ArgumentParser(description="Setup Argos JA<->EN models (download, verify .argosmodel hash and Argos availability)")
+    parser.add_argument("--model-dir", type=str, default=None, help="Model directory containing or saving .argosmodel files (optional, default: Argos cache).")
+    parser.add_argument("--download", action="store_true", help="Download and install missing JA<->EN models into Argos cache/model_dir")
+    parser.add_argument("--verify-only", action="store_true", help="Only verify files and Argos index; do not attempt install or download")
     parser.add_argument("--skip-hash-check", action="store_true", help="Skip SHA256 verification (temporary until EXPECTED_SHA256 is filled; do not use in CI)")
     parser.add_argument("--require-hash", action="store_true", help="Fail if EXPECTED_SHA256 not configured (CI gate; ensures TODO K-1 is resolved)")
     args = parser.parse_args()
@@ -134,23 +251,31 @@ def main() -> int:
         print("[warn] EXPECTED_SHA256 empty -- BLOCKING before v2.16.0 (doc/review-2026-09-02 R-1)", file=sys.stderr)
         print("  CI should run with --require-hash to enforce failure; grep -r 'skip-hash-check' .github/ must be empty", file=sys.stderr)
 
+    md = Path(args.model_dir).expanduser() if args.model_dir else None
+
+    # Handle download request
+    if args.download:
+        dl_ok = download_and_install_models(model_dir=md)
+        if not dl_ok:
+            return 1
+
     ok = True
-    if args.model_dir:
-        md = Path(args.model_dir).expanduser()
+    if md:
         print(f"Checking model_dir: {md}")
         for name in MODELS:
             ok &= verify_model_file(md / name, skip_hash=args.skip_hash_check)
     else:
-        print("No --model-dir given, checking Argos package index")
+        print("Checking Argos package index")
 
     if args.verify_only:
         ok &= argos_direct_available()
         return 0 if ok else 1
 
-    # Verify Argos availability after potential install
+    # Verify Argos availability after potential install/download
     if not argos_direct_available():
-        print("[info] If models are in --model-dir, install them via:", file=sys.stderr)
-        print("  argospm install <path/to/*.argosmodel>  or  python -m argostranslate.package --install", file=sys.stderr)
+        if not args.download:
+            print("[info] Models not yet installed. Run with --download to download and install them:", file=sys.stderr)
+            print("  python scripts/setup_argos_models.py --download", file=sys.stderr)
         ok = False
 
     return 0 if ok else 1
@@ -158,3 +283,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
