@@ -1,4 +1,4 @@
-<h1 align="center">CodeRouter</h1>
+<h1 align="center">CodeRouter-t</h1>
 
 <p align="center">
   <strong>Tool calling breaks when you run Claude Code on local LLMs.<br>One router fixes it.</strong>
@@ -24,7 +24,7 @@
 Your agent (Claude Code / codex / agy)
         │
         ▼
-  ┌─ CodeRouter ──┐
+  ┌─ CodeRouter-t ──┐
   │  translate     │──→  ① Local (Ollama — free, fastest)
   │  repair        │──→  ② Free cloud (OpenRouter / NIM)
   │  guard + heal  │──→  ③ Paid (Claude — opt-in only)
@@ -37,7 +37,7 @@ Your agent (Claude Code / codex / agy)
 - Automatically falls back to the next provider when one goes down
 - Only uses paid APIs when you explicitly allow it (free-only by default)
 - Keeps your agent running for 8+ hours with 6 types of guards
-- Diagnoses what's wrong with one command: `coderouter doctor`
+- Diagnoses what's wrong with one command: `coderouter-t doctor`
 
 ---
 
@@ -69,13 +69,13 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 That's it. Claude Code works as usual, but your local Ollama is answering behind the scenes.
 
-**From VSCode's integrated terminal**, avoid the env-var footgun with `coderouter vscode-init`. Run it once at your project root and it merges `terminal.integrated.env.*` into `.vscode/settings.json`, so `claude` in VSCode's terminal just works from then on. Cheat-sheet snippets for Cline / Roo Code / Continue.dev are printed at the end of the same run → [VSCode integration guide](./docs/guides/vscode.md) (JP only for now).
+**From VSCode's integrated terminal**, avoid the env-var footgun with `coderouter-t vscode-init`. Run it once at your project root and it merges `terminal.integrated.env.*` into `.vscode/settings.json`, so `claude` in VSCode's terminal just works from then on. Cheat-sheet snippets for Cline / Roo Code / Continue.dev are printed at the end of the same run → [VSCode integration guide](./docs/guides/vscode.md) (JP only for now).
 
 ---
 
 ## Do you need it?
 
-| Your situation | CodeRouter? |
+| Your situation | CodeRouter-t |
 |---|---|
 | Claude Code + local Ollama, tool calling breaks | **Yes** — wire translation + tool repair |
 | Claude Code + local, dies after long sessions | **Helpful** — 6 guards + self-healing |
@@ -112,15 +112,15 @@ Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-cod
 
 | Feature | What you learn |
 |---|---|
-| **`coderouter doctor`** | 7-probe diagnosis of provider issues + copy-paste YAML patches |
+| **`coderouter-t doctor`** | 7-probe diagnosis of provider issues + copy-paste YAML patches |
 | **`/dashboard`** | Real-time browser view of what's happening |
-| **`coderouter audit`** | Search guard activation history |
-| **`coderouter replay`** | Compare providers statistically (A/B analysis) / `--suggest-rules` for automated rule suggestions |
+| **`coderouter-t audit`** | Search guard activation history |
+| **`coderouter-t replay`** | Compare providers statistically (A/B analysis) / `--suggest-rules` for automated rule suggestions |
 | **Continuous Probe** | Background health monitoring even during idle |
 
 ### Language Tax tracking — v2.6.0
 
-CJK text (Japanese / Chinese / Korean) costs more tokens on cloud tokenizers than the same meaning in English (**measured: ~1.6× on average with GPT-4o-era o200k, ~2.0× with GPT-4-era cl100k**). Local models bill nothing per token, so this "language tax" only bites on the cloud leg. CodeRouter v2.6.0 makes it **measurable, routable, and visible**.
+CJK text (Japanese / Chinese / Korean) costs more tokens on cloud tokenizers than the same meaning in English (**measured: ~1.6× on average with GPT-4o-era o200k, ~2.0× with GPT-4-era cl100k**). Local models bill nothing per token, so this "language tax" only bites on the cloud leg. CodeRouter-t v2.6.0 makes it **measurable, routable, and visible**.
 
 | Feature | What it does |
 |---|---|
@@ -231,7 +231,7 @@ More detail → [Usage guide](./docs/guides/usage-guide.en.md) · [Architecture]
 
 ## Troubleshooting (cheat sheet)
 
-**First move**: run `coderouter doctor --check-model <provider>`. It usually finds the problem.
+**First move**: run `coderouter-t doctor --check-model <provider>`. It usually finds the problem.
 
 | Symptom | Cause | Details |
 |---|---|---|
@@ -258,7 +258,7 @@ Open `http://localhost:8088/dashboard` while debugging — most issues become vi
 
 ## Ecosystem
 
-CodeRouter runs as an independent backend router layer. Point any project's `OPENAI_BASE_URL` at CodeRouter and it gets fallback + observability for free:
+CodeRouter-t runs as an independent backend router layer. Point any project's `OPENAI_BASE_URL` at CodeRouter-t and it gets fallback + observability for free:
 
 - **[Voice Bridge](https://github.com/zephel01/voice-bridge)** — Real-time voice translation + AI voice chat. Route through CodeRouter so your voice assistant doesn't go silent when the local LLM hiccups.
 
