@@ -2488,8 +2488,8 @@ class TranslationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
-        default=False,
-        description="Enable JA↔EN translation layer. False = pass-through (default).",
+        default=True,
+        description="Enable JA↔EN translation layer. True = CodeRouter-t default (translate), False = pass-through.",
     )
     # Literal["cpu"] is for type-checker; validator provides runtime message (S-1)
     device: Literal["cpu"] = Field(
@@ -2497,8 +2497,8 @@ class TranslationConfig(BaseModel):
         description='Execution device. Only "cpu" allowed (VRAM zero guarantee). providers.yaml setting.',
     )
     log_translations: bool = Field(
-        default=False,
-        description="Enable detailed translation logging (debug, redacted).",
+        default=True,
+        description="Enable detailed translation logging (debug, redacted). CodeRouter-t default True.",
     )
     model_dir: str | None = Field(
         default=None,
