@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/OrgaiCom/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/OrgaiCom/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://pypi.org/project/coderouter-t/"><img src="https://img.shields.io/pypi/v/coderouter-t?include_prereleases&color=blue&label=pypi" alt="pypi"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/deps-5-brightgreen" alt="deps"></a>
@@ -64,7 +64,7 @@
 ```bash
 # 1. サンプル設定を置く
 mkdir -p ~/.coderouter-t
-curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml \
+curl -fsSL https://raw.githubusercontent.com/OrgaiCom/CodeRouter/main/examples/providers.yaml \
   > ~/.coderouter-t/providers.yaml
 
 # 2. 起動 (Python 3.12+)
