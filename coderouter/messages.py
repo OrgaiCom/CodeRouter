@@ -7,7 +7,7 @@ English and Japanese can share the same call site.  JSON logs
 `detail` are bilingual.
 
 Language resolution (first win):
-  1. $CODEROUTER_LANG (ja / en / ja-JP etc — case-insensitive prefix match)
+  1. $CODEROUTER_T_LANG (ja / en / ja-JP etc — case-insensitive prefix match)
   2. $LANG / $LC_MESSAGES (POSIX locale, e.g. ja_JP.UTF-8 -> ja)
   3. fallback: en
 
@@ -57,8 +57,8 @@ def resolve_lang(explicit: str | None = None) -> str:
         if n is not None:
             return n
         return "en"
-    # 1. CODEROUTER_LANG
-    n = _normalize(os.environ.get("CODEROUTER_LANG"))
+    # 1. CODEROUTER_T_LANG
+    n = _normalize(os.environ.get("CODEROUTER_T_LANG"))
     if n is not None:
         return n
     # 2. LANG / LC_MESSAGES
@@ -77,8 +77,8 @@ def resolve_lang(explicit: str | None = None) -> str:
 _CATALOG: Final[dict[str, dict[str, str]]] = {
     # ---- Config / loader ----
     "E1001": {
-        "en": "providers.yaml not found. Searched:\n  {searched}\nHint: copy examples/providers.yaml to ~/.coderouter/providers.yaml",
-        "ja": "providers.yaml が見つかりません。探した場所:\n  {searched}\nヒント: examples/providers.yaml を ~/.coderouter/providers.yaml にコピーしてください",
+        "en": "providers.yaml not found. Searched:\n  {searched}\nHint: copy examples/providers.yaml to ~/.coderouter-t/providers.yaml",
+        "ja": "providers.yaml が見つかりません。探した場所:\n  {searched}\nヒント: examples/providers.yaml を ~/.coderouter-t/providers.yaml にコピーしてください",
     },
     "E1001_CWD_NOTE": {
         "en": "Note: {path} exists but was NOT read — implicit CWD discovery is opt-in since v2.13.0. Three ways to use it: pass --config {path}, set CODEROUTER_CONFIG={path}, or set CODEROUTER_ALLOW_CWD_CONFIG=1 (only in directories you trust).",

@@ -161,7 +161,7 @@ bind and no `CODEROUTER_ALLOWED_HOSTS` prints a startup warning.
 1. Explicit `--config` path
 2. `$CODEROUTER_CONFIG` env var
 3. `./providers.yaml` in the current directory — **only when `CODEROUTER_ALLOW_CWD_CONFIG` is truthy (`1`/`true`/`yes`/`on`)**
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 If the opt-in is unset and a `./providers.yaml` exists, a one-time `cwd-config-skipped` warning fires at startup — seeing that in the log all but confirms this is the cause.
 
@@ -175,7 +175,7 @@ CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 coderouter-t serve --config ./providers.yaml
 
 # 3) Move it to the user-layer default
-mkdir -p ~/.coderouter && cp ./providers.yaml ~/.coderouter/providers.yaml
+mkdir -p ~/.coderouter-t && cp ./providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 1-8. `/dashboard` or `/metrics.json` returns 401 — v2.14.0+
@@ -543,7 +543,7 @@ coderouter-t serve --port 8088
 ```bash
 # Global defaults overridden by project-local values
 coderouter-t serve \
-  --env-file ~/.coderouter/global.env \
+  --env-file ~/.coderouter-t/global.env \
   --env-file ./project.env \
   --port 8088
 ```

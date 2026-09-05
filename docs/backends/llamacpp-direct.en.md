@@ -125,7 +125,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 ### Step 5. Register the provider in CodeRouter
 
-Add this stanza to the `providers:` list in `~/.coderouter/providers.yaml`:
+Add this stanza to the `providers:` list in `~/.coderouter-t/providers.yaml`:
 
 ```yaml
 - name: llamacpp-qwen3-6-35b-a3b
@@ -158,7 +158,7 @@ profiles:
       ...
 ```
 
-> The shipped `examples/providers.yaml` includes a fully-commented `llamacpp-qwen3-6-35b-a3b` entry. You can `cp examples/providers.yaml ~/.coderouter/providers.yaml` to start from there.
+> The shipped `examples/providers.yaml` includes a fully-commented `llamacpp-qwen3-6-35b-a3b` entry. You can `cp examples/providers.yaml ~/.coderouter-t/providers.yaml` to start from there.
 
 ### Step 6. Doctor verification
 

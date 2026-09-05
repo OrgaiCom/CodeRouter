@@ -110,8 +110,8 @@ Without `export`, upstream returns `Header of type 'authorization' was missing` 
 
 ```bash
 # Download the sample providers.yaml
-mkdir -p ~/.coderouter
-curl -fsSL -o ~/.coderouter/providers.yaml \
+mkdir -p ~/.coderouter-t
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
 
 # uvx fetches and runs in one shot

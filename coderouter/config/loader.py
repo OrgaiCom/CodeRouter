@@ -5,7 +5,7 @@ Search order (first hit wins):
     2. $CODEROUTER_CONFIG env var
     3. ./providers.yaml (current working dir) — opt-in since v2.13.0,
        gated behind ``CODEROUTER_ALLOW_CWD_CONFIG`` (truthy: 1/true/yes/on)
-    4. ~/.coderouter/providers.yaml
+    4. ~/.coderouter-t/providers.yaml
 
 Secrets are resolved by reading the env var named by `api_key_env`.
 
@@ -71,7 +71,7 @@ def _candidate_paths(explicit: str | os.PathLike[str] | None) -> list[Path]:
     # binaries simply because CodeRouter was started from that directory.
     if cwd_config_allowed():
         paths.append(Path.cwd() / "providers.yaml")
-    paths.append(Path.home() / ".coderouter" / "providers.yaml")
+    paths.append(Path.home() / ".coderouter-t" / "providers.yaml")
     return paths
 
 

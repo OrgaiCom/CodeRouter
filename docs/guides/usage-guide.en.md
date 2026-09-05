@@ -335,7 +335,7 @@ uv run coderouter doctor --check-model ollama-qwen-coder-7b
 
 ### `coderouter rollback` — undo an `--apply` (v2.14.0)
 
-Both `doctor --apply` and `vscode-init` have always written a `.bak` before rewriting a file, but there was no way to put it back. `coderouter rollback` restores `providers.yaml`, `~/.coderouter/model-capabilities.yaml`, and (with `--workspace`) `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
+Both `doctor --apply` and `vscode-init` have always written a `.bak` before rewriting a file, but there was no way to put it back. `coderouter rollback` restores `providers.yaml`, `~/.coderouter-t/model-capabilities.yaml`, and (with `--workspace`) `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
 
 Restoring is a **swap** — the current contents become the new `.bak`, so running `rollback` a **second time reverts back to where you started** (not a one-way overwrite).
 

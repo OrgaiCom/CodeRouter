@@ -211,7 +211,7 @@ def load_env_files(
 ) -> list[tuple[str, list[str]]]:
     """Apply :func:`load_env_file` to multiple paths in order.
 
-    Useful for layering: ``[~/.coderouter/.env, ./.env]`` lets a user
+    Useful for layering: ``[~/.coderouter-t/.env, ./.env]`` lets a user
     keep cross-project defaults globally and override per-project at
     the cwd. Files are processed left-to-right, so later files override
     earlier ones (when ``override=True``) or fill in gaps (default).

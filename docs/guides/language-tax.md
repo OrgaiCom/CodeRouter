@@ -68,7 +68,7 @@ providers:
     kind: anthropic
     base_url: https://api.anthropic.com
     model: claude-sonnet-4-6
-    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json
+    tokenizer_path: ~/.coderouter-t/tokenizers/sonnet.json
 ```
 
 ### tokenizer.json の入手（一度だけ）
@@ -82,7 +82,7 @@ pip install "coderouter-t[accuracy]"   # 正確計測バックエンド (tokeniz
 python - <<'PY'
 from huggingface_hub import hf_hub_download
 p = hf_hub_download(repo_id="Qwen/Qwen2.5-0.5B", filename="tokenizer.json")
-print(p)   # これを ~/.coderouter/tokenizers/ にコピーして tokenizer_path に指定
+print(p)   # これを ~/.coderouter-t/tokenizers/ にコピーして tokenizer_path に指定
 PY
 ```
 

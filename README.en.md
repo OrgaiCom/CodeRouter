@@ -45,9 +45,9 @@ Your agent (Claude Code / codex / agy)
 
 ```bash
 # 1. Drop a sample config
-mkdir -p ~/.coderouter
+mkdir -p ~/.coderouter-t
 curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml \
-  > ~/.coderouter/providers.yaml
+  > ~/.coderouter-t/providers.yaml
 
 # 2. Run (Python 3.12+)
 uvx --from coderouter-t coderouter-t serve --port 8088
@@ -143,7 +143,7 @@ providers:
     kind: anthropic
     base_url: https://api.anthropic.com
     model: claude-sonnet-4-6
-    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json   # accurate language-tax (optional)
+    tokenizer_path: ~/.coderouter-t/tokenizers/sonnet.json   # accurate language-tax (optional)
 ```
 
 Details → [Language Tax guide](./docs/guides/language-tax.en.md)
@@ -186,7 +186,7 @@ Details → [Launcher guide](./docs/backends/launcher.md)
 ## Minimal Config
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 default_profile: claude-code
 
 profiles:
@@ -270,13 +270,13 @@ Human-facing messages (CLI / Doctor / startup warnings) support English and Japa
 
 ```bash
 # Japanese
-CODEROUTER_LANG=ja coderouter-t serve
+CODEROUTER_T_LANG=ja coderouter-t serve
 
 # English (default when no locale hint)
-CODEROUTER_LANG=en coderouter-t serve
+CODEROUTER_T_LANG=en coderouter-t serve
 ```
 
-- `CODEROUTER_LANG=ja` / `en` takes precedence when set
+- `CODEROUTER_T_LANG=ja` / `en` takes precedence when set
 - Otherwise `LANG` / `LC_MESSAGES` is auto-detected (`ja_JP.UTF-8` → Japanese)
 - Invalid values fall back to English
 

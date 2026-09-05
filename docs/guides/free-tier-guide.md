@@ -110,8 +110,8 @@ export ALLOW_PAID=false            # 既定。有料 API を使うときだけ t
 
 ```bash
 # サンプル providers.yaml をダウンロード
-mkdir -p ~/.coderouter
-curl -fsSL -o ~/.coderouter/providers.yaml \
+mkdir -p ~/.coderouter-t
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
 
 # uvx で起動 (PyPI から都度取得 + 実行)

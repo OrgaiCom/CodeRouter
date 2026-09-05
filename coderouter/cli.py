@@ -47,7 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         default=None,
         help="Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
-        "./providers.yaml, or ~/.coderouter/providers.yaml.",
+        "./providers.yaml, or ~/.coderouter-t/providers.yaml.",
     )
     serve.add_argument(
         "--mode",
@@ -136,7 +136,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Run env-security checks against a `.env`-style file: "
             "POSIX file mode (0600 expected), .gitignore coverage, "
             "and git-tracking state. Bare `--check-env` (no PATH) "
-            "looks for `./.env` then `~/.coderouter/.env`. "
+            "looks for `./.env` then `~/.coderouter-t/.env`. "
             "See docs/guides/troubleshooting.md §5 for the threat model."
         ),
     )
@@ -161,7 +161,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
-            "./providers.yaml, or ~/.coderouter/providers.yaml."
+            "./providers.yaml, or ~/.coderouter-t/providers.yaml."
         ),
     )
     # v1.7-B (#3): --apply writes the doctor-emitted YAML patches back
@@ -209,7 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restore files a previous --apply / vscode-init rewrote (v2.14.0).",
         description=(
             "Swap each managed file with its .bak sibling: providers.yaml, "
-            "~/.coderouter/model-capabilities.yaml, and (with --workspace) "
+            "~/.coderouter-t/model-capabilities.yaml, and (with --workspace) "
             ".vscode/settings.json and .envrc. The current contents become "
             "the new .bak, so a second run toggles back. "
             "Exit codes: 0 restored, 2 nothing to restore, 1 a restore failed."
@@ -220,7 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to providers.yaml. Defaults to the same file the loader "
-            "would read ($CODEROUTER_CONFIG, then ~/.coderouter/providers.yaml)."
+            "would read ($CODEROUTER_CONFIG, then ~/.coderouter-t/providers.yaml)."
         ),
     )
     rollback.add_argument(
@@ -298,7 +298,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to the state directory containing audit.jsonl. "
-            "Defaults to ~/.coderouter/state/."
+            "Defaults to ~/.coderouter-t/state/."
         ),
     )
     audit.add_argument(
@@ -344,7 +344,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to the state directory containing requests.jsonl. "
-            "Defaults to ~/.coderouter/state/."
+            "Defaults to ~/.coderouter-t/state/."
         ),
     )
     replay.add_argument(
@@ -669,7 +669,7 @@ def _resolve_config_path(explicit: str | None) -> Path:
     write patches back into a file that ``load_config`` never read. Keeping
     one source of truth makes that impossible.
 
-    When nothing exists, falls back to ``~/.coderouter/providers.yaml``
+    When nothing exists, falls back to ``~/.coderouter-t/providers.yaml``
     (the loader's last candidate) — the apply step surfaces a clearer
     error against that path than this resolver would.
     """
@@ -678,7 +678,7 @@ def _resolve_config_path(explicit: str | None) -> Path:
     resolved = resolve_config_path(explicit)
     if resolved is not None:
         return resolved
-    return Path.home() / ".coderouter" / "providers.yaml"
+    return Path.home() / ".coderouter-t" / "providers.yaml"
 
 def _write_verdict_line(*, write: bool, files_written: int) -> None:
     """Print the one-line "did we touch the disk?" verdict.
@@ -810,14 +810,14 @@ def _run_audit(args: argparse.Namespace) -> int:
     """v2.0-K: read and display the structured audit log.
 
     Resolves the audit log path from --state-dir (or default
-    ~/.coderouter/state/) and renders entries with optional filtering.
+    ~/.coderouter-t/state/) and renders entries with optional filtering.
     """
     import json
 
     from coderouter.state.audit_log import read_audit_log, summarize_audit_log
 
     state_dir = Path(args.state_dir).expanduser() if args.state_dir else (
-        Path.home() / ".coderouter" / "state"
+        Path.home() / ".coderouter-t" / "state"
     )
     log_path = state_dir / "audit.jsonl"
 
@@ -881,7 +881,7 @@ def _run_replay(args: argparse.Namespace) -> int:
         log_path = Path(args.log).expanduser()
     else:
         state_dir = Path(args.state_dir).expanduser() if args.state_dir else (
-            Path.home() / ".coderouter" / "state"
+            Path.home() / ".coderouter-t" / "state"
         )
         log_path = state_dir / "requests.jsonl"
 
@@ -983,7 +983,7 @@ def _run_check_env(arg_value: str) -> int:
 
     ``arg_value`` is the value argparse hands us:
       * ``""``  → bare ``--check-env`` with no PATH; auto-discover
-                  (./.env then ~/.coderouter/.env).
+                  (./.env then ~/.coderouter-t/.env).
       * else    → operator-supplied path; use verbatim.
     """
     from pathlib import Path
@@ -998,7 +998,7 @@ def _run_check_env(arg_value: str) -> int:
         target = Path(arg_value).expanduser()
     else:
         # Auto-discovery: cwd first (project-local), then user-global.
-        candidates = [Path.cwd() / ".env", Path.home() / ".coderouter" / ".env"]
+        candidates = [Path.cwd() / ".env", Path.home() / ".coderouter-t" / ".env"]
         target = next((c for c in candidates if c.exists()), candidates[0])
         # Even if neither exists, run check_env_security against the
         # first candidate — its existence check will SKIP loudly so the

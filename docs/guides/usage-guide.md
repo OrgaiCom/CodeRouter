@@ -338,7 +338,7 @@ uv run coderouter doctor --check-model ollama-qwen-coder-7b
 
 ### `coderouter rollback` — `--apply` を元に戻す (v2.14.0)
 
-`doctor --apply` と `vscode-init` はどちらも書き換え前に `.bak` を書いていましたが、それを元に戻す手段がありませんでした。`coderouter rollback` は `providers.yaml`、`~/.coderouter/model-capabilities.yaml`、(`--workspace` 指定時) `.vscode/settings.json` / `.envrc` を `.bak` から復元します。
+`doctor --apply` と `vscode-init` はどちらも書き換え前に `.bak` を書いていましたが、それを元に戻す手段がありませんでした。`coderouter rollback` は `providers.yaml`、`~/.coderouter-t/model-capabilities.yaml`、(`--workspace` 指定時) `.vscode/settings.json` / `.envrc` を `.bak` から復元します。
 
 復元は「スワップ」— 現在の内容がそのまま新しい `.bak` になるので、**もう一度 `rollback` を実行すると元に戻ります**(片道の上書きではなく往復可能)。
 

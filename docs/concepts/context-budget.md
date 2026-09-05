@@ -207,7 +207,7 @@ Gates セクションに `ctx_budget_warnings` / `ctx_budget_trims` / `latest_ra
 検証用の providers.yaml が同梱されています:
 
 ```bash
-cp examples/providers.v2-context-budget.yaml ~/.coderouter/providers.yaml
+cp examples/providers.v2-context-budget.yaml ~/.coderouter-t/providers.yaml
 coderouter-t serve --port 8088 --log-level debug
 ```
 

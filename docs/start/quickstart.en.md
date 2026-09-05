@@ -68,7 +68,7 @@ ollama serve &   # skip if it's already running
 >
 > Want it auto-detected based on RAM? Run [`./setup.sh`](../../setup.sh) — it
 > picks a safe model for your RAM tier, pulls it, and writes
-> `~/.coderouter/providers.yaml`. To upgrade to a larger model later,
+> `~/.coderouter-t/providers.yaml`. To upgrade to a larger model later,
 > either edit the YAML manually or rerun with
 > `./setup.sh --ram-gb <larger> --force`. See v1.8.0's
 > [examples/providers.yaml](../../examples/providers.yaml) and
@@ -129,14 +129,14 @@ Prefix with `uv run` and you don't need `source .venv/bin/activate` (or use dire
 Copying the sample is enough — its contents match the topology diagram above.
 
 ```bash
-mkdir -p ~/.coderouter
+mkdir -p ~/.coderouter-t
 
 # Paths (a) / (b) — uvx / uv tool install: fetch the sample directly
-curl -fsSL -o ~/.coderouter/providers.yaml \
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
 
 # Path (c) — you cloned the repo
-# cp examples/providers.yaml ~/.coderouter/providers.yaml
+# cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 4. (Optional) Set an OpenRouter API key
@@ -297,7 +297,7 @@ Skipping `qwen2.5vl:7b` is fine if you never send images. Image requests will th
 ### C-2. Swap `providers.yaml` for `providers.auto.yaml`
 
 ```bash
-cp examples/providers.auto.yaml ~/.coderouter/providers.yaml
+cp examples/providers.auto.yaml ~/.coderouter-t/providers.yaml
 ```
 
 The load-bearing bits are just two lines:

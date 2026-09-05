@@ -4,7 +4,7 @@ Covers:
 - All catalog entries have both en/ja and format cleanly (M-2 guard)
 - Unknown id / lang fallback
 - Missing kwargs logs a warning and returns template (M-2)
-- Resolve priority (CODEROUTER_LANG > LANG > en)
+- Resolve priority (CODEROUTER_T_LANG > LANG > en)
 - E1410 removed check (M-4)
 - Budget_note placeholder (M-5)
 """
@@ -103,12 +103,12 @@ def test_missing_kwargs_logs_warning_and_returns_template(caplog: pytest.LogCapt
 
 
 def test_resolve_lang_priority(monkeypatch: pytest.MonkeyPatch) -> None:
-    # CODEROUTER_LANG wins over LANG
-    monkeypatch.setenv("CODEROUTER_LANG", "ja")
+    # CODEROUTER_T_LANG wins over LANG
+    monkeypatch.setenv("CODEROUTER_T_LANG", "ja")
     monkeypatch.setenv("LANG", "en_US.UTF-8")
     assert resolve_lang() == "ja"
     # LANG fallback
-    monkeypatch.delenv("CODEROUTER_LANG", raising=False)
+    monkeypatch.delenv("CODEROUTER_T_LANG", raising=False)
     monkeypatch.setenv("LANG", "ja_JP.UTF-8")
     assert resolve_lang() == "ja"
     # explicit param wins
@@ -120,7 +120,7 @@ def test_resolve_lang_priority(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LC_MESSAGES", raising=False)
     monkeypatch.delenv("LC_ALL", raising=False)
     # No env -> en
-    monkeypatch.delenv("CODEROUTER_LANG", raising=False)
+    monkeypatch.delenv("CODEROUTER_T_LANG", raising=False)
     assert resolve_lang() == "en"
 
 

@@ -117,7 +117,7 @@ coderouter rollback --workspace .             # .vscode/settings.json と .envrc
 ```
 
 - 復元は**スワップ**です。現在の内容が新しい `.bak` になるので、2 回実行すると元に戻ります
-- `--workspace` は復元対象の**追加**です。既定では `providers.yaml` と `~/.coderouter/model-capabilities.yaml`（`doctor --apply` の書き込み先）も対象に入ります。1 ファイルだけ戻したいときは `coderouter rollback --path .envrc` のように `--path` で指定してください（指定するとその他の探索は行いません）
+- `--workspace` は復元対象の**追加**です。既定では `providers.yaml` と `~/.coderouter-t/model-capabilities.yaml`（`doctor --apply` の書き込み先）も対象に入ります。1 ファイルだけ戻したいときは `coderouter rollback --path .envrc` のように `--path` で指定してください（指定するとその他の探索は行いません）
 - 終了コードは **0**=復元した / **2**=戻すものが無かった / **1**=復元に失敗
 
 ### 再実行しても壊れない

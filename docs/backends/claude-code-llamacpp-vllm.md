@@ -38,15 +38,15 @@ llama-server -m ~/models/<model>.gguf --host 127.0.0.1 --port 8080 \
 **vLLM（NVIDIA GPU）**
 
 ```bash
-uv venv ~/.coderouter/backends/vllm
-~/.coderouter/backends/vllm/bin/python -m pip install vllm
-~/.coderouter/backends/vllm/bin/python -m vllm.entrypoints.openai.api_server \
+uv venv ~/.coderouter-t/backends/vllm
+~/.coderouter-t/backends/vllm/bin/python -m pip install vllm
+~/.coderouter-t/backends/vllm/bin/python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-Coder-7B-Instruct --port 8000 --max-model-len 32768
 ```
 
 > 起動を GUI に任せたい場合は [Launcher](./launcher.md)。ただし Launcher が面倒を見るのは**起動まで**で、下記の provider 登録は別作業です。
 
-### 2. CodeRouter に provider として登録する（`~/.coderouter/providers.yaml`）
+### 2. CodeRouter に provider として登録する（`~/.coderouter-t/providers.yaml`）
 
 ```yaml
 allow_paid: false
@@ -125,7 +125,7 @@ llama-server -m <model>.gguf --port 8080 -ngl 99 \
 
 動いているプロセスには即時反映されません。
 
-1. 設定を **`~/.coderouter/providers.yaml`** に置く（`examples/` を直すだけでは効かない）
+1. 設定を **`~/.coderouter-t/providers.yaml`** に置く（`examples/` を直すだけでは効かない）
 2. **`coderouter-t serve` を再起動**（`launcher:` / プロファイルは起動時に読まれる）
 3. **バックエンドを起動し直す**（`--ctx-size` 等は再起動して初めて効く）
 
@@ -138,7 +138,7 @@ llama-server -m <model>.gguf --port 8080 -ngl 99 \
 | `400 exceed_context_size_error` `n_ctx:4096` | ctx-size が小さく Claude Code の prompt が入らない | `--ctx-size 32768` 以上で**起動し直す**。学習 ctx 超は YaRN |
 | `transport error: All connection attempts failed` (status: null) | バックエンドが落ちている / **ポート不一致** | サーバを起動 + `base_url` のポートを実ポートに合わせる |
 | すべて `provider-failed` → **502 Bad Gateway** | チェーンの逃げ先が全滅 | バックエンドを 1 つ復旧 + 末尾に無料クラウド fallback |
-| 起動し直しても `n_ctx=4096` のまま | 旧プロセスが残存 / 設定が `~/.coderouter` に未反映 / serve 未再起動 | `ps aux \| grep llama-server` で実コマンド確認 → 反映3ステップ |
+| 起動し直しても `n_ctx=4096` のまま | 旧プロセスが残存 / 設定が `~/.coderouter-t` に未反映 / serve 未再起動 | `ps aux \| grep llama-server` で実コマンド確認 → 反映3ステップ |
 | OOM でバックエンドが即落ち | ctx を上げすぎ | ctx を下げる / KV 量子化 / 小さいモデル |
 | `capability-degraded: cache_control` | OpenAI 形式へ翻訳時に Anthropic prompt-cache マーカーを落とすだけ | **無害**。対処不要 |
 | `claude.ai connectors are disabled …` | env の `ANTHROPIC_AUTH_TOKEN`/`API_KEY` が claude.ai ログインより優先 | CodeRouter 用 env はそのシェル/フォルダ限定に（`direnv`）。普段使いシェルでは `unset` |

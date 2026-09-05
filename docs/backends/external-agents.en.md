@@ -141,7 +141,7 @@ All fields of the `agent_cli:` sub-config (`AgentCliConfig`) in `providers.yaml`
 |---|---|---|---|
 | `agent` | `"claude" \| "codex" \| "antigravity" \| "gemini" \| "grok"` | (required) | Which CLI to invoke. **As of v2.7.10, `claude`, `codex`, `antigravity`, and `grok` are all implemented (Phase 1 complete); `gemini` remains in the schema but is rejected when the adapter is constructed** |
 | `command` | `str \| null` | `null` (defaults to the same name as `agent`) | CLI executable name or absolute path, resolved via `PATH`. **`agent: antigravity` is the sole exception, defaulting to `agy`** (the binary name differs from the product name) |
-| `workdir` | `str \| null` | `null` (defaults to `~/.coderouter/agents/<provider name>`) | Working directory for the one-shot exec. `~` / env-var expansion is applied; a path containing `..` is rejected |
+| `workdir` | `str \| null` | `null` (defaults to `~/.coderouter-t/agents/<provider name>`) | Working directory for the one-shot exec. `~` / env-var expansion is applied; a path containing `..` is rejected |
 | `exec_timeout_s` | `float` | `600.0` (range `1.0`–`1800.0`) | Forced timeout (seconds) for the whole exec. **Separate** from `ProviderConfig.timeout_s` (the latter is not used by agent_cli). For antigravity this value also generates `--print-timeout` (see below) |
 | `allow_file_writes` | `bool` | `false` | Whether to allow file writes. When `false`, the effective mode is clamped to read-only regardless of `sandbox_mode` |
 | `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | Maps to each CLI's sandbox/approval flags (claude: [table below](#sandbox_mode--permission-mode-mapping-claude); codex: [codex section](#sandbox_mode--codex-flag-mapping); antigravity: [antigravity section](#sandbox_mode--antigravity-flag-mapping); grok: [grok section](#sandbox_mode--grok-flag-mapping)) |
@@ -184,7 +184,7 @@ providers:
     agent_cli:
       agent: codex
       command: codex
-      workdir: ~/.coderouter/agents/codex
+      workdir: ~/.coderouter-t/agents/codex
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -282,7 +282,7 @@ providers:
     agent_cli:
       agent: antigravity
       # command may be omitted (defaults to "agy" — the binary name differs from the product name)
-      workdir: ~/.coderouter/agents/antigravity
+      workdir: ~/.coderouter-t/agents/antigravity
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -385,7 +385,7 @@ providers:
     agent_cli:
       agent: grok
       command: grok
-      workdir: ~/.coderouter/agents/grok
+      workdir: ~/.coderouter-t/agents/grok
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only

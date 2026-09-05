@@ -265,7 +265,7 @@ class AgentCliConfig(BaseModel):
         description=(
             "Working directory for the one-shot exec. ``~`` / env-var "
             "expansion is applied. When unset, a dedicated isolated "
-            "directory (``~/.coderouter/agents/<name>``) is used."
+            "directory (``~/.coderouter-t/agents/<name>``) is used."
         ),
     )
     exec_timeout_s: float = Field(
@@ -2649,7 +2649,7 @@ class CodeRouterConfig(BaseModel):
         description=(
             "v2.0-K: directory for persistent state (sqlite3 KV store + "
             "audit log). None = in-memory only (no persistence, backward-"
-            "compatible). Set to a path like '~/.coderouter/state/' to "
+            "compatible). Set to a path like '~/.coderouter-t/state/' to "
             "enable cross-restart durability for budget totals, health "
             "state, and self-healing exclusions. The directory is created "
             "automatically if it doesn't exist."

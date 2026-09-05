@@ -176,7 +176,7 @@ Expected:
 
 ### Step 5. Register the providers in CodeRouter
 
-Add both routes side by side to `~/.coderouter/providers.yaml`'s `providers:` list (the same pattern is bundled in `examples/providers.yaml`):
+Add both routes side by side to `~/.coderouter-t/providers.yaml`'s `providers:` list (the same pattern is bundled in `examples/providers.yaml`):
 
 ```yaml
 # OpenAI-compatible route (translation through CodeRouter's adapter)

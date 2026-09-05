@@ -153,7 +153,7 @@ v2.13.0 以降、設定の探索順は次のとおりで、**3 番目はオプ�
 1. `--config` で明示的に渡したパス
 2. 環境変数 `CODEROUTER_CONFIG`
 3. `./providers.yaml` (カレントディレクトリ) — `CODEROUTER_ALLOW_CWD_CONFIG` が設定されているときだけ
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 オプトインが有効になるのは `CODEROUTER_ALLOW_CWD_CONFIG` の値が `1` / `true` / `yes` / `on` のときだけです (前後の空白は無視、大文字小文字は区別しません)。それ以外の値 — `0`、`false`、空文字列、`enabled` のような綴り — はすべて「無効」に倒れます。
 
@@ -168,7 +168,7 @@ CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 2. `export CODEROUTER_CONFIG=$PWD/providers.yaml` — 同じことを環境変数で
 3. `export CODEROUTER_ALLOW_CWD_CONFIG=1` — 暗黙探索を戻す。**信頼するディレクトリでのみ**
 
-恒久的な置き場所は `~/.coderouter/providers.yaml` です。オプトインを有効にして CWD から読んだ場合は `cwd-config-loaded` 警告が一度だけ出ます。`--config` / `CODEROUTER_CONFIG` で明示的に指したときは (たまたま同じファイルであっても) どちらの警告も出ません — 明示的な選択は、ここで塞いでいる暗黙の挙動ではないからです。
+恒久的な置き場所は `~/.coderouter-t/providers.yaml` です。オプトインを有効にして CWD から読んだ場合は `cwd-config-loaded` 警告が一度だけ出ます。`--config` / `CODEROUTER_CONFIG` で明示的に指したときは (たまたま同じファイルであっても) どちらの警告も出ません — 明示的な選択は、ここで塞いでいる暗黙の挙動ではないからです。
 
 ---
 

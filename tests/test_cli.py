@@ -493,7 +493,7 @@ def _seed_home_and_cwd(
     # Windows parity is handled by conftest's _patch_home_for_windows autouse
     # fixture; no per-test Path.home patch needed (M-3 DRY fix).
     monkeypatch.setenv("USERPROFILE", str(home_dir))
-    home_path = home_dir / ".coderouter" / "providers.yaml"
+    home_path = home_dir / ".coderouter-t" / "providers.yaml"
     if home:
         home_path.parent.mkdir()
         home_path.write_text("providers: []\n", encoding="utf-8")
@@ -536,7 +536,7 @@ def test_cli_resolve_config_path_honours_optin(
 def test_cli_resolve_config_path_falls_back_when_nothing_exists(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No config anywhere → fall back to ~/.coderouter/providers.yaml."""
+    """No config anywhere → fall back to ~/.coderouter-t/providers.yaml."""
     home_path, _cwd_path = _seed_home_and_cwd(
         tmp_path, monkeypatch, home=False, cwd=False
     )

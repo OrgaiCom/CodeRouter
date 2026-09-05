@@ -141,7 +141,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 ### Step 5. CodeRouter に provider として登録
 
-`~/.coderouter/providers.yaml` の `providers:` リストに以下を追加：
+`~/.coderouter-t/providers.yaml` の `providers:` リストに以下を追加：
 
 ```yaml
 - name: llamacpp-qwen3-6-35b-a3b
@@ -174,7 +174,7 @@ profiles:
       ...
 ```
 
-> **完全な examples/providers.yaml** には CodeRouter 同梱の `llamacpp-qwen3-6-35b-a3b` provider 例 + コメント詳細あり。`cp examples/providers.yaml ~/.coderouter/providers.yaml` で丸ごと持ってくることも可能。
+> **完全な examples/providers.yaml** には CodeRouter 同梱の `llamacpp-qwen3-6-35b-a3b` provider 例 + コメント詳細あり。`cp examples/providers.yaml ~/.coderouter-t/providers.yaml` で丸ごと持ってくることも可能。
 
 ### Step 6. doctor で動作確認
 

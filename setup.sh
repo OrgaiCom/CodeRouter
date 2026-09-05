@@ -14,7 +14,7 @@
 #   3. Checks whether `ollama` is installed; if not, prints the install
 #      hint from ollama.com and bails out so the user can install + retry.
 #   4. Runs `ollama pull <model>` (skippable with --no-pull).
-#   5. Writes ~/.coderouter/providers.yaml from a minimal embedded
+#   5. Writes ~/.coderouter-t/providers.yaml from a minimal embedded
 #      template — single local provider, single profile — that
 #      `coderouter serve` can boot from immediately.
 #   6. Prints the next steps (`coderouter doctor --check-model local`,
@@ -25,7 +25,7 @@
 # - It does NOT install anything for the user beyond the Ollama model.
 #   Python / uv / coderouter-t is the user's job (the README's
 #   `uvx coderouter-t serve` already covers that path).
-# - It does NOT touch any existing ~/.coderouter/providers.yaml. If a
+# - It does NOT touch any existing ~/.coderouter-t/providers.yaml. If a
 #   config is already there, the wizard writes ./providers.yaml.new
 #   instead and tells the user to diff/merge — destroying a hand-edited
 #   config silently would be a much worse bug than a one-line warning.
@@ -53,7 +53,7 @@ set -euo pipefail
 # Configurable defaults — flags can override at the command line
 # ----------------------------------------------------------------------------
 
-CONFIG_PATH_DEFAULT="${HOME}/.coderouter/providers.yaml"
+CONFIG_PATH_DEFAULT="${HOME}/.coderouter-t/providers.yaml"
 CONFIG_PATH=""           # set by --config-path or to default after parse
 RAM_GB_OVERRIDE=""       # set by --ram-gb (testing / VMs with weird sysctl)
 INTERACTIVE="auto"       # "auto" detects tty; --non-interactive forces "no"
@@ -279,7 +279,7 @@ detect_ram_gb() {
 #
 # 「もっと良いモデルにしたい」運用は main の最後で hint を表示:
 #   1. `ollama pull <larger-model>` でモデル取得
-#   2. `~/.coderouter/providers.yaml` を手動編集 OR
+#   2. `~/.coderouter-t/providers.yaml` を手動編集 OR
 #      `./setup.sh --ram-gb <larger> --force` で上書き再生成
 #   3. Qwen3.6 系を狙うなら llama.cpp 直叩き経路 (docs/llamacpp-direct.md)
 #

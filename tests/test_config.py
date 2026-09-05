@@ -270,7 +270,7 @@ def test_missing_config_path_is_helpful(tmp_path: Path, monkeypatch: pytest.Monk
     # fallback candidates) does not accidentally resolve to the project's
     # real providers.yaml when tests are invoked from the repo root.
     monkeypatch.chdir(tmp_path)
-    # Also force HOME so ~/.coderouter/providers.yaml cannot satisfy either.
+    # Also force HOME so ~/.coderouter-t/providers.yaml cannot satisfy either.
     monkeypatch.setenv("HOME", str(tmp_path))
 
     with pytest.raises(FileNotFoundError) as info:

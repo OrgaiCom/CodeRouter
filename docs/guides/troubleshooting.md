@@ -206,7 +206,7 @@ coderouter audit --tail 20 --filter provider-failed
 1. `--config` で明示したパス
 2. `$CODEROUTER_CONFIG` 環境変数
 3. カレントディレクトリの `./providers.yaml` — **`CODEROUTER_ALLOW_CWD_CONFIG` が truthy(`1`/`true`/`yes`/`on`)のときだけ**
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 オプトインが未設定のまま `./providers.yaml` が存在する場合は、起動時に一度だけ `cwd-config-skipped` 警告が出ます。ログにこれが出ていれば原因はほぼ確定です。
 
@@ -219,8 +219,8 @@ CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 # 2) --config で明示する
 coderouter-t serve --config ./providers.yaml
 
-# 3) 常用ファイルとして ~/.coderouter/providers.yaml へ移す
-mkdir -p ~/.coderouter && cp ./providers.yaml ~/.coderouter/providers.yaml
+# 3) 常用ファイルとして ~/.coderouter-t/providers.yaml へ移す
+mkdir -p ~/.coderouter-t && cp ./providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 1-9. `/dashboard` や `/metrics.json` が 401 を返す — v2.14.0 以降
@@ -686,7 +686,7 @@ coderouter-t serve --port 8088
 ```bash
 # 例: グローバル defaults + プロジェクト個別 override
 coderouter-t serve \
-  --env-file ~/.coderouter/global.env \
+  --env-file ~/.coderouter-t/global.env \
   --env-file ./project.env \
   --port 8088
 ```

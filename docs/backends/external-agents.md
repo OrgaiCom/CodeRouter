@@ -141,7 +141,7 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 |---|---|---|---|
 | `agent` | `"claude" \| "codex" \| "antigravity" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.10 で `claude`・`codex`・`antigravity`・`grok` の4つすべてが実装済み(Phase 1 完了)。`gemini` はスキーマに残るがアダプタ構築時に拒否される** |
 | `command` | `str \| null` | `null`(未設定時は `agent` と同名) | CLI 実行ファイル名 or 絶対パス。`PATH` から解決。**`agent: antigravity` のみ既定値は `agy`**(バイナリ名が製品名と異なるため) |
-| `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
+| `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter-t/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
 | `exec_timeout_s` | `float` | `600.0`(範囲 `1.0`–`1800.0`) | exec 全体の強制タイムアウト(秒)。`ProviderConfig.timeout_s` とは**別系統**(後者は agent_cli では使われない)。antigravity ではこの値から `--print-timeout` も生成される(下記参照) |
 | `allow_file_writes` | `bool` | `false` | ファイル書き込みを許可するか。`false` のときは `sandbox_mode` の値に関わらず read-only にクランプされる |
 | `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、codex は [codex セクション](#sandbox_mode--codex-フラグのマッピング)、antigravity は [antigravity セクション](#sandbox_mode--antigravity-フラグのマッピング)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
@@ -184,7 +184,7 @@ providers:
     agent_cli:
       agent: codex
       command: codex
-      workdir: ~/.coderouter/agents/codex
+      workdir: ~/.coderouter-t/agents/codex
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -282,7 +282,7 @@ providers:
     agent_cli:
       agent: antigravity
       # command は省略可(既定 "agy" — バイナリ名が製品名と異なる点に注意)
-      workdir: ~/.coderouter/agents/antigravity
+      workdir: ~/.coderouter-t/agents/antigravity
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -385,7 +385,7 @@ providers:
     agent_cli:
       agent: grok
       command: grok
-      workdir: ~/.coderouter/agents/grok
+      workdir: ~/.coderouter-t/agents/grok
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only

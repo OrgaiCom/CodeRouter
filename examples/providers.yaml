@@ -7,7 +7,7 @@
 #   - default_profile: 'default'
 #
 # To use:
-#   1. cp examples/providers.yaml ~/.coderouter/providers.yaml
+#   1. cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 #   2. Edit base_url / model to match your local stack
 #   3. cp examples/.env.example .env  and fill in OPENROUTER_API_KEY if you want fallback
 #   4. coderouter serve

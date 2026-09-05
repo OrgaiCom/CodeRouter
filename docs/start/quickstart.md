@@ -66,7 +66,7 @@ ollama serve &   # すでに動いていれば不要
 > 24 GB GGUF を載せると swap で遅くなる）。
 >
 > RAM を見て自動推奨させたいときは [`./setup.sh`](../../setup.sh) を実行
-> — RAM tier に応じて安全側のモデルを推奨 + 自動 pull + `~/.coderouter/providers.yaml`
+> — RAM tier に応じて安全側のモデルを推奨 + 自動 pull + `~/.coderouter-t/providers.yaml`
 > 生成まで一気にやってくれます。あとで上のような大きいモデルに上げるには
 > 手動編集 or `./setup.sh --ram-gb <larger> --force` で再生成。
 > 詳しくは v1.8.0 で出した [examples/providers.yaml](../../examples/providers.yaml)
@@ -126,14 +126,14 @@ uv run coderouter-t serve --port 8088
 サンプル設定をコピーするだけで OK です (中身は本手順書の構成と一致しています)。
 
 ```bash
-mkdir -p ~/.coderouter
+mkdir -p ~/.coderouter-t
 
 # 経路 (a) / (b) = uvx / uv tool install で入れた場合は直接ダウンロード
-curl -fsSL -o ~/.coderouter/providers.yaml \
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
 
 # 経路 (c) = clone 済みの場合
-# cp examples/providers.yaml ~/.coderouter/providers.yaml
+# cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 4. (任意) OpenRouter API キーを設定
@@ -295,7 +295,7 @@ ollama pull qwen2.5vl:7b         # multi    (~6 GB、画像を送らないなら
 ### C-2. `providers.yaml` を `providers.auto.yaml` に差し替える
 
 ```bash
-cp examples/providers.auto.yaml ~/.coderouter/providers.yaml
+cp examples/providers.auto.yaml ~/.coderouter-t/providers.yaml
 ```
 
 中身の肝は 2 行だけです:

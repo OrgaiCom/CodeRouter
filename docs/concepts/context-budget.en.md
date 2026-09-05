@@ -207,7 +207,7 @@ coderouter stats --port 8088
 A providers.yaml for verification is bundled:
 
 ```bash
-cp examples/providers.v2-context-budget.yaml ~/.coderouter/providers.yaml
+cp examples/providers.v2-context-budget.yaml ~/.coderouter-t/providers.yaml
 coderouter-t serve --port 8088 --log-level debug
 ```
 

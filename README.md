@@ -63,9 +63,9 @@
 
 ```bash
 # 1. サンプル設定を置く
-mkdir -p ~/.coderouter
+mkdir -p ~/.coderouter-t
 curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml \
-  > ~/.coderouter/providers.yaml
+  > ~/.coderouter-t/providers.yaml
 
 # 2. 起動 (Python 3.12+)
 uvx --from coderouter-t coderouter-t serve --port 8088
@@ -162,7 +162,7 @@ providers:
     kind: anthropic
     base_url: https://api.anthropic.com
     model: claude-sonnet-4-6
-    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json   # 言語税の正確計測（任意）
+    tokenizer_path: ~/.coderouter-t/tokenizers/sonnet.json   # 言語税の正確計測（任意）
 ```
 
 詳細 → [言語税ガイド](./docs/guides/language-tax.md)
@@ -206,7 +206,7 @@ launcher:
 ## 設定例 (最小)
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 default_profile: claude-code
 
 profiles:
@@ -290,14 +290,14 @@ CodeRouter-t の人間向けメッセージ（CLI / Doctor / 起動警告）は�
 
 ```bash
 # 日本語で表示（推奨: 日本語OSでは自動で日本語になります）
-CODEROUTER_LANG=ja coderouter-t serve
-CODEROUTER_LANG=ja coderouter-t doctor --check-model local
+CODEROUTER_T_LANG=ja coderouter-t serve
+CODEROUTER_T_LANG=ja coderouter-t doctor --check-model local
 
 # 英語で表示
-CODEROUTER_LANG=en coderouter-t serve
+CODEROUTER_T_LANG=en coderouter-t serve
 ```
 
-- `CODEROUTER_LANG=ja` / `en` を明示すると最優先されます
+- `CODEROUTER_T_LANG=ja` / `en` を明示すると最優先されます
 - 未設定時は `LANG` / `LC_MESSAGES` の OSロケールから自動判定（`ja_JP.UTF-8` → 日本語）
 - 不正な値は英語にフォールバックします
 

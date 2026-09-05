@@ -270,7 +270,7 @@ opt-in**:
 2. The `CODEROUTER_CONFIG` env var
 3. `./providers.yaml` in the current directory — only when
    `CODEROUTER_ALLOW_CWD_CONFIG` is set
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 The opt-in is enabled only when `CODEROUTER_ALLOW_CWD_CONFIG` is
 `1` / `true` / `yes` / `on` (surrounding whitespace ignored,
@@ -294,7 +294,7 @@ same note. Three fixes, safest first:
 3. `export CODEROUTER_ALLOW_CWD_CONFIG=1` — restore implicit discovery,
    **only in directories you trust**
 
-The durable home for the file is `~/.coderouter/providers.yaml`. When
+The durable home for the file is `~/.coderouter-t/providers.yaml`. When
 the opt-in is on and the CWD step actually served the config, a one-time
 `cwd-config-loaded` warning fires. Neither warning fires when the file
 was named explicitly via `--config` / `CODEROUTER_CONFIG` — even if that

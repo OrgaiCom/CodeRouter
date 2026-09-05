@@ -176,7 +176,7 @@ curl -s http://localhost:1234/v1/messages \
 
 ### Step 5. CodeRouter に provider として登録
 
-`~/.coderouter/providers.yaml` の `providers:` リストに 2 ルートを並べて登録します (`examples/providers.yaml` にも同じ pattern が同梱されているので参考に):
+`~/.coderouter-t/providers.yaml` の `providers:` リストに 2 ルートを並べて登録します (`examples/providers.yaml` にも同じ pattern が同梱されているので参考に):
 
 ```yaml
 # OpenAI 互換ルート (従来通り、CodeRouter の adapter 翻訳経由)

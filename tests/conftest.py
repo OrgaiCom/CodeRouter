@@ -47,11 +47,11 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CODEROUTER_CONFIG",
         "CODEROUTER_MODE",
         "OPENROUTER_API_KEY",
-        "CODEROUTER_LANG",
+        "CODEROUTER_T_LANG",
     ):
         monkeypatch.delenv(var, raising=False)
     # Ensure tests run with deterministic English messages by default
-    monkeypatch.setenv("CODEROUTER_LANG", "en")
+    monkeypatch.setenv("CODEROUTER_T_LANG", "en")
 
 
 @pytest.fixture(autouse=True)

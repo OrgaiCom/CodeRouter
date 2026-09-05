@@ -1,11 +1,11 @@
 # examples — 設定サンプル早わかり
 
 CodeRouter の `providers.yaml` サンプル集です。**「どれを使えばいいか分からない」を解消するための索引**です。
-まず下の決定表で 1 つ選び、`~/.coderouter/providers.yaml` にコピーして使ってください。
+まず下の決定表で 1 つ選び、`~/.coderouter-t/providers.yaml` にコピーして使ってください。
 
 ```bash
-mkdir -p ~/.coderouter
-cp examples/<選んだファイル> ~/.coderouter/providers.yaml
+mkdir -p ~/.coderouter-t
+cp examples/<選んだファイル> ~/.coderouter-t/providers.yaml
 coderouter-t serve --port 8088
 ```
 

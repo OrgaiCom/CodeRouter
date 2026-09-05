@@ -297,7 +297,7 @@ def _patch_model_capabilities_yaml(*, match: str, kind: str, key: str, value: bo
     """Emit a model-capabilities.yaml rule that declares ``<key>=<value>``."""
     val = "true" if value else "false"
     return (
-        "# ~/.coderouter/model-capabilities.yaml — append under `rules:`:\n"
+        "# ~/.coderouter-t/model-capabilities.yaml — append under `rules:`:\n"
         "rules:\n"
         f"  - match: {match!r}\n"
         f"    kind: {kind}\n"
