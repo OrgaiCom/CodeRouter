@@ -82,7 +82,7 @@ profiles:
 
 ```bash
 # ターミナル1
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # ターミナル2（このシェルだけに env を効かせる。グローバルに置かない）
 ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
@@ -126,7 +126,7 @@ llama-server -m <model>.gguf --port 8080 -ngl 99 \
 動いているプロセスには即時反映されません。
 
 1. 設定を **`~/.coderouter/providers.yaml`** に置く（`examples/` を直すだけでは効かない）
-2. **`coderouter serve` を再起動**（`launcher:` / プロファイルは起動時に読まれる）
+2. **`coderouter-t serve` を再起動**（`launcher:` / プロファイルは起動時に読まれる）
 3. **バックエンドを起動し直す**（`--ctx-size` 等は再起動して初めて効く）
 
 ---

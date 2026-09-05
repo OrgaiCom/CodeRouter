@@ -362,9 +362,9 @@ def _load_yaml_with_comments(path: Path) -> tuple[Any, str]:
         raise MissingDependencyError(
             "doctor --apply / --dry-run requires the optional "
             "'ruamel.yaml' dependency. Install with one of:\n"
-            "  pip install coderouter-cli[doctor]\n"
+            "  pip install coderouter-t[doctor]\n"
             "  uv pip install ruamel.yaml\n"
-            "  uv tool install coderouter-cli --with ruamel.yaml"
+            "  uv tool install coderouter-t --with ruamel.yaml"
         ) from exc
 
     raw_text = path.read_text(encoding="utf-8")

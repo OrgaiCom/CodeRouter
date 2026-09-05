@@ -76,7 +76,7 @@ providers:
 CodeRouter itself never hits the network (local file only). Download the tokenizer once as the operator:
 
 ```bash
-pip install "coderouter-cli[accuracy]"   # accurate-count backend (tokenizers)
+pip install "coderouter-t[accuracy]"   # accurate-count backend (tokenizers)
 
 python - <<'PY'
 from huggingface_hub import hf_hub_download

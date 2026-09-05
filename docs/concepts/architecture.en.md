@@ -295,7 +295,7 @@ Per-request: openrouter-free is 100.0% cheaper than anthropic-api
 
 ```bash
 # terminal 1: start CodeRouter
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # terminal 2: point Claude Code at it
 ANTHROPIC_BASE_URL=http://localhost:8088 \

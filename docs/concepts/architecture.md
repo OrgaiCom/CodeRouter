@@ -295,7 +295,7 @@ Per-request: openrouter-free is 100.0% cheaper than anthropic-api
 
 ```bash
 # ターミナル 1: CodeRouter 起動
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # ターミナル 2: Claude Code を向ける
 ANTHROPIC_BASE_URL=http://localhost:8088 \

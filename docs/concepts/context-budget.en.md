@@ -208,7 +208,7 @@ A providers.yaml for verification is bundled:
 
 ```bash
 cp examples/providers.v2-context-budget.yaml ~/.coderouter/providers.yaml
-coderouter serve --port 8088 --log-level debug
+coderouter-t serve --port 8088 --log-level debug
 ```
 
 It has lowered thresholds so you can trigger warn / trim with a small amount of data. See `docs/inside/verification-v2.0-F.md` for details.

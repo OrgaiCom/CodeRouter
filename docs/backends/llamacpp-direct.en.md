@@ -186,7 +186,7 @@ Exit: 0
 ### Step 7. End-to-end via CodeRouter (Anthropic-compat)
 
 ```bash
-coderouter serve --port 8088 --mode test-llamacpp &
+coderouter-t serve --port 8088 --mode test-llamacpp &
 sleep 2
 
 curl -s -X POST http://localhost:8088/v1/messages \
@@ -207,7 +207,7 @@ In the CodeRouter logs you should see `dropped=["reasoning", "reasoning_content"
 
 ## Troubleshooting
 
-- **`tool_calls [NEEDS TUNING]` on CodeRouter ≤ v1.8.2** — the pre-v1.8.3 probe budget was eaten by `reasoning_content` before any tool_calls could surface. Upgrade: `uv tool upgrade coderouter-cli`.
+- **`tool_calls [NEEDS TUNING]` on CodeRouter ≤ v1.8.2** — the pre-v1.8.3 probe budget was eaten by `reasoning_content` before any tool_calls could surface. Upgrade: `uv tool upgrade coderouter-t`.
 - **`reasoning_content` leaks to the client (≤ v1.8.2)** — the older adapter only stripped Ollama's `reasoning`. Upgrade.
 - **`chat template not found` on launch** — the GGUF lacks an embedded template. Either use Unsloth's GGUF (which ships one), or pass `--chat-template-file path/to/qwen3.jinja` explicitly.
 - **Metal not engaging despite `-ngl 999`** — rebuild with `cmake -B build -DGGML_METAL=ON --fresh`. `./build/bin/llama-server --version` should report `Metal: yes`.

@@ -76,7 +76,7 @@ providers:
 ネットワークアクセスは CodeRouter 本体では行いません（ローカルファイルのみ読み込み）。トークナイザは運用者が一度だけ手元に落としておきます。
 
 ```bash
-pip install "coderouter-cli[accuracy]"   # 正確計測バックエンド (tokenizers)
+pip install "coderouter-t[accuracy]"   # 正確計測バックエンド (tokenizers)
 
 # 例: Hugging Face から該当モデルの tokenizer.json を取得して配置
 python - <<'PY'

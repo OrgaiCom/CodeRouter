@@ -203,7 +203,7 @@ Exit: 0
 
 ```bash
 # CodeRouter 起動 (test profile を作って llama.cpp 経路だけテストする例)
-coderouter serve --port 8088 --mode test-llamacpp &
+coderouter-t serve --port 8088 --mode test-llamacpp &
 sleep 2
 
 # Anthropic 互換 API で 1 round-trip
@@ -239,7 +239,7 @@ provider-ok provider=llamacpp-qwen3-6-35b-a3b
 ### `tool_calls [NEEDS TUNING]` が出る (CodeRouter v1.8.2 以前)
 
 - v1.8.2 以前は `tool_calls` probe の `max_tokens=64` が thinking モデルの `reasoning_content` で食い切られて偽陽性を出します
-- **v1.8.3 にアップグレード必須** (`uv tool upgrade coderouter-cli`)
+- **v1.8.3 にアップグレード必須** (`uv tool upgrade coderouter-t`)
 
 ### `reasoning_content` フィールドが client に漏れる (v1.8.2 以前)
 

@@ -43,7 +43,7 @@ from coderouter.doctor_apply import (
 # v1.8.0: end-to-end apply tests require the optional ``ruamel.yaml``
 # dependency (declared in ``[project.optional-dependencies].doctor`` /
 # ``[dev]``). When it's missing — typical on a fresh ``uv tool install
-# coderouter-cli`` without the ``[doctor]`` extra — the apply-stage
+# coderouter-t`` without the ``[doctor]`` extra — the apply-stage
 # tests cleanly skip rather than fail. Parse / merge unit tests above
 # don't need ruamel and stay active in all environments.
 #

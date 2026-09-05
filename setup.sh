@@ -4,7 +4,7 @@
 #
 # What this script does
 # ---------------------
-# Walks a fresh user from "I just installed coderouter-cli" to a working
+# Walks a fresh user from "I just installed coderouter-t" to a working
 # providers.yaml in ~5 lines of output. Concretely:
 #
 #   1. Detects the OS (macOS / Linux) and total RAM.
@@ -23,8 +23,8 @@
 # What this script deliberately does NOT do
 # -----------------------------------------
 # - It does NOT install anything for the user beyond the Ollama model.
-#   Python / uv / coderouter-cli is the user's job (the README's
-#   `uvx coderouter-cli serve` already covers that path).
+#   Python / uv / coderouter-t is the user's job (the README's
+#   `uvx coderouter-t serve` already covers that path).
 # - It does NOT touch any existing ~/.coderouter/providers.yaml. If a
 #   config is already there, the wizard writes ./providers.yaml.new
 #   instead and tells the user to diff/merge — destroying a hand-edited
@@ -40,7 +40,7 @@
 # Pure bash + standard POSIX tools (sysctl on macOS, awk on Linux,
 # mkdir, cat, printf). Does NOT shell out to Python — every heredoc
 # templated above is hand-written so this script can run on a brand-new
-# machine where coderouter-cli has been `uvx`-installed but the
+# machine where coderouter-t has been `uvx`-installed but the
 # Python venv is opaque to a non-Python user. The follow-up
 # `coderouter doctor --check-model local` is the natural next step
 # but is left for the user to run so the wizard's exit code reflects
@@ -431,7 +431,7 @@ emit_providers_yaml() {
 #   coderouter doctor --check-model ${provider_name}
 #
 # Need YAML auto-patching? install the [doctor] extra and use --apply:
-#   pip install 'coderouter-cli[doctor]'
+#   pip install 'coderouter-t[doctor]'
 #   coderouter doctor --check-model ${provider_name} --apply
 # ============================================================================
 

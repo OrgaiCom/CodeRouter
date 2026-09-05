@@ -46,7 +46,7 @@
 #        uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #        # または pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #        # uv tool install 構成の場合は同じツール環境に同居させる:
-#        #   uv tool install coderouter-cli \
+#        #   uv tool install coderouter-t \
 #        #     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #      このファイルには下記に `plugins: enabled: [agents]` を既に
 #      含めてある (二段ゲート — インストールしただけでは有効にならない)。
@@ -94,7 +94,7 @@ default_profile: claude-agent
 #   uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #   # または: pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #   # uv tool install 構成なら:
-#   #   uv tool install coderouter-cli \
+#   #   uv tool install coderouter-t \
 #   #     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 # 未インストール/未列挙のままだと coderouter serve は起動時エラーで
 # 停止する (docs/backends/external-agents.md のトラブルシューティング参照)。

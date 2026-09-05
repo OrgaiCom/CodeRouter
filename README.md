@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://pypi.org/project/coderouter-cli/"><img src="https://img.shields.io/pypi/v/coderouter-cli?include_prereleases&color=blue&label=pypi" alt="pypi"></a>
+  <a href="https://pypi.org/project/coderouter-t/"><img src="https://img.shields.io/pypi/v/coderouter-t?include_prereleases&color=blue&label=pypi" alt="pypi"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -68,10 +68,10 @@ curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/p
   > ~/.coderouter/providers.yaml
 
 # 2. 起動 (Python 3.12+)
-uvx --from coderouter-cli coderouter serve --port 8088
+uvx --from coderouter-t coderouter-t serve --port 8088
 ```
 
-恒久インストールしたい場合: `uv tool install coderouter-cli`
+恒久インストールしたい場合: `uv tool install coderouter-t`
 
 ---
 
@@ -79,7 +79,7 @@ uvx --from coderouter-cli coderouter serve --port 8088
 
 ```bash
 # ターミナル 1
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # ターミナル 2
 ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
@@ -290,11 +290,11 @@ CodeRouter の人間向けメッセージ（CLI / Doctor / 起動警告）は日
 
 ```bash
 # 日本語で表示（推奨: 日本語OSでは自動で日本語になります）
-CODEROUTER_LANG=ja coderouter serve
+CODEROUTER_LANG=ja coderouter-t serve
 CODEROUTER_LANG=ja coderouter doctor --check-model local
 
 # 英語で表示
-CODEROUTER_LANG=en coderouter serve
+CODEROUTER_LANG=en coderouter-t serve
 ```
 
 - `CODEROUTER_LANG=ja` / `en` を明示すると最優先されます

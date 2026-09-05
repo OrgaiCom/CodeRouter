@@ -103,7 +103,7 @@ See the [Launcher Guide](./launcher.en.md) for details.
 The Web edition runs inside CodeRouter, so start CodeRouter first:
 
 ```bash
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 Open `http://localhost:8088/launcher` in a browser, pick a model, and press "▶ Launch".

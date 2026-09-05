@@ -83,7 +83,7 @@ CodeRouter 起動時、`~/.coderouter/providers.yaml` が無ければ最小構�
 CodeRouter が稼働しているとき、ブラウザで使う運用 UI です。
 
 1. `providers.yaml` に `launcher:` セクションを追加([設定リファレンス](#設定リファレンス)参照)
-2. CodeRouter を起動 — `coderouter serve --port 8088`
+2. CodeRouter を起動 — `coderouter-t serve --port 8088`
 3. ブラウザで `http://localhost:8088/launcher` を開く
 
 ---

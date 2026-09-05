@@ -83,7 +83,7 @@ When CodeRouter starts, if `~/.coderouter/providers.yaml` doesn't exist yet, a m
 The operational UI you use in a browser while CodeRouter is running.
 
 1. Add a `launcher:` section to `providers.yaml` (see [Configuration Reference](#configuration-reference))
-2. Start CodeRouter — `coderouter serve --port 8088`
+2. Start CodeRouter — `coderouter-t serve --port 8088`
 3. Open `http://localhost:8088/launcher` in a browser
 
 ---

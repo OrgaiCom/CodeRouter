@@ -82,7 +82,7 @@ Copying `examples/providers.llamacpp-vllm.yaml` as a starting point is the faste
 
 ```bash
 # Terminal 1
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # Terminal 2 (scope the env vars to this shell only; don't set them globally)
 ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
@@ -126,7 +126,7 @@ If `providers:` only lists local backends, there's nowhere to go the moment one 
 Changes don't take effect on a running process immediately.
 
 1. Put the config in **`~/.coderouter/providers.yaml`** (editing files under `examples/` alone has no effect)
-2. **Restart `coderouter serve`** (`launcher:` / profiles are read at startup)
+2. **Restart `coderouter-t serve`** (`launcher:` / profiles are read at startup)
 3. **Restart the backend** (`--ctx-size` and similar flags only take effect after a restart)
 
 ---

@@ -102,7 +102,7 @@ uv run python launcher_gui.py
 Web版は CodeRouter の中で動くため、先に CodeRouter を起動します:
 
 ```bash
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 ブラウザで `http://localhost:8088/launcher` を開き、モデルを選んで「▶ 起動」します。
